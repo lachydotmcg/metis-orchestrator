@@ -1,0 +1,36 @@
+{
+  "name": "metis-orchestrator",
+  "version": "0.1.0",
+  "description": "Desktop orchestration layer for Metis routing policy.",
+  "type": "module",
+  "main": "dist-electron/electron/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1 --port 5177\" \"wait-on http://127.0.0.1:5177 && npm run build:electron && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5177 electron .\"",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
+    "build": "npm run typecheck && vite build && npm run build:electron",
+    "start": "npm run build && electron .",
+    "preview": "vite preview --host 127.0.0.1 --port 4177"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "vite": "^8.1.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^6.0.3",
+    "@types/node": "^24.0.0",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "concurrently": "^9.2.1",
+    "cross-env": "^7.0.3",
+    "electron": "^42.5.0",
+    "typescript": "^5.5.0",
+    "wait-on": "^8.0.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT"
+}

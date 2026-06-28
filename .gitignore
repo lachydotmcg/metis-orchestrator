@@ -1,0 +1,10 @@
+node_modules/
+dist/
+dist-electron/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+profile.json
+decision.json
