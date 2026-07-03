@@ -116,11 +116,6 @@ p {
   background: var(--hover);
 }
 
-.pulse-wrap {
-  position: relative;
-  display: flex;
-}
-
 .pulse-dot {
   position: absolute;
   top: 5px;
@@ -131,112 +126,38 @@ p {
   border-radius: 999px;
 }
 
-.pulse-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 19;
-}
-
-.pulse-panel {
-  position: absolute;
-  top: calc(100% + 8px);
-  left: 0;
-  z-index: 20;
-  display: grid;
-  gap: 10px;
-  width: 380px;
-  max-height: 70vh;
-  padding: 12px;
-  overflow-y: auto;
-  background: #1e1e1e;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 20px 52px rgb(0 0 0 / 0.5);
-}
-
-.pulse-panel-head {
-  display: grid;
-  gap: 2px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--line-soft);
-}
-
-.pulse-panel-head strong {
-  color: white;
-  font-size: 13px;
-}
-
-.pulse-panel-head small {
-  color: var(--muted);
-  font-size: 11px;
-}
-
 .pulse-empty {
   color: var(--muted);
   font-size: 12px;
 }
 
-.pulse-section {
-  display: grid;
-  gap: 6px;
-}
+/* ---- Run test results popover (Orchestration toolbar) — folds in what used to be the
+   titlebar "Check everything" health sweep; row styling (.healthsweep-*) is shared. ---- */
 
-.pulse-section h3 {
-  margin: 0;
-  color: var(--muted);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.pulse-entry {
-  display: grid;
-  gap: 2px;
-  padding: 8px 9px;
-  background: var(--node);
-  border: 1px solid var(--line-soft);
-  border-radius: 9px;
-  text-align: left;
-}
-
-.pulse-entry strong {
-  color: white;
-  font-size: 12px;
-}
-
-.pulse-entry p {
-  margin: 0;
-  color: var(--soft);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
-.pulse-entry small {
-  color: var(--faint);
-  font-size: 10.5px;
-}
-
-.pulse-entry-link {
-  cursor: pointer;
-  transition: background 120ms ease;
-}
-
-.pulse-entry-link:hover {
-  background: var(--hover);
-}
-
-/* ---- "Check everything" health sweep popover (titlebar Stethoscope icon) ---- */
-
-.healthsweep-wrap {
+.run-test-anchor {
   position: relative;
   display: flex;
 }
 
-.healthsweep-backdrop {
+.run-test-backdrop {
   position: fixed;
   inset: 0;
   z-index: 19;
+}
+
+.run-test-panel {
+  bottom: calc(100% + 8px);
+  top: auto;
+  width: 320px;
+}
+
+.run-test-subhead {
+  margin: 4px 0 -2px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .healthsweep-panel {
@@ -1685,70 +1606,6 @@ p {
   color: white;
   background: var(--line);
   border-color: var(--line);
-}
-
-/* ---- Graph View directory rail (docs/FABLE_PLANS.md section 17c) — quick-access project/
-   conversation browser on the right, matching the left Sidebar's card styling. Reuses
-   .project-row/.project-conversations/.project-conversation-row from the Sidebar verbatim. ---- */
-
-.graph-directory-rail {
-  display: flex;
-  flex: 0 0 230px;
-  flex-direction: column;
-  min-width: 0;
-  height: auto;
-  margin: 8px;
-  overflow: hidden;
-  padding: 10px 8px;
-  color: #d6d6d6;
-  background: var(--sidebar);
-  border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
-}
-
-.graph-directory-rail-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-height: 30px;
-  padding: 0 4px 6px;
-  color: white;
-  border-bottom: 1px solid var(--line-soft);
-  font-size: 12px;
-  font-weight: 800;
-}
-
-.graph-directory-rail-head button {
-  display: grid;
-  place-items: center;
-  width: 26px;
-  height: 26px;
-  color: var(--muted);
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
-}
-
-.graph-directory-rail-head button:hover {
-  color: white;
-  background: var(--hover);
-}
-
-.graph-directory-rail-list {
-  flex: 1;
-  min-height: 0;
-  padding-top: 6px;
-  overflow-y: auto;
-}
-
-.graph-rail-toggle {
-  position: relative;
-  top: auto;
-  right: auto;
-  flex: 0 0 auto;
-  align-self: center;
-  margin: 8px 8px 8px 0;
 }
 
 /* ---- Graph View ---- */
@@ -5105,6 +4962,218 @@ details.artifact-row[open] summary {
   cursor: pointer;
 }
 
+/* ---- Pulse: full nav view (docs/FABLE_PLANS.md section 18) — a centered, generously-spaced
+   feed. Calm, no boxes-in-boxes: timeline uses a date rail, community uses plain cards, news is
+   compact link rows. ---- */
+
+.pulse-workspace {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 40px 24px;
+  overflow-y: auto;
+}
+
+.pulse-workspace-column {
+  display: grid;
+  gap: 36px;
+  width: min(720px, 100%);
+}
+
+.pulse-workspace-head {
+  position: relative;
+  display: grid;
+  gap: 4px;
+}
+
+.pulse-workspace-head h1 {
+  margin: 0;
+  color: white;
+  font-size: 24px;
+}
+
+.pulse-workspace-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.pulse-workspace-refresh {
+  position: absolute;
+  top: 2px;
+  right: 0;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  color: var(--soft);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 650;
+}
+
+.pulse-workspace-refresh:hover {
+  color: white;
+  background: var(--hover);
+}
+
+.pulse-workspace-refresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.pulse-workspace-section {
+  display: grid;
+  gap: 16px;
+}
+
+.pulse-workspace-section h2 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Changelog timeline: a slim date rail on the left, entries stacked down the page. */
+.pulse-timeline {
+  display: grid;
+  gap: 22px;
+  padding-left: 4px;
+  border-left: 1px solid var(--line-soft);
+}
+
+.pulse-timeline-entry {
+  position: relative;
+  display: grid;
+  grid-template-columns: 88px 1fr;
+  gap: 18px;
+  padding-left: 20px;
+}
+
+.pulse-timeline-rail {
+  position: relative;
+}
+
+.pulse-timeline-date {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.pulse-timeline-dot {
+  position: absolute;
+  top: 4px;
+  left: -25px;
+  width: 8px;
+  height: 8px;
+  background: var(--accent);
+  border-radius: 999px;
+}
+
+.pulse-timeline-body {
+  display: grid;
+  gap: 4px;
+}
+
+.pulse-timeline-body strong {
+  color: white;
+  font-size: 14px;
+}
+
+.pulse-timeline-body p {
+  margin: 0;
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* Community: plain cards, no nested boxes. */
+.pulse-community-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 14px;
+}
+
+.pulse-community-card {
+  display: grid;
+  gap: 6px;
+  padding: 14px 16px;
+  background: var(--node);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+}
+
+.pulse-community-card strong {
+  color: white;
+  font-size: 13px;
+}
+
+.pulse-community-card p {
+  margin: 0;
+  color: var(--soft);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.pulse-community-card small {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+/* News: compact link rows. */
+.pulse-news-list {
+  display: grid;
+}
+
+.pulse-news-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 4px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+}
+
+.pulse-news-row:last-child {
+  border-bottom: 0;
+}
+
+.pulse-news-row:hover {
+  color: white;
+}
+
+.pulse-news-row:hover svg {
+  color: var(--accent);
+}
+
+.pulse-news-row span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pulse-news-row strong {
+  font-size: 13px;
+}
+
+.pulse-news-row small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pulse-news-row svg {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
 /* ---- Settings runtime surface ---- */
 
 .settings-workspace {
@@ -5989,11 +6058,10 @@ details.artifact-row[open] summary {
    killed an earlier white ring and is the same bug resurfacing on other popovers. Keep every backdrop
    listed here in one place so a new popover can't reintroduce it. */
 .router-backdrop,
-.pulse-backdrop,
+.run-test-backdrop,
 .account-backdrop,
 .resource-backdrop,
-.perm-backdrop,
-.healthsweep-backdrop {
+.perm-backdrop {
   padding: 0;
   background: transparent;
   border: 0;
@@ -6004,16 +6072,14 @@ details.artifact-row[open] summary {
 
 .router-backdrop:focus,
 .router-backdrop:focus-visible,
-.pulse-backdrop:focus,
-.pulse-backdrop:focus-visible,
+.run-test-backdrop:focus,
+.run-test-backdrop:focus-visible,
 .account-backdrop:focus,
 .account-backdrop:focus-visible,
 .resource-backdrop:focus,
 .resource-backdrop:focus-visible,
 .perm-backdrop:focus,
-.perm-backdrop:focus-visible,
-.healthsweep-backdrop:focus,
-.healthsweep-backdrop:focus-visible {
+.perm-backdrop:focus-visible {
   outline: none;
   box-shadow: none;
 }
@@ -6033,11 +6099,10 @@ a:focus-visible,
 }
 
 .router-backdrop:focus-visible,
-.pulse-backdrop:focus-visible,
+.run-test-backdrop:focus-visible,
 .account-backdrop:focus-visible,
 .resource-backdrop:focus-visible,
-.perm-backdrop:focus-visible,
-.healthsweep-backdrop:focus-visible {
+.perm-backdrop:focus-visible {
   outline: none;
 }
 

@@ -84,7 +84,6 @@ import {
   Sparkles,
   Square,
   Star,
-  Stethoscope,
   Terminal,
   Trash2,
   Upload,
@@ -122,7 +121,7 @@ import type {
   SecretStatus
 } from "../../shared/runtime-contracts";
 
-type NavKey = "session" | "orchestration" | "routines" | "marketplace" | "gallery" | "graph" | "benchmark" | "todo" | "manager" | "settings";
+type NavKey = "session" | "orchestration" | "routines" | "marketplace" | "gallery" | "graph" | "benchmark" | "todo" | "manager" | "settings" | "pulse";
 type NodeKind = "router" | "agent" | "skill";
 
 type ProviderId =
@@ -160,6 +159,16 @@ type RouteSegment = { from: Vec; to: Vec };
 type GhostDrag = { payload: DragPayload };
 type RouteTestState = { agentId: string; status: "running" | "complete" | "error"; startedAt: number; completedAt?: number; message?: string };
 type ProviderConnectionState = "connected" | "local" | "missing" | "unknown";
+
+/** One row of the real Run Test popover — an agent node's configured model plus its live
+ *  health (docs/FABLE_PLANS.md section 18; folds the old titlebar health sweep in here). */
+type RunTestAgentRow = { id: string; name: string; model: string; status: HealthRowStatus; detail: string };
+type RunTestResult = {
+  routeLabel: string;
+  routeDetail: string;
+  routeStatus: HealthRowStatus;
+  agents: RunTestAgentRow[];
+};
 
 type MemoryNodeType = "home" | "project" | "folder" | "note" | "date" | "file" | "conversation" | "run" | "operation";
 
@@ -1301,7 +1310,7 @@ export function App(): JSX.Element {
 
   return (
     <div className="app-root">
-      <Titlebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((current) => !current)} />
+      <Titlebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((current) => !current)} onOpenPulse={() => setActiveNav("pulse")} />
       <div className={`metis-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${activeNav === "settings" ? "settings-mode" : ""}`}>
       {activeNav !== "settings" ? (
         <Sidebar
@@ -1346,7 +1355,7 @@ export function App(): JSX.Element {
         />
       ) : null}
       {activeNav === "graph" ? (
-        <MemoryGraphWorkspace onConversationOpen={openConversationById} sidebarProjects={sidebarProjects} sidebarConversationsByProject={sidebarConversations} />
+        <MemoryGraphWorkspace onConversationOpen={openConversationById} />
       ) : null}
       {activeNav === "benchmark" ? <BenchmarkWorkspace locked={benchmarkGateLocked} onComplete={() => setActiveNav("orchestration")} onWizardChange={setBenchmarkWizard} wizard={benchmarkWizard} /> : null}
       {activeNav === "gallery" ? <GalleryWorkspace boards={galleryBoards} onBoardsChange={setGalleryBoards} /> : null}
@@ -1354,8 +1363,9 @@ export function App(): JSX.Element {
       {activeNav === "routines" ? <RoutinesWorkspace onConversationOpen={openConversationById} /> : null}
       {activeNav === "todo" ? <TodoWorkspace /> : null}
       {activeNav === "manager" ? <ManagerWorkspace /> : null}
+      {activeNav === "pulse" ? <PulseWorkspace /> : null}
       {activeNav === "settings" ? <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} /> : null}
-      {activeNav !== "session" && activeNav !== "graph" && activeNav !== "benchmark" && activeNav !== "gallery" && activeNav !== "marketplace" && activeNav !== "routines" && activeNav !== "todo" && activeNav !== "manager" && activeNav !== "settings" ? (
+      {activeNav !== "session" && activeNav !== "graph" && activeNav !== "benchmark" && activeNav !== "gallery" && activeNav !== "marketplace" && activeNav !== "routines" && activeNav !== "todo" && activeNav !== "manager" && activeNav !== "pulse" && activeNav !== "settings" ? (
         <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} />
       ) : null}
       </div>
@@ -1373,93 +1383,27 @@ function healthDotClass(status: HealthRowStatus): string {
   return "never";
 }
 
-/** One-click health sweep (docs/FABLE_PLANS.md section 17 — repurposes the redundant titlebar
- *  "Run test"/Orchestration icon). Populates rows async: providers, policy CLI, registry, local
- *  models (covered by the ollama provider row). Every bridge is guarded for browser preview. */
-async function runHealthSweep(): Promise<HealthRow[]> {
-  const rows: HealthRow[] = [];
-
-  if (window.metisProviders) {
-    try {
-      const providers = await window.metisProviders.list();
-      const configured = providers.filter((p) => p.configured);
-      const checked = await Promise.all(
-        (configured.length ? configured : providers).map(async (p) => {
-          try {
-            const result = await window.metisProviders?.healthCheck(p.provider);
-            const status = result?.status ?? p.status;
-            return {
-              id: `provider-${p.provider}`,
-              name: result?.label ?? p.label,
-              status: status === "available" ? "ok" : status === "not_configured" ? "warn" : "error",
-              detail: result?.detail ?? p.detail
-            } as HealthRow;
-          } catch (error) {
-            return { id: `provider-${p.provider}`, name: p.label, status: "error", detail: error instanceof Error ? error.message : String(error) } as HealthRow;
-          }
-        })
-      );
-      rows.push(...checked);
-    } catch (error) {
-      rows.push({ id: "providers", name: "Providers", status: "error", detail: error instanceof Error ? error.message : String(error) });
-    }
-  } else {
-    rows.push({ id: "providers", name: "Providers", status: "unavailable", detail: "unavailable in preview" });
-  }
-
-  if (window.metisPolicy) {
-    try {
-      const status = await window.metisPolicy.getStatus();
-      rows.push({ id: "policy", name: "Metis Policy", status: status.available ? "ok" : "warn", detail: status.detail });
-    } catch (error) {
-      rows.push({ id: "policy", name: "Metis Policy", status: "error", detail: error instanceof Error ? error.message : String(error) });
-    }
-  } else {
-    rows.push({ id: "policy", name: "Metis Policy", status: "unavailable", detail: "unavailable in preview" });
-  }
-
-  if (window.metisRegistry) {
-    try {
-      const registry = await window.metisRegistry.list();
-      const status = registry.status === "ok" ? "ok" : registry.status === "offline" ? "warn" : registry.status === "error" ? "error" : "warn";
-      rows.push({
-        id: "registry",
-        name: "Registry",
-        status,
-        detail: registry.error ?? (registry.status === "ok" ? `${registry.packages.length} packages · ${registry.sourceUrl}` : registry.sourceUrl)
-      });
-    } catch (error) {
-      rows.push({ id: "registry", name: "Registry", status: "error", detail: error instanceof Error ? error.message : String(error) });
-    }
-  } else {
-    rows.push({ id: "registry", name: "Registry", status: "unavailable", detail: "unavailable in preview" });
-  }
-
-  return rows;
-}
-
-/** Slim popover (account-menu styling) with async health rows + a Re-run button. */
-function HealthSweepPanel({ onClose }: { onClose: () => void }): JSX.Element {
-  const [rows, setRows] = useState<HealthRow[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = useCallback(() => {
-    setLoading(true);
-    void runHealthSweep()
-      .then(setRows)
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
+/** Real Run Test results popover, anchored to the Orchestration toolbar's Run test button
+ *  (docs/FABLE_PLANS.md section 18). Folds in what used to be the titlebar "Check everything"
+ *  health sweep: a policy route-decision row plus a per-agent-node provider health row. Reuses
+ *  the health-sweep row styling verbatim. */
+function RunTestPanel({
+  loading,
+  result,
+  onClose,
+  onRerun
+}: {
+  loading: boolean;
+  result: RunTestResult | null;
+  onClose: () => void;
+  onRerun: () => void;
+}): JSX.Element {
   return (
-    <div className="healthsweep-panel" role="dialog" aria-label="Check everything">
+    <div className="healthsweep-panel run-test-panel" role="dialog" aria-label="Run test results">
       <header className="healthsweep-head">
-        <Stethoscope size={14} />
-        <strong>Check everything</strong>
-        <button type="button" className="healthsweep-rerun" onClick={refresh} disabled={loading}>
+        <Play size={14} />
+        <strong>Run test</strong>
+        <button type="button" className="healthsweep-rerun" onClick={onRerun} disabled={loading}>
           {loading ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
           <span>Re-run</span>
         </button>
@@ -1468,27 +1412,45 @@ function HealthSweepPanel({ onClose }: { onClose: () => void }): JSX.Element {
         </button>
       </header>
       <div className="healthsweep-rows">
-        {loading && rows.length === 0 ? <p className="healthsweep-empty">Checking…</p> : null}
-        {rows.map((row) => (
-          <div className="healthsweep-row" key={row.id}>
-            <span className={`healthsweep-dot ${healthDotClass(row.status)}`} aria-hidden="true" />
-            <span className="healthsweep-row-body">
-              <strong>{row.name}</strong>
-              <small>{row.detail}</small>
-            </span>
-          </div>
-        ))}
+        {loading && !result ? <p className="healthsweep-empty">Routing a test prompt…</p> : null}
+        {result ? (
+          <>
+            <div className="healthsweep-row" key="route">
+              <span className={`healthsweep-dot ${healthDotClass(result.routeStatus)}`} aria-hidden="true" />
+              <span className="healthsweep-row-body">
+                <strong>{result.routeLabel}</strong>
+                <small title={result.routeDetail}>{result.routeDetail}</small>
+              </span>
+            </div>
+            <p className="run-test-subhead">Agent nodes</p>
+            {result.agents.map((row) => (
+              <div className="healthsweep-row" key={row.id}>
+                <span className={`healthsweep-dot ${healthDotClass(row.status)}`} aria-hidden="true" title={row.detail} />
+                <span className="healthsweep-row-body">
+                  <strong>{row.name}</strong>
+                  <small title={row.detail}>{row.model}</small>
+                </span>
+              </div>
+            ))}
+          </>
+        ) : null}
       </div>
     </div>
   );
 }
 
-function Titlebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggleCollapse: () => void }): JSX.Element {
+function Titlebar({
+  collapsed,
+  onToggleCollapse,
+  onOpenPulse
+}: {
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  onOpenPulse: () => void;
+}): JSX.Element {
   const hasWindow = typeof window !== "undefined" && Boolean(window.metisWindow);
-  const [pulseOpen, setPulseOpen] = useState(false);
   const [pulse, setPulse] = useState<PulseFeed>(FALLBACK_PULSE);
   const [lastSeenPulse, setLastSeenPulse] = useAppStoreState<string | undefined>("lastSeenPulse", undefined);
-  const [healthOpen, setHealthOpen] = useState(false);
 
   useEffect(() => {
     if (!window.metisPulse) return;
@@ -1500,12 +1462,9 @@ function Titlebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggl
 
   const hasUnseenUpdate = Boolean(pulse.updated && pulse.updated !== lastSeenPulse);
 
-  function togglePulse(): void {
-    setPulseOpen((open) => {
-      const next = !open;
-      if (next && pulse.updated) setLastSeenPulse(pulse.updated);
-      return next;
-    });
+  function handleOpenPulse(): void {
+    if (pulse.updated) setLastSeenPulse(pulse.updated);
+    onOpenPulse();
   }
 
   return (
@@ -1517,35 +1476,10 @@ function Titlebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggl
         <button className="titlebar-icon" type="button" aria-label="Search">
           <Search size={16} />
         </button>
-        <div className="healthsweep-wrap">
-          <button
-            className={`titlebar-icon ${healthOpen ? "active" : ""}`}
-            type="button"
-            aria-label="Check everything"
-            aria-expanded={healthOpen}
-            onClick={() => setHealthOpen((open) => !open)}
-          >
-            <Stethoscope size={16} />
-          </button>
-          {healthOpen ? (
-            <>
-              <button className="healthsweep-backdrop" type="button" aria-label="Close check everything" onClick={() => setHealthOpen(false)} />
-              <HealthSweepPanel onClose={() => setHealthOpen(false)} />
-            </>
-          ) : null}
-        </div>
-        <div className="pulse-wrap">
-          <button className={`titlebar-icon ${pulseOpen ? "active" : ""}`} type="button" aria-label="Pulse" onClick={togglePulse}>
-            <Newspaper size={16} />
-            {hasUnseenUpdate ? <span className="pulse-dot" aria-hidden="true" /> : null}
-          </button>
-          {pulseOpen ? (
-            <>
-              <button className="pulse-backdrop" type="button" aria-label="Close Pulse" onClick={() => setPulseOpen(false)} />
-              <PulsePanel feed={pulse} />
-            </>
-          ) : null}
-        </div>
+        <button className="titlebar-icon" type="button" aria-label="Pulse" onClick={handleOpenPulse}>
+          <Newspaper size={16} />
+          {hasUnseenUpdate ? <span className="pulse-dot" aria-hidden="true" /> : null}
+        </button>
       </div>
       <div className="titlebar-drag" />
       {hasWindow ? (
@@ -1565,58 +1499,99 @@ function Titlebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggl
   );
 }
 
-/** Slim Pulse popover — Changelog / Community / News from featured.json
- *  (docs/FABLE_PLANS.md section 8). Empty sections are hidden. */
-function PulsePanel({ feed }: { feed: PulseFeed }): JSX.Element {
-  const hasAny = feed.changelog.length > 0 || feed.community.length > 0 || feed.news.length > 0;
+/** Pulse, promoted from a titlebar popover to a full nav view (docs/FABLE_PLANS.md section 18) —
+ *  a centered, generously-spaced feed: Changelog as a vertical timeline, Community as cards,
+ *  News as compact link rows via openExternal. Reuses window.metisPulse.feed() verbatim. */
+function PulseWorkspace(): JSX.Element {
+  const [pulse, setPulse] = useState<PulseFeed>(FALLBACK_PULSE);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(() => {
+    if (!window.metisPulse) {
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    void window.metisPulse
+      .feed()
+      .then(setPulse)
+      .catch(() => undefined)
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  const hasAny = pulse.changelog.length > 0 || pulse.community.length > 0 || pulse.news.length > 0;
+
   return (
-    <div className="pulse-panel" role="dialog" aria-label="Pulse">
-      <header className="pulse-panel-head">
-        <strong>Pulse</strong>
-        <small>{feed.status === "offline" ? "Showing cached feed" : "Community + news"}</small>
-      </header>
-      {!hasAny ? <p className="pulse-empty">Nothing new yet.</p> : null}
-      {feed.changelog.length ? (
-        <section className="pulse-section">
-          <h3>Changelog</h3>
-          {feed.changelog.map((entry) => (
-            <article className="pulse-entry" key={`${entry.date}-${entry.title}`}>
-              <strong>{entry.title}</strong>
-              <p>{entry.blurb}</p>
-              <small>{entry.date}</small>
-            </article>
-          ))}
-        </section>
-      ) : null}
-      {feed.community.length ? (
-        <section className="pulse-section">
-          <h3>Community</h3>
-          {feed.community.map((item) => (
-            <article className="pulse-entry" key={item.id}>
-              <strong>{item.name}</strong>
-              <p>{item.description}</p>
-              <small>{item.publisher}</small>
-            </article>
-          ))}
-        </section>
-      ) : null}
-      {feed.news.length ? (
-        <section className="pulse-section">
-          <h3>News</h3>
-          {feed.news.map((entry) => (
-            <button
-              className="pulse-entry pulse-entry-link"
-              key={entry.url}
-              type="button"
-              onClick={() => openExternal(entry.url)}
-            >
-              <strong>{entry.title}</strong>
-              {entry.blurb ? <p>{entry.blurb}</p> : null}
-            </button>
-          ))}
-        </section>
-      ) : null}
-    </div>
+    <main className="product-workspace pulse-workspace" aria-label="Pulse">
+      <div className="pulse-workspace-column">
+        <header className="pulse-workspace-head">
+          <h1>Pulse</h1>
+          <p>{pulse.status === "offline" ? "Showing the cached feed — offline" : "Changelog, community projects, and news"}</p>
+          <button type="button" className="pulse-workspace-refresh" onClick={refresh} disabled={loading}>
+            {loading ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
+            <span>Refresh</span>
+          </button>
+        </header>
+
+        {!hasAny && !loading ? <p className="pulse-empty">Nothing new yet.</p> : null}
+
+        {pulse.changelog.length ? (
+          <section className="pulse-workspace-section">
+            <h2>Changelog</h2>
+            <div className="pulse-timeline">
+              {pulse.changelog.map((entry) => (
+                <article className="pulse-timeline-entry" key={`${entry.date}-${entry.title}`}>
+                  <div className="pulse-timeline-rail">
+                    <span className="pulse-timeline-date">{entry.date}</span>
+                    <span className="pulse-timeline-dot" aria-hidden="true" />
+                  </div>
+                  <div className="pulse-timeline-body">
+                    <strong>{entry.title}</strong>
+                    <p>{entry.blurb}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {pulse.community.length ? (
+          <section className="pulse-workspace-section">
+            <h2>Community</h2>
+            <div className="pulse-community-grid">
+              {pulse.community.map((item) => (
+                <article className="pulse-community-card" key={item.id}>
+                  <strong>{item.name}</strong>
+                  <p>{item.description}</p>
+                  <small>{item.publisher}</small>
+                </article>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
+        {pulse.news.length ? (
+          <section className="pulse-workspace-section">
+            <h2>News</h2>
+            <div className="pulse-news-list">
+              {pulse.news.map((entry) => (
+                <button className="pulse-news-row" key={entry.url} type="button" onClick={() => openExternal(entry.url)}>
+                  <span>
+                    <strong>{entry.title}</strong>
+                    {entry.blurb ? <small>{entry.blurb}</small> : null}
+                  </span>
+                  <ExternalLink size={14} />
+                </button>
+              ))}
+            </div>
+          </section>
+        ) : null}
+      </div>
+    </main>
   );
 }
 
@@ -4517,6 +4492,12 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
   const [routeTest, setRouteTest] = useState<RouteTestState | null>(null);
   const [connectionStates, setConnectionStates] = useState<Partial<Record<ProviderKey, ProviderConnectionState>>>({ ollama: "local" });
   const [sidePanelCollapsed, setSidePanelCollapsed] = useState(false);
+  // Real Run Test results (docs/FABLE_PLANS.md section 18) — a real policy decision plus a
+  // per-agent-node health row, shown in a slim popover anchored to the toolbar Run test button.
+  // Folds in what used to be the titlebar "Check everything" health sweep (now removed).
+  const [runTestOpen, setRunTestOpen] = useState(false);
+  const [runTestLoading, setRunTestLoading] = useState(false);
+  const [runTestResult, setRunTestResult] = useState<RunTestResult | null>(null);
   const [hasSavedPreset, setHasSavedPreset] = useState(() => {
     try {
       return Boolean(localStorage.getItem(PRESET_STORAGE_KEY));
@@ -4928,6 +4909,65 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
     window.setTimeout(() => setRouteTest((current) => (current?.agentId === agentId ? { ...current, status: "complete", completedAt: Date.now() } : current)), 1900);
   }
 
+  /** Real Run Test (docs/FABLE_PLANS.md section 18): keeps the visual packet pulse on whichever
+   *  agent is selected, but also fires an actual policy decision plus a health check per agent
+   *  node's provider — replacing the titlebar "Check everything" sweep. Every bridge is guarded
+   *  for browser preview, where the rows read "unavailable in preview". */
+  async function runRealTest(): Promise<void> {
+    // Keep the existing visual pulse alive: prefer the selected agent, otherwise the first agent.
+    const pulseTarget = (selectedNode?.kind === "agent" ? selectedNode : agents[0]) ?? null;
+    if (pulseTarget) runTest(pulseTarget.id);
+
+    setRunTestOpen(true);
+    setRunTestLoading(true);
+    try {
+      const [decisionResult, providerList] = await Promise.all([
+        window.metisPolicy
+          ? window.metisPolicy.decide({ prompt: "Route test: build a small landing page" }).catch(() => null)
+          : Promise.resolve(null),
+        window.metisProviders ? window.metisProviders.list().catch(() => []) : Promise.resolve<ProviderStatus[]>([])
+      ]);
+
+      const routeLabel = decisionResult
+        ? `${decisionResult.decision.task_type} -> ${decisionResult.decision.selected_route.model ?? decisionResult.decision.selected_route.provider ?? decisionResult.decision.selected_route.kind}`
+        : "Policy unavailable";
+      const routeDetail = decisionResult
+        ? decisionResult.explanation ?? decisionResult.decision.reason
+        : window.metisPolicy
+          ? "Could not reach the policy CLI."
+          : "unavailable in preview";
+      const routeStatus: HealthRowStatus = decisionResult ? "ok" : window.metisPolicy ? "error" : "unavailable";
+
+      const currentAgents = nodesRef.current.filter((node) => node.kind === "agent");
+      const agentRows: RunTestAgentRow[] = await Promise.all(
+        currentAgents.map(async (node): Promise<RunTestAgentRow> => {
+          const model = node.provider ? `${PROVIDERS[node.provider].label} / ${node.model ?? "auto"}` : "No model assigned";
+          if (!node.provider) return { id: node.id, name: node.label, model, status: "warn", detail: "No provider configured for this node." };
+          if (!window.metisProviders) return { id: node.id, name: node.label, model, status: "unavailable", detail: "unavailable in preview" };
+          const key = PROVIDER_CONNECTIONS[node.provider];
+          const known = providerList.find((p) => p.provider === key);
+          try {
+            const health = known ? await window.metisProviders.healthCheck(key) : undefined;
+            const status = health?.status ?? known?.status;
+            return {
+              id: node.id,
+              name: node.label,
+              model,
+              status: status === "available" ? "ok" : status === "not_configured" ? "warn" : status ? "error" : "unavailable",
+              detail: health?.detail ?? known?.detail ?? "Provider not found."
+            };
+          } catch (error) {
+            return { id: node.id, name: node.label, model, status: "error", detail: error instanceof Error ? error.message : String(error) };
+          }
+        })
+      );
+
+      setRunTestResult({ routeLabel, routeDetail, routeStatus, agents: agentRows });
+    } finally {
+      setRunTestLoading(false);
+    }
+  }
+
   function zoomBy(factor: number): void {
     const rect = canvasRef.current?.getBoundingClientRect();
     const cx = rect ? rect.width / 2 : 0;
@@ -5082,18 +5122,25 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
           <button type="button" aria-label="Reset pipeline" onClick={resetGraph}>
             <RotateCcw size={15} />
           </button>
-          <button
-            type="button"
-            className="toolbar-run"
-            aria-label="Run selected route test"
-            disabled={selectedNode?.kind !== "agent"}
-            onClick={() => {
-              if (selectedNode?.kind === "agent") runTest(selectedNode.id);
-            }}
-          >
-            <Play size={14} />
-            <span>Run test</span>
-          </button>
+          <div className="run-test-anchor">
+            <button
+              type="button"
+              className="toolbar-run"
+              aria-label="Run test"
+              aria-expanded={runTestOpen}
+              disabled={agents.length === 0}
+              onClick={() => void runRealTest()}
+            >
+              <Play size={14} />
+              <span>Run test</span>
+            </button>
+            {runTestOpen ? (
+              <>
+                <button className="run-test-backdrop" type="button" aria-label="Close run test results" onClick={() => setRunTestOpen(false)} />
+                <RunTestPanel loading={runTestLoading} result={runTestResult} onClose={() => setRunTestOpen(false)} onRerun={() => void runRealTest()} />
+              </>
+            ) : null}
+          </div>
         </div>
 
         <p className="graph-hint">Drag to pan - scroll to zoom - click a node to inspect it - drag skills and models from Library</p>
@@ -5356,29 +5403,17 @@ function buildColorRules(graphNodes: MemoryGraphNode[], colorByProject: boolean)
   return rules;
 }
 
-/** Sleek-dark greyscale body fill — colour (when the opt-in "Colour by project" rule matches) is the
- *  only source of hue; otherwise every node type reads as the same neutral dark grey per node.kind
- *  weight (home slightly brighter than a leaf note), matching the rest of the app's palette. */
-function colorForNode(node: MemoryGraphNode, rules: ColorRule[]): string {
+/** Obsidian-style light body fill on the dark canvas — colour (when the opt-in "Colour by
+ *  project" rule matches) is the only source of hue; otherwise every node reads as a light
+ *  grey/white whose brightness ramps with degree (dimmer for low-degree leaves, brighter for
+ *  hubs), landing in the #b9bdc6–#d8dade range per owner feedback (2026-07-03 batch, §18). */
+function colorForNode(node: MemoryGraphNode, rules: ColorRule[], degree = 0): string {
   for (const rule of rules) {
     if (rule.match(node)) return rule.color;
   }
-  switch (node.type) {
-    case "home":
-      return "#3a3a3a";
-    case "project":
-      return "#333333";
-    case "conversation":
-      return "#2f2f2f";
-    case "run":
-      return "#2d2d2d";
-    case "operation":
-      return "#2b2b2b";
-    case "folder":
-      return "#2a2a2a";
-    default:
-      return "#2a2a2a";
-  }
+  const t = Math.max(0, Math.min(1, degree / 6));
+  const lightness = 74 + t * 10; // 74% (#b9bdc6-ish) -> 84% (#d8dade-ish)
+  return `hsl(228 8% ${lightness}%)`;
 }
 
 const GRAPH_KINETIC_SLEEP_THRESHOLD = 0.015;
@@ -5390,7 +5425,8 @@ function seedPhysicsNodes(graphNodes: MemoryGraphNode[], degree: Map<string, num
   graphNodes.forEach((node, index) => {
     const existing = prior.get(node.id);
     const d = degree.get(node.id) ?? 0;
-    const radius = Math.max(6, Math.min(30, 6 + d * 2.4 + (node.size ?? 18) * 0.25));
+    // Obsidian-style nodes read smaller than the old dark-fill design (~60-70% of prior radii).
+    const radius = Math.max(4, Math.min(20, 4 + d * 1.6 + (node.size ?? 18) * 0.17));
     if (existing) {
       next.set(node.id, { ...existing, degree: d, radius });
       return;
@@ -5516,15 +5552,9 @@ function localGraphIds(rootId: string, links: MemoryGraphLink[], depth: number):
 }
 
 function MemoryGraphWorkspace({
-  onConversationOpen,
-  sidebarProjects = [],
-  sidebarConversationsByProject = {}
+  onConversationOpen
 }: {
   onConversationOpen?: (id: string) => void;
-  /** Same project/conversation data the left Sidebar uses (docs/FABLE_PLANS.md section 16/17) —
-   *  powers the right directory rail so the graph doubles as a quick-access file browser. */
-  sidebarProjects?: ProjectFolder[];
-  sidebarConversationsByProject?: Record<string, SidebarConversation[]>;
 }): JSX.Element {
   const [pan, setPan] = useState<Vec>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
@@ -5539,7 +5569,6 @@ function MemoryGraphWorkspace({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [physics, setPhysics, physicsLoaded] = useAppStoreState<GraphPhysicsSettings>("graphPhysics", DEFAULT_GRAPH_PHYSICS);
   const [colorByProject, setColorByProject] = useAppStoreState<boolean>("graphColorByProject", false);
-  const [railCollapsed, setRailCollapsed] = useAppStoreState<boolean>("graphRailCollapsed", false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
     "agent-memory": true,
     "ad-helpdesk": true,
@@ -5685,16 +5714,16 @@ function MemoryGraphWorkspace({
       const active = currentSelected === node.id;
       const related = liveRef.current.connected.has(node.id);
       const hovered = currentHovered === node.id;
-      const color = colorForNode(node, currentRules);
+      const color = colorForNode(node, currentRules, body.degree);
       ctx.beginPath();
       ctx.arc(body.x, body.y, body.radius, 0, Math.PI * 2);
       ctx.fillStyle = color;
       ctx.globalAlpha = active || related || hovered ? 1 : 0.82;
       ctx.fill();
-      // Node border stays a neutral grey line always; colour is reserved for a subtle accent ring
-      // on the selected/hovered node only (owner feedback: no coloured hue-ramp fills, sleek dark).
+      // Obsidian-style bodies have no border — just a barely-darker rim so pale nodes still read
+      // against the dark canvas. Selected/hovered keep a subtle accent ring on top of that.
       ctx.lineWidth = 1 / currentZoom;
-      ctx.strokeStyle = "#3a3a3a";
+      ctx.strokeStyle = "rgba(0,0,0,0.18)";
       ctx.stroke();
       if (active || hovered) {
         ctx.beginPath();
@@ -5706,10 +5735,11 @@ function MemoryGraphWorkspace({
       ctx.globalAlpha = 1;
 
       // Text fade: labels fade below the zoom threshold, and small-degree nodes lose labels first.
+      // Labels stay --soft regardless of node brightness (owner feedback, §18).
       const labelChance = Math.min(1, (body.degree + 1) / 4);
       if ((showAllLabels || active || hovered) && (labelChance >= 1 || currentZoom > textFadeThreshold * (1.4 - labelChance))) {
         ctx.font = `${active ? "700" : "500"} ${12 / currentZoom}px 'Inter', system-ui, sans-serif`;
-        ctx.fillStyle = active ? "#f2f2f2" : "rgba(200,200,200,0.85)";
+        ctx.fillStyle = active ? "#f2f2f2" : "#c2c2c2";
         ctx.textAlign = "center";
         ctx.fillText(node.label, body.x, body.y + body.radius + 13 / currentZoom);
       }
@@ -5997,67 +6027,6 @@ function MemoryGraphWorkspace({
           </div>
         </aside>
       ) : null}
-
-      {railCollapsed ? (
-        <button className="panel-rail-toggle graph-rail-toggle" type="button" onClick={() => setRailCollapsed(false)}>
-          <ChevronLeft size={16} />
-          <span>Directory</span>
-        </button>
-      ) : (
-        <aside className="graph-directory-rail" aria-label="Project directory">
-          <header className="graph-directory-rail-head">
-            <strong>Directory</strong>
-            <button type="button" aria-label="Collapse directory rail" onClick={() => setRailCollapsed(true)}>
-              <ChevronRight size={16} />
-            </button>
-          </header>
-          <div className="graph-directory-rail-list project-list">
-            {sidebarProjects.length === 0 ? <p className="sidebar-empty">No project folders yet.</p> : null}
-            {sidebarProjects.map((project) => {
-              const conversations = sidebarConversationsByProject[project.name] ?? [];
-              const projectNodeId = graphNodes.find((node) => node.type === "project" && node.label === project.name)?.id;
-              return (
-                <div className="project-group expanded" key={project.name}>
-                  <button
-                    className="project-row"
-                    type="button"
-                    title={project.path}
-                    onClick={() => {
-                      if (projectNodeId) {
-                        setSelected(projectNodeId);
-                        setFocusRoot(projectNodeId);
-                      }
-                    }}
-                  >
-                    <Folder size={16} />
-                    <span>
-                      <strong>{project.name}</strong>
-                      <small>{project.latest}</small>
-                    </span>
-                  </button>
-                  {conversations.length ? (
-                    <div className="project-conversations">
-                      {conversations.map((conversation) => (
-                        <button
-                          className="project-conversation-row"
-                          key={conversation.id}
-                          type="button"
-                          onClick={() => onConversationOpen?.(conversation.id)}
-                        >
-                          <span>
-                            <strong>{conversation.title}</strong>
-                            <small>{conversation.summary}</small>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </aside>
-      )}
     </main>
   );
 }
