@@ -8,41 +8,31 @@ them.
 
 ## First Product Goal
 
-Build a chat app where the user can:
+Build an orchestration app where the user can:
 
-- type a prompt
-- choose a router preset or manual model near the send button
-- see which route the policy selected
-- inspect why the route was selected
-- open a policy graph from the top-left control
-- later edit routing branches like "frontend design -> Claude Sonnet 4.6"
+- see the orchestration tree as the default surface
+- edit router, skill, and model nodes directly on the graph
+- save and load orchestration presets
+- test a route before using it in a real conversation
+- later inspect project logs through a separate Obsidian-style Graph View
 
 ## Current Scaffold
 
-The scaffold is a React renderer inside Electron. It uses sample policy data
-until real `metis-policy` integration lands.
+The scaffold is a React renderer inside Electron. The UI direction has shifted
+from a chat-first shell to an orchestration-first graph canvas. Current graph
+work is visual/prototyping code until real `metis-policy` integration lands.
 
-The UI should stay clear that routing is evidence-backed:
-
-- selected route
-- confidence
-- fallback
-- evidence citations
-- warnings
-- score components
+For the current design backlog, read `docs/NEXT_STEPS.md` first.
 
 ## Do Next
 
-1. Add file import for `profile.json` / `decision.json`.
-2. Call `metis-policy decide` from the app or consume the policy package once it
-   is published.
-3. Add provider settings:
-   - BYOK Anthropic/OpenAI/Gemini/OpenRouter
-   - paid Metis router account placeholder
-   - local Ollama runtime status
-4. Add actual local Ollama message execution.
-5. Add OpenRouter/cloud execution only after explicit user configuration.
-6. Persist policy graph edits as user overrides.
+1. Stabilize the graph editor interactions.
+2. Remove unused navigation such as Chat/Code and Dispatch.
+3. Add project-folder conversations/log views.
+4. Add preset save/load.
+5. Add Test Route.
+6. Build the separate Graph View for logs, context, and token optimization.
+7. Connect persisted graph edits to Metis Policy overrides.
 
 ## Hard Rules
 

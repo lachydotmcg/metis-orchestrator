@@ -1,327 +1,8257 @@
-import { useEffect, useMemo, useState } from "react";
 import {
+  type CSSProperties,
+  type ChangeEvent,
+  type Dispatch,
+  type FormEvent,
+  type MutableRefObject,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+  type SetStateAction,
+  type WheelEvent as ReactWheelEvent,
+  createContext,
+  isValidElement,
+  memo,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowRight,
+  ArrowUp,
   Bot,
-  BrainCircuit,
+  Cable,
+  CalendarClock,
+  Check,
   ChevronDown,
-  CircleGauge,
+  ChevronLeft,
+  ChevronRight,
+  ChevronUp,
+  CheckCircle2,
+  Circle,
+  ClipboardList,
+  Copy,
+  Cpu,
+  Download,
+  ExternalLink,
+  FilePlus,
+  Folder,
+  GalleryHorizontalEnd,
   GitBranch,
-  KeyRound,
-  Lock,
-  MessageSquareText,
+  Github,
+  Globe,
+  HardDrive,
+  HelpCircle,
+  ImageIcon,
+  ImagePlus,
+  Layers,
+  Link2,
+  ListTodo,
+  LogOut,
+  Loader2,
+  Maximize2,
+  Menu,
+  Mic,
+  Minus,
+  Monitor,
+  MoreHorizontal,
+  MoreVertical,
   Network,
-  PanelLeft,
-  Send,
-  Settings2,
+  Newspaper,
+  Paperclip,
+  Pencil,
+  Pin,
+  PinOff,
+  Play,
+  Plug,
+  Plus,
+  RefreshCw,
+  RotateCcw,
+  Save,
+  ScrollText,
+  Search,
+  Settings,
+  Shield,
   ShieldCheck,
+  SlidersHorizontal,
   Sparkles,
-  Zap
+  Square,
+  Star,
+  Stethoscope,
+  Terminal,
+  Trash2,
+  Upload,
+  Wand2,
+  Waypoints,
+  X,
+  ZoomIn,
+  ZoomOut
 } from "lucide-react";
-import type { Route, RouteDecision, RouterPreset, RouteScore, TaskType } from "../../shared/policy-contract";
-import { sampleDecision } from "../../shared/sample-decision";
+import type {
+  AuditEvent,
+  CatalogModel,
+  ConversationRecord,
+  ConversationTurnRecord,
+  ModelCatalogState,
+  PermissionGrant,
+  PermissionScope,
+  PolicyDecisionResult,
+  PolicyStatus,
+  ProviderKey,
+  ProviderStatus,
+  ProjectWorkspace,
+  ProjectWorkspaceResource,
+  AgentOperation,
+  PulseFeed,
+  RegistryPackage,
+  RegistryPackageKind,
+  RegistryState,
+  Routine,
+  SessionRun,
+  SessionRunInput,
+  SessionPipelineStep,
+  SessionStreamEvent,
+  SessionTimelineEvent,
+  SecretStatus
+} from "../../shared/runtime-contracts";
 
-const presets: Array<{ id: RouterPreset; label: string; detail: string }> = [
-  { id: "balanced", label: "Balanced", detail: "Quality, privacy, speed, and cost" },
-  { id: "local_first", label: "Local first", detail: "Prefer measured local routes" },
-  { id: "best_quality", label: "Best quality", detail: "Favor frontier routes" },
-  { id: "cheapest", label: "Cheapest", detail: "Minimize configured cost" },
-  { id: "private", label: "Private", detail: "Keep sensitive prompts local" }
-];
+type NavKey = "session" | "orchestration" | "routines" | "marketplace" | "gallery" | "graph" | "benchmark" | "todo" | "manager" | "settings";
+type NodeKind = "router" | "agent" | "skill";
 
-const taskNodes: Array<{
-  type: TaskType;
+type ProviderId =
+  | "qwen"
+  | "claude"
+  | "openai"
+  | "gemini"
+  | "grok"
+  | "deepseek"
+  | "glm";
+
+type Vec = { x: number; y: number };
+type ModelRef = { provider: ProviderId; model: string };
+type ProjectFolder = { name: string; latest: string; age: string; path?: string };
+
+type GraphNode = {
+  id: string;
+  kind: NodeKind;
   label: string;
-  route: string;
-  confidence: string;
-  status: "local" | "cloud" | "review";
-}> = [
-  { type: "summarisation", label: "Summarisation", route: "qwen3:8b", confidence: "High", status: "local" },
-  { type: "coding", label: "Coding", route: "Claude Sonnet 4.6", confidence: "Medium", status: "cloud" },
-  { type: "frontend_design", label: "Frontend design", route: "Claude Sonnet 4.6", confidence: "Needs review", status: "review" },
-  { type: "long_context", label: "Long context", route: "Cloud frontier", confidence: "High", status: "cloud" },
-  { type: "private_sensitive", label: "Private prompts", route: "Local only", confidence: "Strict", status: "local" },
-  { type: "general_chat", label: "General chat", route: "Balanced router", confidence: "Medium", status: "local" }
+  pos: Vec;
+  provider?: ProviderId;
+  model?: string;
+  fallbacks?: ModelRef[];
+  intent?: string;
+  skills?: string[];
+  temperature?: number;
+};
+
+type DragPayload =
+  | { kind: "skill"; name: string }
+  | { kind: "model"; provider: ProviderId; model: string };
+
+type RouteSegment = { from: Vec; to: Vec };
+
+type GhostDrag = { payload: DragPayload };
+type RouteTestState = { agentId: string; status: "running" | "complete" | "error"; startedAt: number; completedAt?: number; message?: string };
+type ProviderConnectionState = "connected" | "local" | "missing" | "unknown";
+
+type MemoryNodeType = "home" | "project" | "folder" | "note" | "date" | "file" | "conversation" | "run" | "operation";
+
+type MemoryGraphNode = {
+  id: string;
+  label: string;
+  type: MemoryNodeType;
+  pos: Vec;
+  size?: number;
+  detail?: string;
+  conversationId?: string;
+  runId?: string;
+  operationId?: string;
+  path?: string;
+};
+
+type MemoryGraphLink = { from: string; to: string; strength?: number };
+
+/** Physics body for the force-directed Graph View sim — verlet-integrated, lives in sim-space (not screen px). */
+type PhysicsNode = {
+  id: string;
+  x: number;
+  y: number;
+  px: number;
+  py: number;
+  degree: number;
+  pinned: boolean;
+  radius: number;
+};
+
+/** A color-group rule, Obsidian-style: first matching rule wins. Structured so free-text/tag/path queries can be added later. */
+type ColorRule = { id: string; match: (node: MemoryGraphNode) => boolean; color: string; label: string };
+
+/** Persisted Graph View physics + display settings (see useAppStoreState). */
+type GraphPhysicsSettings = {
+  repelForce: number;
+  centerForce: number;
+  linkDistance: number;
+  linkThickness: number;
+};
+
+const DEFAULT_GRAPH_PHYSICS: GraphPhysicsSettings = {
+  repelForce: 1,
+  centerForce: 1,
+  linkDistance: 110,
+  linkThickness: 1
+};
+
+/** Muted 6-hue ramp for auto-assigned project color groups (Obsidian-ish, kept desaturated to match the greyscale UI). */
+const GRAPH_HUE_RAMP = [210, 265, 25, 160, 320, 45];
+
+type MemoryFolder = {
+  name: string;
+  children?: MemoryFolder[];
+  notes?: string[];
+};
+
+type BenchmarkStep = "welcome" | "target" | "profile" | "running" | "review" | "export";
+type BenchmarkTarget = "local" | "api";
+type BenchmarkProfile = "quick" | "balanced" | "deep";
+type BenchmarkRunStatus = "idle" | "running" | "complete";
+
+type BenchmarkWizardState = {
+  step: BenchmarkStep;
+  target: BenchmarkTarget;
+  profile: BenchmarkProfile;
+  status: BenchmarkRunStatus;
+  progress: number;
+  completedChecks: string[];
+  recommendation: {
+    preset: string;
+    model: string;
+    summary: string;
+    next: string[];
+  };
+  updatedAt?: string;
+};
+
+type GalleryImage = {
+  id: string;
+  src: string;
+  title: string;
+  tags: string[];
+  analysis: string;
+};
+
+type GalleryBoard = {
+  id: string;
+  title: string;
+  description: string;
+  coverImage: string;
+  images: GalleryImage[];
+  tags: string[];
+  linkedSkill: boolean;
+};
+
+type MarketplaceCategory = "all" | "mcp" | "skill" | "preset" | "pipeline" | "template";
+type MarketplaceState = { category: MarketplaceCategory; query: string };
+
+type AppSettings = {
+  globalInstructions: string;
+  language: string;
+  subscriptionMode: "bring-your-own-key" | "metis-subscription";
+  defaultPreset: "balanced" | "local_first" | "best_quality" | "cheapest" | "private";
+  rawPromptStorage: "local-only" | "hash-only";
+};
+
+type ConversationTurn = {
+  id: string;
+  prompt: string;
+  /** True when this entry is a mid-run steering directive, not a full run. */
+  directive?: boolean;
+  status: "running" | "complete" | "error";
+  run?: SessionRun;
+  streamEvents?: SessionTimelineEvent[];
+  streamStages?: NonNullable<SessionRun["stages"]>;
+  streamOperations?: AgentOperation[];
+  streamSteps?: SessionPipelineStep[];
+  streamProject?: SessionRun["projectResult"];
+  liveAssistantText?: string;
+  liveThoughtText?: string;
+  error?: string;
+};
+
+const ACCOUNT_EMAIL = "bytehavencreations@gmail.com";
+const METIS_REPO_URL = "https://github.com/lachydotmcg/metis-orchestrator";
+
+/** Lets deeply-nested "Preview" links (inside CompletedRun / TimelineOperations)
+ *  open the live preview rail without prop-drilling through every layer. */
+type PreviewRailControl = { open: (url: string, title: string) => void } | null;
+const PreviewRailContext = createContext<PreviewRailControl>(null);
+
+function openPreviewOrExternal(control: PreviewRailControl, url: string, title = "Preview"): void {
+  if (control) {
+    control.open(url, title);
+    return;
+  }
+  openExternal(url);
+}
+
+function openExternal(url: string): void {
+  if (window.metisShell) {
+    void window.metisShell.openExternal(url);
+    return;
+  }
+  window.open(url, "_blank", "noreferrer");
+}
+
+function openLocalPath(path: string): void {
+  if (window.metisShell) void window.metisShell.openPath(path);
+}
+
+function applyStreamEventToTurn(turn: ConversationTurn, event: SessionStreamEvent): ConversationTurn {
+  if (event.kind === "timeline") {
+    return { ...turn, streamEvents: [...(turn.streamEvents ?? []), event.event] };
+  }
+  if (event.kind === "message_delta") {
+    return { ...turn, liveAssistantText: `${turn.liveAssistantText ?? ""}${event.delta}` };
+  }
+  if (event.kind === "thought_delta") {
+    return { ...turn, liveThoughtText: `${turn.liveThoughtText ?? ""}${event.delta}` };
+  }
+  if (event.kind === "stage") {
+    return { ...turn, streamStages: [...(turn.streamStages ?? []).filter((stage) => stage.id !== event.stage.id), event.stage] };
+  }
+  if (event.kind === "operation") {
+    return {
+      ...turn,
+      streamOperations: [...(turn.streamOperations ?? []).filter((operation) => operation.id !== event.operation.id), event.operation]
+    };
+  }
+  if (event.kind === "step") {
+    return { ...turn, streamSteps: [...(turn.streamSteps ?? []).filter((step) => step.id !== event.step.id), event.step] };
+  }
+  if (event.kind === "project") {
+    return { ...turn, streamProject: event.project };
+  }
+  if (event.kind === "complete") {
+    return { ...turn, id: event.run.id, status: "complete", run: event.run };
+  }
+  if (event.kind === "error") {
+    return { ...turn, status: "error", error: event.message };
+  }
+  return turn;
+}
+
+const PROVIDERS: Record<ProviderId, { label: string; logo: string; tier: "cloud" | "local" }> = {
+  qwen: { label: "Qwen", logo: "assets/providers/qwen.png", tier: "local" },
+  claude: { label: "Claude", logo: "assets/providers/claude.png", tier: "cloud" },
+  openai: { label: "OpenAI", logo: "assets/providers/openai.png", tier: "cloud" },
+  gemini: { label: "Gemini", logo: "assets/providers/gemini.png", tier: "cloud" },
+  grok: { label: "Grok", logo: "assets/providers/grok.png", tier: "cloud" },
+  deepseek: { label: "DeepSeek", logo: "assets/providers/deepseek.png", tier: "cloud" },
+  glm: { label: "GLM", logo: "assets/providers/glm.png", tier: "local" }
+};
+const AUTOROUTER_LOGO = "assets/providers/autorouter.png";
+const HEAT_ALPHAS = ["0", "0.18", "0.38", "0.62", "1"];
+
+const PROVIDER_CONNECTIONS: Record<ProviderId, ProviderKey> = {
+  qwen: "ollama",
+  claude: "anthropic",
+  openai: "openai",
+  gemini: "gemini",
+  grok: "openrouter",
+  deepseek: "deepseek",
+  glm: "ollama"
+};
+
+/** Maps the live registry's `catalog/models.json` provider naming (ProviderKey,
+ *  e.g. "anthropic") onto the renderer's brand-style ids (e.g. "claude") used
+ *  by the model picker. Ollama-tier catalog entries all land on "qwen" since
+ *  that's the picker's default local brand bucket. */
+const CATALOG_PROVIDER_TO_BRAND: Record<ProviderKey, ProviderId> = {
+  anthropic: "claude",
+  openai: "openai",
+  gemini: "gemini",
+  deepseek: "deepseek",
+  openrouter: "grok",
+  ollama: "qwen"
+};
+
+const MODEL_LIBRARY: ModelRef[] = [
+  { provider: "claude", model: "Opus 4.8" },
+  { provider: "claude", model: "Sonnet 5" },
+  { provider: "claude", model: "Fable 5" },
+  { provider: "claude", model: "Haiku 4.5" },
+  { provider: "openai", model: "GPT-5.1" },
+  { provider: "openai", model: "GPT-5 mini" },
+  { provider: "gemini", model: "2.5 Pro" },
+  { provider: "gemini", model: "2.5 Flash" },
+  { provider: "grok", model: "Grok 4" },
+  { provider: "deepseek", model: "V3" },
+  { provider: "deepseek", model: "R1" },
+  { provider: "qwen", model: "Qwen2.5 72B" },
+  { provider: "qwen", model: "Qwen3 4B" },
+  { provider: "glm", model: "GLM-4.6" }
 ];
 
-const routeOptions = [
-  "Router: Balanced",
-  "Router: Local first",
-  "Router: Best quality",
-  "qwen3:8b",
-  "Ornith local",
-  "Claude Sonnet 4.6",
-  "OpenRouter frontier"
+function providerConnectionStatus(provider: ProviderId, states: Partial<Record<ProviderKey, ProviderConnectionState>>): ProviderConnectionState {
+  const key = PROVIDER_CONNECTIONS[provider];
+  if (key === "ollama" || PROVIDERS[provider].tier === "local") return "local";
+  return states[key] ?? "unknown";
+}
+
+const SKILL_LIBRARY = [
+  "UI Design",
+  "Frontend Patterns",
+  "Component Library",
+  "Planning",
+  "Agentic Tasks",
+  "Code Review",
+  "Testing",
+  "Documentation",
+  "Data Modeling",
+  "Security Audit"
 ];
 
-function routeLabel(route: Route): string {
-  if (route.kind === "none") return "No route";
-  return [route.kind, route.provider, route.runtime, route.model].filter(Boolean).join(" / ");
+const BENCHMARK_STEPS: Array<{ key: BenchmarkStep; label: string }> = [
+  { key: "welcome", label: "Check" },
+  { key: "target", label: "Target" },
+  { key: "profile", label: "Profile" },
+  { key: "running", label: "Run" },
+  { key: "review", label: "Review" },
+  { key: "export", label: "Export" }
+];
+
+const BENCHMARK_TARGETS: Array<{ key: BenchmarkTarget; title: string; detail: string; icon: JSX.Element }> = [
+  { key: "local", title: "Local model", detail: "Test an Ollama or local runner model on this machine.", icon: <HardDrive size={18} /> },
+  { key: "api", title: "API reference", detail: "Prototype the same flow for Claude, OpenAI, Gemini, or OpenRouter.", icon: <Monitor size={18} /> }
+];
+
+const BENCHMARK_PROFILES: Array<{ key: BenchmarkProfile; title: string; detail: string; time: string }> = [
+  { key: "quick", title: "Quick smoke", detail: "Small confidence pass for a newly installed model.", time: "5-10 min" },
+  { key: "balanced", title: "Balanced study", detail: "Recommended default: quality, speed, memory, and recommendation signal.", time: "20-35 min" },
+  { key: "deep", title: "Deep study", detail: "Repeats and harder tasks for publishing or comparing hardware.", time: "60+ min" }
+];
+
+const DEFAULT_BENCHMARK_STATE: BenchmarkWizardState = {
+  step: "welcome",
+  target: "local",
+  profile: "balanced",
+  status: "idle",
+  progress: 0,
+  completedChecks: [],
+  recommendation: {
+    preset: "Balanced local-first router",
+    model: "Qwen local router + Claude frontend fallback",
+    summary: "Use local routing for fast/private work, then escalate design-heavy or agentic prompts when confidence drops.",
+    next: ["Install the recommended local model", "Run the real Metis CLI bridge when enabled", "Save the resulting router preset"]
+  }
+};
+
+// Built-in hardware + model-on-hardware data so Metis can recommend local models
+// from your GPU/VRAM without forcing a benchmark run.
+type Gpu = { id: string; label: string; vram: number; note: string };
+const GPUS: Gpu[] = [
+  { id: "rtx3060", label: "RTX 3060", vram: 8, note: "8 GB" },
+  { id: "rtx4070", label: "RTX 4070", vram: 12, note: "12 GB" },
+  { id: "rtx4080", label: "RTX 4080", vram: 16, note: "16 GB" },
+  { id: "rtx4090", label: "RTX 4090", vram: 24, note: "24 GB" },
+  { id: "m3max", label: "Apple M3 Max", vram: 36, note: "36 GB unified" },
+  { id: "cpu", label: "CPU only", vram: 0, note: "system RAM" }
+];
+
+type LocalModel = { name: string; params: string; vram: number; quant: string; tps: number; role: string; provider?: ProviderId };
+const LOCAL_MODELS: LocalModel[] = [
+  { name: "Qwen2.5 7B", params: "7B", vram: 6, quant: "Q4_K_M", tps: 52, role: "fast router / general", provider: "qwen" },
+  { name: "Llama 3.1 8B", params: "8B", vram: 6.5, quant: "Q4_K_M", tps: 47, role: "general chat" },
+  { name: "GLM-4 9B", params: "9B", vram: 7, quant: "Q4_K_M", tps: 41, role: "chat / agentic", provider: "glm" },
+  { name: "DeepSeek-R1 Distill 14B", params: "14B", vram: 10, quant: "Q4_K_M", tps: 28, role: "reasoning", provider: "deepseek" },
+  { name: "Qwen2.5 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 18, role: "strong coding", provider: "qwen" },
+  { name: "Ornith 1.0 35B", params: "35B", vram: 22, quant: "Q4_K_M", tps: 16, role: "RL-tuned coding agent" },
+  { name: "Qwen2.5 72B", params: "72B", vram: 42, quant: "Q4_K_M", tps: 9, role: "near-frontier local", provider: "qwen" }
+];
+
+type Fit = "great" | "tight" | "over" | "cpu";
+type ScoredModel = LocalModel & { fit: Fit };
+
+function fitFor(vram: number, modelVram: number): Fit {
+  if (vram === 0) return "cpu";
+  const ratio = modelVram / vram;
+  if (ratio <= 0.85) return "great";
+  if (ratio <= 1.05) return "tight";
+  return "over";
 }
 
-function percent(value: number): string {
-  return `${Math.round(value * 100)}%`;
+function fitLabel(fit: Fit): string {
+  return fit === "great" ? "Great fit" : fit === "tight" ? "Tight" : fit === "cpu" ? "CPU · slow" : "Needs more VRAM";
 }
 
-function scoreLabel(score: RouteScore): string {
-  const label = routeLabel(score.route);
-  return `${label} - ${score.total.toFixed(3)}`;
+const DEFAULT_GALLERY_BOARDS: GalleryBoard[] = [
+  {
+    id: "client-websites",
+    title: "Client Websites",
+    description: "Reference direction for frontend and small-business landing pages.",
+    coverImage: makeGalleryThumb("Client Websites", "#151923", "#5865f2"),
+    tags: ["frontend", "client work", "landing pages"],
+    linkedSkill: true,
+    images: [
+      {
+        id: "cw-1",
+        src: makeGalleryThumb("Premium Service", "#101217", "#7c3aed"),
+        title: "Premium service hero",
+        tags: ["hero", "service", "trust"],
+        analysis: "Strong first viewport with concise offer, dark premium contrast, and clear service trust cues."
+      },
+      {
+        id: "cw-2",
+        src: makeGalleryThumb("Local Business", "#0f172a", "#0ea5e9"),
+        title: "Local business proof",
+        tags: ["proof", "reviews", "conversion"],
+        analysis: "Useful pattern for small client sites: proof strip, direct CTA, and low-friction contact flow."
+      },
+      {
+        id: "cw-3",
+        src: makeGalleryThumb("Portfolio Detail", "#18181b", "#22c55e"),
+        title: "Portfolio detail section",
+        tags: ["case study", "layout", "before-after"],
+        analysis: "Good inspiration for showing outcomes without turning the page into a generic template."
+      },
+      {
+        id: "cw-4",
+        src: makeGalleryThumb("Mobile Flow", "#111827", "#f59e0b"),
+        title: "Mobile booking flow",
+        tags: ["mobile", "booking", "forms"],
+        analysis: "Compact mobile-first form rhythm with actions reachable near the bottom of the viewport."
+      }
+    ]
+  }
+];
+
+const DEFAULT_MARKETPLACE_STATE: MarketplaceState = { category: "all", query: "" };
+const DEFAULT_SETTINGS: AppSettings = {
+  globalInstructions: "",
+  language: "en",
+  subscriptionMode: "bring-your-own-key",
+  defaultPreset: "balanced",
+  rawPromptStorage: "local-only"
+};
+const PROVIDER_KEYS: ProviderKey[] = ["ollama", "anthropic", "openai", "gemini", "deepseek", "openrouter"];
+const PROVIDER_LABELS: Record<ProviderKey, string> = {
+  ollama: "Ollama",
+  anthropic: "Anthropic",
+  openai: "OpenAI",
+  gemini: "Gemini",
+  deepseek: "DeepSeek",
+  openrouter: "OpenRouter"
+};
+const PERMISSION_PRESETS: Array<{ scope: PermissionScope; target: string; note: string }> = [
+  { scope: "filesystem.read", target: "current project", note: "Index project files for Graph View retrieval." },
+  { scope: "network.provider", target: "configured providers", note: "Call selected local/cloud routes after policy chooses them." },
+  { scope: "process.spawn", target: "metis-policy CLI", note: "Run policy decisions through the separate routing contract." },
+  { scope: "mcp.invoke", target: "installed MCP tools", note: "Let enabled connections expose approved tools to routes." }
+];
+const FALLBACK_POLICY_STATUS: PolicyStatus = {
+  available: false,
+  detail: "Electron runtime APIs are unavailable in browser preview."
+};
+const FALLBACK_REGISTRY: RegistryState = {
+  sourceUrl: "bundled-preview",
+  status: "idle",
+  packages: []
+};
+const FALLBACK_MODEL_CATALOG: ModelCatalogState = {
+  sourceUrl: "bundled-preview",
+  status: "idle",
+  models: []
+};
+const FALLBACK_PULSE: PulseFeed = {
+  sourceUrl: "bundled-preview",
+  status: "idle",
+  changelog: [],
+  community: [],
+  news: []
+};
+
+const MARKETPLACE_CATEGORIES: Array<{ key: MarketplaceCategory; label: string; detail: string; icon: JSX.Element }> = [
+  { key: "all", label: "All", detail: "Everything", icon: <Sparkles size={20} /> },
+  { key: "mcp", label: "MCP Connections", detail: "Tools", icon: <Plug size={20} /> },
+  { key: "skill", label: "Skills", detail: "Prompt packs", icon: <ClipboardList size={20} /> },
+  { key: "preset", label: "Presets", detail: "Routers", icon: <Star size={20} /> },
+  { key: "pipeline", label: "Pipelines", detail: "Flows", icon: <GitBranch size={20} /> },
+  { key: "template", label: "Templates", detail: "Starters", icon: <Layers size={20} /> }
+];
+
+/** Browser-preview fallback when `window.metisRegistry` is absent (no Electron bridge). */
+const FALLBACK_MARKETPLACE_PACKAGES: RegistryPackage[] = [
+  {
+    schema_version: "0.1.0",
+    id: "ui-ux-pro-max",
+    kind: "skill",
+    name: "UI / UX Pro Max",
+    version: "1.0.0",
+    publisher: "metis",
+    description: "Design-review and implementation skill for polished interfaces.",
+    tags: ["frontend", "design"],
+    permissions_requested: [],
+    source_url: ""
+  },
+  {
+    schema_version: "0.1.0",
+    id: "gallery-reference-pack",
+    kind: "skill",
+    name: "Gallery Reference Pack",
+    version: "1.0.0",
+    publisher: "metis",
+    description: "Turns saved boards into route-aware visual inspiration.",
+    tags: ["frontend", "design"],
+    permissions_requested: [],
+    source_url: ""
+  },
+  {
+    schema_version: "0.1.0",
+    id: "browser-mcp",
+    kind: "mcp",
+    name: "Browser Control",
+    version: "1.0.0",
+    publisher: "metis",
+    description: "Inspect local previews, screenshots, and web app flows.",
+    tags: ["productivity"],
+    permissions_requested: ["network.web"],
+    source_url: ""
+  },
+  {
+    schema_version: "0.1.0",
+    id: "filesystem-mcp",
+    kind: "mcp",
+    name: "Filesystem Workspace",
+    version: "1.0.0",
+    publisher: "metis",
+    description: "Let routes read and write approved project files.",
+    tags: ["productivity"],
+    permissions_requested: ["filesystem.read", "filesystem.write"],
+    source_url: ""
+  },
+  {
+    schema_version: "0.1.0",
+    id: "local-first-router",
+    kind: "preset",
+    name: "Local-first Router",
+    version: "1.0.0",
+    publisher: "metis",
+    description: "Prefer local models, escalate when task confidence or quality risk says so.",
+    tags: ["cost-control"],
+    permissions_requested: [],
+    source_url: ""
+  },
+  {
+    schema_version: "0.1.0",
+    id: "frontend-studio",
+    kind: "preset",
+    name: "Frontend Studio",
+    version: "1.0.0",
+    publisher: "metis",
+    description: "Gallery references, UI skill, and premium cloud fallback for design work.",
+    tags: ["frontend", "design"],
+    permissions_requested: [],
+    source_url: ""
+  },
+  {
+    schema_version: "0.1.0",
+    id: "security-audit",
+    kind: "skill",
+    name: "Security Audit Pack",
+    version: "1.0.0",
+    publisher: "metis",
+    description: "Threat-model review, code audit prompts, and safe reporting format.",
+    tags: ["security"],
+    permissions_requested: [],
+    source_url: ""
+  }
+];
+
+const MEMORY_TREE: MemoryFolder[] = [
+  {
+    name: "agent-memory",
+    children: [
+      { name: "ad-helpdesk", notes: ["2026-05-24", "2026-05-31", "2026-06-21"] },
+      { name: "ai-learning", notes: ["local-file-agent-setup-guide", "goals"] },
+      { name: "lachys-web-dev", notes: ["deploy-checklist", "Lachys Web Dev", "Club Window Services"] },
+      { name: "metis", notes: ["benchmark-suite-planning", "routing-policy-contract", "findings-ceiling-effect"] },
+      { name: "metis-orchestrator", notes: ["orchestration-ui", "graph-view", "marketplace"] },
+      { name: "portfolio", notes: ["Lachlan GitHub profile", "mcp-backdoor-essay"] }
+    ]
+  }
+];
+
+const MEMORY_GRAPH_NODES: MemoryGraphNode[] = [
+  { id: "home", label: "Home", type: "home", pos: { x: 0, y: 0 }, size: 42, detail: "root memory index" },
+  { id: "lachys-web-dev", label: "Lachys Web Dev", type: "project", pos: { x: 210, y: -210 }, size: 36, detail: "project workspace" },
+  { id: "metis", label: "Metis", type: "project", pos: { x: -245, y: -150 }, size: 34, detail: "benchmark suite" },
+  { id: "metis-orchestrator", label: "metis-orchestrator", type: "project", pos: { x: -120, y: 180 }, size: 31, detail: "desktop orchestration UI" },
+  { id: "aid-helpdesk", label: "AID Helpdesk", type: "project", pos: { x: 285, y: 90 }, size: 30, detail: "support automation" },
+  { id: "portfolio", label: "portfolio", type: "project", pos: { x: -360, y: 120 }, size: 28, detail: "public writing and demos" },
+  { id: "supargus", label: "supargus-web", type: "project", pos: { x: 110, y: 240 }, size: 27, detail: "hosted dashboard" },
+  { id: "dpsai", label: "dpsai", type: "project", pos: { x: -35, y: -275 }, size: 27, detail: "school AI product" },
+  { id: "graph-view", label: "Graph View", type: "note", pos: { x: -180, y: 40 }, detail: "linked logs and note traversal" },
+  { id: "orchestration-ui", label: "orchestration-ui", type: "note", pos: { x: -25, y: 120 }, detail: "router process tree" },
+  { id: "routing-policy", label: "routing-policy-contract", type: "file", pos: { x: -240, y: 220 }, detail: "future policy export" },
+  { id: "benchmark-plan", label: "benchmark-suite-planning", type: "note", pos: { x: -420, y: -230 }, detail: "Metis benchmark next steps" },
+  { id: "ceiling-effect", label: "findings-ceiling-effect", type: "note", pos: { x: -355, y: -30 }, detail: "quality saturation caveat" },
+  { id: "marketplace", label: "marketplace", type: "note", pos: { x: 55, y: 315 }, detail: "skills, MCPs, presets" },
+  { id: "env-vars", label: "provider-env-vars", type: "file", pos: { x: -155, y: 320 }, detail: "provider-level API keys" },
+  { id: "gallery", label: "Gallery", type: "folder", pos: { x: 340, y: -30 }, detail: "design references" },
+  { id: "deploy-checklist", label: "deploy-checklist", type: "file", pos: { x: 385, y: -310 }, detail: "web deployment notes" },
+  { id: "club-window", label: "Club Window Services", type: "note", pos: { x: 525, y: -205 }, detail: "client project" },
+  { id: "github-profile", label: "Lachlan GitHub profile", type: "note", pos: { x: -530, y: 25 }, detail: "portfolio note" },
+  { id: "mcp-essay", label: "mcp-backdoor-essay", type: "file", pos: { x: -520, y: 215 }, detail: "security writing" },
+  { id: "date-2026-05-24", label: "2026-05-24", type: "date", pos: { x: 470, y: 165 }, detail: "conversation log" },
+  { id: "date-2026-05-31", label: "2026-05-31", type: "date", pos: { x: 450, y: 330 }, detail: "conversation log" },
+  { id: "date-2026-06-21", label: "2026-06-21", type: "date", pos: { x: 615, y: 65 }, detail: "conversation log" },
+  { id: "local-file-agent", label: "local-file-agent-setup-guide", type: "file", pos: { x: 90, y: -390 }, detail: "retrieval helper idea" },
+  { id: "goals", label: "goals", type: "note", pos: { x: -95, y: -390 }, detail: "project goals" }
+];
+
+const MEMORY_GRAPH_LINKS: MemoryGraphLink[] = [
+  { from: "home", to: "lachys-web-dev", strength: 2 },
+  { from: "home", to: "metis", strength: 2 },
+  { from: "home", to: "metis-orchestrator", strength: 2 },
+  { from: "home", to: "aid-helpdesk" },
+  { from: "home", to: "portfolio" },
+  { from: "home", to: "supargus" },
+  { from: "home", to: "dpsai" },
+  { from: "metis", to: "benchmark-plan", strength: 2 },
+  { from: "metis", to: "ceiling-effect", strength: 2 },
+  { from: "metis", to: "routing-policy" },
+  { from: "metis", to: "metis-orchestrator", strength: 2 },
+  { from: "metis-orchestrator", to: "orchestration-ui", strength: 2 },
+  { from: "metis-orchestrator", to: "graph-view", strength: 2 },
+  { from: "metis-orchestrator", to: "marketplace" },
+  { from: "metis-orchestrator", to: "env-vars" },
+  { from: "graph-view", to: "local-file-agent" },
+  { from: "graph-view", to: "goals" },
+  { from: "orchestration-ui", to: "routing-policy", strength: 2 },
+  { from: "marketplace", to: "gallery" },
+  { from: "gallery", to: "lachys-web-dev" },
+  { from: "lachys-web-dev", to: "deploy-checklist", strength: 2 },
+  { from: "lachys-web-dev", to: "club-window" },
+  { from: "portfolio", to: "github-profile" },
+  { from: "portfolio", to: "mcp-essay" },
+  { from: "aid-helpdesk", to: "date-2026-05-24" },
+  { from: "aid-helpdesk", to: "date-2026-05-31" },
+  { from: "aid-helpdesk", to: "date-2026-06-21" },
+  { from: "dpsai", to: "goals" },
+  { from: "supargus", to: "deploy-checklist" }
+];
+
+function buildRuntimeMemoryGraph(conversations: ConversationRecord[], runs: SessionRun[]): { nodes: MemoryGraphNode[]; links: MemoryGraphLink[]; tree: MemoryFolder | null } {
+  const staticIds = new Set(MEMORY_GRAPH_NODES.map((node) => node.id));
+  const nodes: MemoryGraphNode[] = [];
+  const links: MemoryGraphLink[] = [];
+  const linkKeys = new Set(MEMORY_GRAPH_LINKS.map((link) => `${link.from}->${link.to}`));
+  const projectNodes = new Map<string, { id: string; label: string; pos: Vec; conversations: string[] }>();
+  const mergedRuns = new Map<string, SessionRun>();
+
+  for (const run of runs) mergedRuns.set(run.id, run);
+  for (const conversation of conversations) {
+    for (const turn of conversation.turns) {
+      if (turn.run) mergedRuns.set(turn.run.id, turn.run);
+    }
+  }
+
+  const recentConversations = [...conversations].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()).slice(0, 12);
+
+  function addLink(from: string, to: string, strength?: number): void {
+    const key = `${from}->${to}`;
+    if (linkKeys.has(key)) return;
+    links.push({ from, to, strength });
+    linkKeys.add(key);
+  }
+
+  function ensureProject(conversation: ConversationRecord, index: number): { id: string; label: string; pos: Vec; conversations: string[] } {
+    const label = projectNameFromPath(conversation.projectPath);
+    const normalized = normalizeMemoryLabel(label) || "workspace";
+    const staticProject = MEMORY_GRAPH_NODES.find((node) => node.type === "project" && (node.id === normalized || normalizeMemoryLabel(node.label) === normalized));
+    const id = staticProject?.id ?? `runtime-project-${normalized}`;
+    const existing = projectNodes.get(id);
+    if (existing) return existing;
+    const pos = staticProject?.pos ?? { x: 760 + (index % 3) * 130, y: -260 + Math.floor(index / 3) * 145 };
+    const project = { id, label, pos, conversations: [] };
+    projectNodes.set(id, project);
+    if (!staticIds.has(id)) {
+      nodes.push({
+        id,
+        label,
+        type: "project",
+        pos,
+        size: 30,
+        detail: conversation.projectPath ?? "runtime workspace"
+      });
+      addLink("home", id, 2);
+    }
+    return project;
+  }
+
+  recentConversations.forEach((conversation, index) => {
+    const project = ensureProject(conversation, index);
+    const projectConversationIndex = project.conversations.length;
+    const conversationId = `conversation-${conversation.id}`;
+    project.conversations.push(conversationId);
+      nodes.push({
+        id: conversationId,
+        label: conversation.title,
+        type: "conversation",
+      pos: {
+        x: project.pos.x + 130 + (projectConversationIndex % 2) * 100,
+        y: project.pos.y - 80 + projectConversationIndex * 58
+      },
+        size: 20,
+        detail: `${conversation.turns.length} turn${conversation.turns.length === 1 ? "" : "s"} / ${ageLabel(conversation.updatedAt)}`,
+        conversationId: conversation.id,
+        path: conversation.projectPath
+      });
+    addLink(project.id, conversationId, 2);
+
+    const conversationRuns = collectConversationRuns(conversation, Array.from(mergedRuns.values())).slice(0, 3);
+    conversationRuns.forEach((run, runIndex) => {
+      const runId = `run-${run.id}`;
+      const operations = run.operations?.length ? run.operations : operationsFromArtifacts(run);
+      nodes.push({
+        id: runId,
+        label: run.routeLabel ?? run.pipelineName.replace(" Orchestration Pipeline", ""),
+        type: "run",
+        pos: {
+          x: project.pos.x + 325 + runIndex * 86,
+          y: project.pos.y - 58 + projectConversationIndex * 58 + runIndex * 52
+        },
+        size: 18,
+        detail: `${run.decision.decision.task_type} / ${operations.length} operation${operations.length === 1 ? "" : "s"}`,
+        conversationId: conversation.id,
+        runId: run.id,
+        path: run.projectPath
+      });
+      addLink(conversationId, runId, 2);
+
+      if (run.projectSnapshot) {
+        const snapshotId = `snapshot-${run.id}`;
+        nodes.push({
+          id: snapshotId,
+          label: run.projectSnapshot.rootName,
+          type: "folder",
+          pos: {
+            x: project.pos.x + 360 + runIndex * 80,
+            y: project.pos.y + 105 + projectConversationIndex * 58 + runIndex * 44
+          },
+          size: 16,
+          detail: `${run.projectSnapshot.packageManager ?? "repo"} / ${run.projectSnapshot.totals.files} files`,
+          conversationId: conversation.id,
+          runId: run.id,
+          path: run.projectSnapshot.rootPath
+        });
+        addLink(runId, snapshotId);
+        run.projectSnapshot.files.slice(0, 6).forEach((file, fileIndex) => {
+          const fileId = `snapshot-file-${run.id}-${fileIndex}`;
+          nodes.push({
+            id: fileId,
+            label: file.path,
+            type: file.kind === "directory" ? "folder" : "file",
+            pos: {
+              x: project.pos.x + 520 + runIndex * 70,
+              y: project.pos.y + 72 + projectConversationIndex * 58 + runIndex * 44 + fileIndex * 28
+            },
+            size: file.kind === "directory" ? 12 : 10,
+            detail: file.bytes ? `${Math.round(file.bytes / 100) / 10} KB` : file.kind,
+            conversationId: conversation.id,
+            runId: run.id,
+            path: `${run.projectSnapshot?.rootPath}/${file.path}`
+          });
+          addLink(snapshotId, fileId);
+        });
+      }
+
+      operations.slice(0, 5).forEach((operation, operationIndex) => {
+        const operationId = `operation-${run.id}-${operation.id}`;
+        nodes.push({
+          id: operationId,
+          label: operation.label,
+          type: "operation",
+          pos: {
+            x: project.pos.x + 475 + runIndex * 70,
+            y: project.pos.y - 112 + projectConversationIndex * 58 + runIndex * 52 + operationIndex * 38
+          },
+          size: operation.status === "complete" ? 12 : 16,
+          detail: operation.target ?? operation.command ?? operation.detail ?? operation.kind,
+          conversationId: conversation.id,
+          runId: run.id,
+          operationId: operation.id,
+          path: operation.target
+        });
+        addLink(runId, operationId);
+      });
+    });
+  });
+
+  if (recentConversations.length === 0) return { nodes, links, tree: null };
+
+  return {
+    nodes,
+    links,
+    tree: {
+      name: "runtime",
+      children: Array.from(projectNodes.values()).map((project) => ({
+        name: project.label,
+        notes: recentConversations.filter((conversation) => projectNameFromPath(conversation.projectPath) === project.label).map((conversation) => conversation.title)
+      }))
+    }
+  };
 }
 
-function loadSampleDecision(): Promise<RouteDecision> {
-  return window.metisPolicy?.getSampleDecision() ?? Promise.resolve(sampleDecision);
+function collectConversationRuns(conversation: ConversationRecord, runs: SessionRun[]): SessionRun[] {
+  const byId = new Map<string, SessionRun>();
+  for (const run of runs) {
+    if (run.conversationId === conversation.id) byId.set(run.id, run);
+  }
+  for (const turn of conversation.turns) {
+    if (turn.run) byId.set(turn.run.id, turn.run);
+  }
+  return Array.from(byId.values()).sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+}
+
+const SEED_NODES: GraphNode[] = [
+  {
+    id: "router",
+    kind: "router",
+    label: "Router",
+    pos: { x: 0, y: 250 },
+    provider: "qwen",
+    model: "Default router",
+    temperature: 0.2,
+    fallbacks: [{ provider: "glm", model: "GLM-4.6" }]
+  },
+  {
+    id: "agent-frontend",
+    kind: "agent",
+    label: "Frontend",
+    pos: { x: 40, y: -290 },
+    provider: "claude",
+    model: "Sonnet 4.6",
+    intent: "frontend / UI design",
+    temperature: 0.6,
+    skills: ["skill-ui", "skill-components"],
+    fallbacks: [{ provider: "deepseek", model: "V3" }]
+  },
+  { id: "agent-planning", kind: "agent", label: "Planning", pos: { x: -270, y: -200 }, provider: "gemini", model: "2.5 Pro", intent: "planning & breakdown", temperature: 0.4, skills: [] },
+  { id: "agent-backend", kind: "agent", label: "Backend", pos: { x: 340, y: -190 }, provider: "deepseek", model: "V3", intent: "backend / APIs", temperature: 0.3, skills: [] },
+  { id: "agent-agentic", kind: "agent", label: "Agentic tasks", pos: { x: -480, y: 70 }, provider: "openai", model: "GPT-5.1", intent: "agentic / tool use", temperature: 0.5, skills: [] },
+  { id: "agent-research", kind: "agent", label: "Research", pos: { x: 520, y: 60 }, provider: "grok", model: "Grok 4", intent: "research & search", temperature: 0.4, skills: [] },
+  { id: "skill-ui", kind: "skill", label: "UI Design", pos: { x: -90, y: -30 } },
+  { id: "skill-components", kind: "skill", label: "Component Library", pos: { x: 150, y: -40 } }
+];
+
+type PresetKey = "recommended" | "local" | "quality" | "speed";
+
+const PRESETS: { key: PresetKey; label: string; note: string; router: ModelRef; pick: (role: string) => ModelRef }[] = [
+  {
+    key: "recommended",
+    label: "Recommended",
+    note: "Balanced quality / cost",
+    router: { provider: "qwen", model: "Default router" },
+    pick: (role) =>
+      role.includes("front")
+        ? { provider: "claude", model: "Sonnet 4.6" }
+        : role.includes("plan")
+          ? { provider: "gemini", model: "2.5 Pro" }
+          : role.includes("back")
+            ? { provider: "deepseek", model: "V3" }
+            : role.includes("research")
+              ? { provider: "grok", model: "Grok 4" }
+              : { provider: "openai", model: "GPT-5.1" }
+  },
+  {
+    key: "local",
+    label: "Local-first",
+    note: "Cheap, runs on your VRAM",
+    router: { provider: "qwen", model: "Qwen3 4B" },
+    pick: (role) => (role.includes("front") || role.includes("research") ? { provider: "qwen", model: "Qwen2.5 72B" } : { provider: "glm", model: "GLM-4.6" })
+  },
+  {
+    key: "quality",
+    label: "Max quality",
+    note: "Best models everywhere",
+    router: { provider: "claude", model: "Opus 4.8" },
+    pick: () => ({ provider: "claude", model: "Opus 4.8" })
+  },
+  {
+    key: "speed",
+    label: "Speed",
+    note: "Smallest fast models",
+    router: { provider: "qwen", model: "Qwen3 4B" },
+    pick: (role) => (role.includes("plan") ? { provider: "gemini", model: "2.5 Flash" } : { provider: "claude", model: "Haiku 4.5" })
+  }
+];
+
+const STORAGE_KEY = "metis-graph-v3";
+const PRESET_STORAGE_KEY = "metis-orchestration-preset-v1";
+const MIN_ZOOM = 0.45;
+const MAX_ZOOM = 1.9;
+const TARGET_RADIUS = 160; // screen px
+const ROUTE_TARGET_RADIUS = 95; // screen px
+const EXISTING_SKILL_TARGET_RADIUS = 96; // screen px
+const EXISTING_SKILL_ROUTE_RADIUS = 52; // screen px
+const GHOST_FOLLOW = 0.3;
+const MAX_TILT = 15;
+
+const prefersReducedMotion =
+  typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false;
+
+function makeGalleryThumb(label: string, start: string, end: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="650" viewBox="0 0 900 650"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${start}"/><stop offset="1" stop-color="${end}"/></linearGradient></defs><rect width="900" height="650" fill="url(#g)"/><rect x="58" y="64" width="784" height="92" rx="18" fill="rgba(255,255,255,.14)"/><rect x="58" y="196" width="360" height="300" rx="26" fill="rgba(255,255,255,.18)"/><rect x="458" y="196" width="384" height="56" rx="16" fill="rgba(255,255,255,.20)"/><rect x="458" y="282" width="306" height="42" rx="13" fill="rgba(255,255,255,.14)"/><rect x="458" y="356" width="348" height="42" rx="13" fill="rgba(255,255,255,.14)"/><rect x="458" y="450" width="178" height="58" rx="17" fill="rgba(255,255,255,.28)"/><text x="76" y="125" fill="white" font-family="Segoe UI, Arial, sans-serif" font-size="38" font-weight="800">${label}</text></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+async function readAppStore<T>(key: string, fallback: T): Promise<T> {
+  if (typeof window === "undefined") return fallback;
+  if (window.metisStore) return window.metisStore.get(key, fallback);
+  try {
+    const raw = window.localStorage.getItem(`metis-store:${key}`);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeAppStore<T>(key: string, value: T): Promise<void> {
+  if (typeof window === "undefined") return;
+  if (window.metisStore) {
+    await window.metisStore.set(key, value);
+    return;
+  }
+  window.localStorage.setItem(`metis-store:${key}`, JSON.stringify(value));
+}
+
+function useAppStoreState<T>(key: string, fallback: T): [T, (next: T | ((current: T) => T)) => void, boolean] {
+  const [value, setValue] = useState<T>(fallback);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    void readAppStore(key, fallback).then((stored) => {
+      if (!alive) return;
+      setValue(stored);
+      setLoaded(true);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [fallback, key]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    void writeAppStore(key, value);
+  }, [key, loaded, value]);
+
+  const update = useCallback((next: T | ((current: T) => T)) => {
+    setValue((current) => (typeof next === "function" ? (next as (current: T) => T)(current) : next));
+  }, []);
+
+  return [value, update, loaded];
+}
+
+function ageLabel(value: string): string {
+  const ms = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(ms) || ms < 60_000) return "now";
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `${days}d`;
+  return `${Math.floor(days / 7)}w`;
+}
+
+function projectNameFromPath(path?: string): string {
+  if (!path) return "Unassigned workspace";
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? path;
+}
+
+function conversationProjects(conversations: ConversationRecord[]): ProjectFolder[] {
+  const grouped = new Map<string, ConversationRecord[]>();
+  for (const conversation of conversations) {
+    const key = conversation.projectPath ?? "";
+    grouped.set(key, [...(grouped.get(key) ?? []), conversation]);
+  }
+  return Array.from(grouped.entries()).map(([path, items]) => {
+    const sorted = [...items].sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    const newest = sorted[0];
+    return {
+      name: projectNameFromPath(path || undefined),
+      path: path || undefined,
+      latest: newest?.title ?? "No conversations yet",
+      age: newest ? ageLabel(newest.updatedAt) : ""
+    };
+  });
+}
+
+type SidebarConversation = { id: string; title: string; summary: string; age: string };
+
+function conversationsByProject(conversations: ConversationRecord[]): Record<string, SidebarConversation[]> {
+  const grouped: Record<string, SidebarConversation[]> = {};
+  for (const conversation of conversations) {
+    const key = projectNameFromPath(conversation.projectPath);
+    grouped[key] ??= [];
+    const lastUser = [...conversation.turns].reverse().find((turn) => turn.role === "user");
+    grouped[key].push({
+      id: conversation.id,
+      title: conversation.title,
+      summary: lastUser?.content.slice(0, 90) ?? "Stored Metis conversation",
+      age: ageLabel(conversation.updatedAt)
+    });
+  }
+  return grouped;
+}
+
+function conversationProjectMatchesPath(conversation: ConversationRecord, projectPath?: string): boolean {
+  return (conversation.projectPath ?? "").toLowerCase() === (projectPath ?? "").toLowerCase();
 }
 
 export function App(): JSX.Element {
-  const [decision, setDecision] = useState<RouteDecision | null>(null);
-  const [preset, setPreset] = useState<RouterPreset>("balanced");
-  const [routeChoice, setRouteChoice] = useState(routeOptions[0]);
-  const [graphOpen, setGraphOpen] = useState(false);
-  const [prompt, setPrompt] = useState("Summarise these notes into five bullets.");
+  const [activeNav, setActiveNav] = useState<NavKey>("benchmark");
+  const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sessionKey, setSessionKey] = useState(0);
+  const [storedConversations, setStoredConversations] = useState<ConversationRecord[]>([]);
+  const [openConversation, setOpenConversation] = useState<ConversationRecord | null>(null);
+  const initialNavResolved = useRef(false);
 
-  useEffect(() => {
-    void loadSampleDecision().then(setDecision);
+  // Parallel sessions phase A (docs/FABLE_PLANS.md section 3) — pending-turn
+  // and busy state live HERE, not inside NewSessionWorkspace, because that
+  // component remounts (key={sessionKey}) every time the user opens a new
+  // draft session or switches conversations. Keeping this state above the
+  // remount boundary is what lets a run keep streaming in the background
+  // while the user navigates elsewhere. Keyed by "conversation key": the real
+  // conversationId once known, else a `draft-<timestamp>` key for a brand-new
+  // session whose first run hasn't returned a conversationId yet.
+  const [pendingByConversation, setPendingByConversation] = useState<Record<string, ConversationTurn[]>>({});
+  const [busyKeys, setBusyKeys] = useState<Set<string>>(new Set());
+  // Consulted by every in-flight stream-event write so a run started under a
+  // draft-<ts> key keeps landing in the right bucket after the first response
+  // migrates that bucket to the real conversationId (see submitPrompt in
+  // NewSessionWorkspace). A ref (not state) because it must be read inside
+  // closures created before the migration happened, without re-render.
+  const draftToRealRef = useRef<Map<string, string>>(new Map());
+
+  const refreshConversations = useCallback(() => {
+    if (window.metisConversations) void window.metisConversations.list().then(setStoredConversations);
   }, []);
 
-  const selectedPreset = presets.find((item) => item.id === preset) ?? presets[0];
-  const selectedRoute = decision?.selected_route;
-  const fallback = decision?.fallback_routes[0];
-  const selectedScore = decision?.scores[0];
-  const scoreRows = useMemo(() => decision?.scores ?? [], [decision]);
+  const openConversationById = useCallback(
+    (id: string) => {
+      const record = storedConversations.find((conversation) => conversation.id === id);
+      if (!record) return;
+      setOpenConversation(record);
+      setActiveNav("session");
+    },
+    [storedConversations]
+  );
+  const deleteConversationById = useCallback(
+    async (id: string) => {
+      if (!window.metisConversations) return;
+      const record = storedConversations.find((conversation) => conversation.id === id);
+      const confirmed = window.confirm(`Delete "${record?.title ?? "this conversation"}"? This removes the stored chat and its run history.`);
+      if (!confirmed) return;
+      const next = await window.metisConversations.delete(id);
+      setStoredConversations(next);
+      if (openConversation?.id === id) {
+        setOpenConversation(null);
+        setSessionKey((current) => current + 1);
+      }
+    },
+    [openConversation?.id, storedConversations]
+  );
+  const renameConversationById = useCallback(
+    async (id: string, title: string) => {
+      if (!window.metisConversations) return;
+      const next = await window.metisConversations.rename(id, title);
+      setStoredConversations(next);
+      if (openConversation?.id === id) {
+        const updated = next.find((conversation) => conversation.id === id);
+        if (updated) setOpenConversation(updated);
+      }
+    },
+    [openConversation?.id]
+  );
+  const archiveConversationById = useCallback(
+    async (id: string, archived: boolean) => {
+      if (!window.metisConversations) return;
+      const next = await window.metisConversations.archive(id, archived);
+      setStoredConversations(next);
+      if (archived && openConversation?.id === id) {
+        setOpenConversation(null);
+        setSessionKey((current) => current + 1);
+      } else if (openConversation?.id === id) {
+        const updated = next.find((conversation) => conversation.id === id);
+        if (updated) setOpenConversation(updated);
+      }
+    },
+    [openConversation?.id]
+  );
+  const deleteProjectByPath = useCallback(
+    async (project: ProjectFolder) => {
+      if (!window.metisConversations) return;
+      const confirmed = window.confirm(`Delete "${project.name}" conversations? This removes stored chats and run history for that project.`);
+      if (!confirmed) return;
+      const next = await window.metisConversations.deleteProject(project.path);
+      setStoredConversations(next);
+      setExpandedProject(null);
+      if (openConversation && conversationProjectMatchesPath(openConversation, project.path)) {
+        setOpenConversation(null);
+        setSessionKey((current) => current + 1);
+      }
+    },
+    [openConversation]
+  );
+  const [benchmarkWizard, setBenchmarkWizard, benchmarkLoaded] = useAppStoreState("benchmarkWizard", DEFAULT_BENCHMARK_STATE);
+  const [galleryBoards, setGalleryBoards] = useAppStoreState("galleryBoards", DEFAULT_GALLERY_BOARDS);
+  const [pinnedConversationIds, setPinnedConversationIds] = useAppStoreState("pinnedConversationIds", [] as string[]);
+  const benchmarkGateLocked = !benchmarkLoaded || benchmarkWizard.status !== "complete";
+  const linkedGallerySkills = useMemo(() => galleryBoards.filter((board) => board.linkedSkill).map((board) => `Gallery: ${board.title}`), [galleryBoards]);
+  const activeStoredConversations = useMemo(() => storedConversations.filter((conversation) => !conversation.archived), [storedConversations]);
+  const archivedConversations = useMemo(
+    () =>
+      storedConversations
+        .filter((conversation) => conversation.archived)
+        .map((conversation) => ({ id: conversation.id, title: conversation.title, age: ageLabel(conversation.updatedAt) })),
+    [storedConversations]
+  );
+  const sidebarProjects = useMemo(() => conversationProjects(activeStoredConversations), [activeStoredConversations]);
+  const sidebarConversations = useMemo(() => conversationsByProject(activeStoredConversations), [activeStoredConversations]);
+  const pinnedConversations = useMemo(
+    () =>
+      pinnedConversationIds
+        .map((id) => storedConversations.find((conversation) => conversation.id === id))
+        .filter((conversation): conversation is ConversationRecord => Boolean(conversation))
+        .map((conversation) => ({ id: conversation.id, title: conversation.title })),
+    [pinnedConversationIds, storedConversations]
+  );
+  const toggleConversationPinned = useCallback(
+    (id: string) => {
+      void setPinnedConversationIds((current) => (current.includes(id) ? current.filter((item) => item !== id) : [...current, id]));
+    },
+    [setPinnedConversationIds]
+  );
+
+  function startNewSession(): void {
+    if (benchmarkGateLocked) {
+      setActiveNav("benchmark");
+      return;
+    }
+    setOpenConversation(null);
+    setSessionKey((current) => current + 1);
+    setActiveNav("session");
+  }
+
+  function selectNav(key: NavKey): void {
+    if (benchmarkGateLocked && key !== "benchmark" && key !== "settings") {
+      setActiveNav("benchmark");
+      return;
+    }
+    if (key !== "session") setOpenConversation(null);
+    setActiveNav(key);
+  }
+
+  function selectProject(project: ProjectFolder): void {
+    if (benchmarkGateLocked) {
+      setActiveNav("benchmark");
+      return;
+    }
+    setExpandedProject((current) => (current === project.name ? null : project.name));
+  }
+
+  useEffect(() => {
+    void Promise.all([
+      readAppStore("marketplaceState", DEFAULT_MARKETPLACE_STATE).then((value) => writeAppStore("marketplaceState", value)),
+      readAppStore("settings", DEFAULT_SETTINGS).then((value) => writeAppStore("settings", value))
+    ]);
+    if (window.metisConversations) {
+      void window.metisConversations.list().then(setStoredConversations);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!benchmarkLoaded) {
+      setActiveNav("benchmark");
+      return;
+    }
+
+    if (!initialNavResolved.current) {
+      initialNavResolved.current = true;
+      setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark");
+      return;
+    }
+
+    if (benchmarkWizard.status !== "complete") {
+      setActiveNav("benchmark");
+      setExpandedProject(null);
+    }
+  }, [benchmarkLoaded, benchmarkWizard.status]);
 
   return (
-    <div className="app-shell">
-      <aside className="rail">
-        <button className="rail-button active" type="button" onClick={() => setGraphOpen((value) => !value)}>
-          <GitBranch size={18} />
-          <span>{graphOpen ? "Chat" : "Graph"}</span>
-        </button>
-        <button className="rail-icon" type="button" aria-label="Chats">
-          <MessageSquareText size={18} />
-        </button>
-        <button className="rail-icon" type="button" aria-label="Provider keys">
-          <KeyRound size={18} />
-        </button>
-        <button className="rail-icon bottom" type="button" aria-label="Settings">
-          <Settings2 size={18} />
-        </button>
-      </aside>
+    <div className="app-root">
+      <Titlebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((current) => !current)} />
+      <div className={`metis-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${activeNav === "settings" ? "settings-mode" : ""}`}>
+      {activeNav !== "settings" ? (
+        <Sidebar
+          activeNav={activeNav}
+          activeProject={expandedProject}
+          archivedConversations={archivedConversations}
+          benchmarkLocked={benchmarkGateLocked}
+          busyKeys={busyKeys}
+          collapsed={sidebarCollapsed}
+          conversationsByProject={sidebarConversations}
+          onConversationArchive={archiveConversationById}
+          onConversationOpen={openConversationById}
+          onConversationDelete={deleteConversationById}
+          onConversationRename={renameConversationById}
+          onNewSession={startNewSession}
+          onNewSessionForProject={(project) => {
+            setExpandedProject(project.name);
+            startNewSession();
+          }}
+          onProjectDelete={deleteProjectByPath}
+          onProjectSelect={selectProject}
+          onSelect={selectNav}
+          onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+          onTogglePinned={toggleConversationPinned}
+          pinnedConversationIds={pinnedConversationIds}
+          pinnedConversations={pinnedConversations}
+          projects={sidebarProjects}
+        />
+      ) : null}
+      {activeNav === "session" ? (
+        <NewSessionWorkspace
+          key={sessionKey}
+          openConversation={openConversation}
+          onConversationsChanged={refreshConversations}
+          onNewSession={startNewSession}
+          storedConversations={storedConversations}
+          pendingByConversation={pendingByConversation}
+          setPendingByConversation={setPendingByConversation}
+          busyKeys={busyKeys}
+          setBusyKeys={setBusyKeys}
+          draftToRealRef={draftToRealRef}
+        />
+      ) : null}
+      {activeNav === "graph" ? (
+        <MemoryGraphWorkspace onConversationOpen={openConversationById} sidebarProjects={sidebarProjects} sidebarConversationsByProject={sidebarConversations} />
+      ) : null}
+      {activeNav === "benchmark" ? <BenchmarkWorkspace locked={benchmarkGateLocked} onComplete={() => setActiveNav("orchestration")} onWizardChange={setBenchmarkWizard} wizard={benchmarkWizard} /> : null}
+      {activeNav === "gallery" ? <GalleryWorkspace boards={galleryBoards} onBoardsChange={setGalleryBoards} /> : null}
+      {activeNav === "marketplace" ? <MarketplaceWorkspace /> : null}
+      {activeNav === "routines" ? <RoutinesWorkspace onConversationOpen={openConversationById} /> : null}
+      {activeNav === "todo" ? <TodoWorkspace /> : null}
+      {activeNav === "manager" ? <ManagerWorkspace /> : null}
+      {activeNav === "settings" ? <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} /> : null}
+      {activeNav !== "session" && activeNav !== "graph" && activeNav !== "benchmark" && activeNav !== "gallery" && activeNav !== "marketplace" && activeNav !== "routines" && activeNav !== "todo" && activeNav !== "manager" && activeNav !== "settings" ? (
+        <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} />
+      ) : null}
+      </div>
+    </div>
+  );
+}
 
-      <main className="workspace">
-        <header className="topbar">
-          <div>
-            <p className="kicker">Metis Orchestrator</p>
-            <h1>{graphOpen ? "Policy graph" : "Evidence-backed chat routing"}</h1>
+type HealthRowStatus = "ok" | "warn" | "error" | "loading" | "unavailable";
+type HealthRow = { id: string; name: string; status: HealthRowStatus; detail: string };
+
+function healthDotClass(status: HealthRowStatus): string {
+  if (status === "ok") return "ok";
+  if (status === "warn") return "warn";
+  if (status === "error") return "error";
+  return "never";
+}
+
+/** One-click health sweep (docs/FABLE_PLANS.md section 17 — repurposes the redundant titlebar
+ *  "Run test"/Orchestration icon). Populates rows async: providers, policy CLI, registry, local
+ *  models (covered by the ollama provider row). Every bridge is guarded for browser preview. */
+async function runHealthSweep(): Promise<HealthRow[]> {
+  const rows: HealthRow[] = [];
+
+  if (window.metisProviders) {
+    try {
+      const providers = await window.metisProviders.list();
+      const configured = providers.filter((p) => p.configured);
+      const checked = await Promise.all(
+        (configured.length ? configured : providers).map(async (p) => {
+          try {
+            const result = await window.metisProviders?.healthCheck(p.provider);
+            const status = result?.status ?? p.status;
+            return {
+              id: `provider-${p.provider}`,
+              name: result?.label ?? p.label,
+              status: status === "available" ? "ok" : status === "not_configured" ? "warn" : "error",
+              detail: result?.detail ?? p.detail
+            } as HealthRow;
+          } catch (error) {
+            return { id: `provider-${p.provider}`, name: p.label, status: "error", detail: error instanceof Error ? error.message : String(error) } as HealthRow;
+          }
+        })
+      );
+      rows.push(...checked);
+    } catch (error) {
+      rows.push({ id: "providers", name: "Providers", status: "error", detail: error instanceof Error ? error.message : String(error) });
+    }
+  } else {
+    rows.push({ id: "providers", name: "Providers", status: "unavailable", detail: "unavailable in preview" });
+  }
+
+  if (window.metisPolicy) {
+    try {
+      const status = await window.metisPolicy.getStatus();
+      rows.push({ id: "policy", name: "Metis Policy", status: status.available ? "ok" : "warn", detail: status.detail });
+    } catch (error) {
+      rows.push({ id: "policy", name: "Metis Policy", status: "error", detail: error instanceof Error ? error.message : String(error) });
+    }
+  } else {
+    rows.push({ id: "policy", name: "Metis Policy", status: "unavailable", detail: "unavailable in preview" });
+  }
+
+  if (window.metisRegistry) {
+    try {
+      const registry = await window.metisRegistry.list();
+      const status = registry.status === "ok" ? "ok" : registry.status === "offline" ? "warn" : registry.status === "error" ? "error" : "warn";
+      rows.push({
+        id: "registry",
+        name: "Registry",
+        status,
+        detail: registry.error ?? (registry.status === "ok" ? `${registry.packages.length} packages · ${registry.sourceUrl}` : registry.sourceUrl)
+      });
+    } catch (error) {
+      rows.push({ id: "registry", name: "Registry", status: "error", detail: error instanceof Error ? error.message : String(error) });
+    }
+  } else {
+    rows.push({ id: "registry", name: "Registry", status: "unavailable", detail: "unavailable in preview" });
+  }
+
+  return rows;
+}
+
+/** Slim popover (account-menu styling) with async health rows + a Re-run button. */
+function HealthSweepPanel({ onClose }: { onClose: () => void }): JSX.Element {
+  const [rows, setRows] = useState<HealthRow[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(() => {
+    setLoading(true);
+    void runHealthSweep()
+      .then(setRows)
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  return (
+    <div className="healthsweep-panel" role="dialog" aria-label="Check everything">
+      <header className="healthsweep-head">
+        <Stethoscope size={14} />
+        <strong>Check everything</strong>
+        <button type="button" className="healthsweep-rerun" onClick={refresh} disabled={loading}>
+          {loading ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
+          <span>Re-run</span>
+        </button>
+        <button type="button" aria-label="Close" onClick={onClose}>
+          <X size={13} />
+        </button>
+      </header>
+      <div className="healthsweep-rows">
+        {loading && rows.length === 0 ? <p className="healthsweep-empty">Checking…</p> : null}
+        {rows.map((row) => (
+          <div className="healthsweep-row" key={row.id}>
+            <span className={`healthsweep-dot ${healthDotClass(row.status)}`} aria-hidden="true" />
+            <span className="healthsweep-row-body">
+              <strong>{row.name}</strong>
+              <small>{row.detail}</small>
+            </span>
           </div>
-          <div className="topbar-actions">
-            <span className="status-pill"><ShieldCheck size={15} /> Local policy contract</span>
-            <span className="status-pill muted"><CircleGauge size={15} /> {decision ? percent(decision.confidence) : "Loading"}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Titlebar({ collapsed, onToggleCollapse }: { collapsed: boolean; onToggleCollapse: () => void }): JSX.Element {
+  const hasWindow = typeof window !== "undefined" && Boolean(window.metisWindow);
+  const [pulseOpen, setPulseOpen] = useState(false);
+  const [pulse, setPulse] = useState<PulseFeed>(FALLBACK_PULSE);
+  const [lastSeenPulse, setLastSeenPulse] = useAppStoreState<string | undefined>("lastSeenPulse", undefined);
+  const [healthOpen, setHealthOpen] = useState(false);
+
+  useEffect(() => {
+    if (!window.metisPulse) return;
+    window.metisPulse
+      .feed()
+      .then((feed) => setPulse(feed))
+      .catch(() => undefined);
+  }, []);
+
+  const hasUnseenUpdate = Boolean(pulse.updated && pulse.updated !== lastSeenPulse);
+
+  function togglePulse(): void {
+    setPulseOpen((open) => {
+      const next = !open;
+      if (next && pulse.updated) setLastSeenPulse(pulse.updated);
+      return next;
+    });
+  }
+
+  return (
+    <div className="titlebar">
+      <div className="titlebar-tools">
+        <button className="titlebar-icon" type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={onToggleCollapse}>
+          <Menu size={17} />
+        </button>
+        <button className="titlebar-icon" type="button" aria-label="Search">
+          <Search size={16} />
+        </button>
+        <div className="healthsweep-wrap">
+          <button
+            className={`titlebar-icon ${healthOpen ? "active" : ""}`}
+            type="button"
+            aria-label="Check everything"
+            aria-expanded={healthOpen}
+            onClick={() => setHealthOpen((open) => !open)}
+          >
+            <Stethoscope size={16} />
+          </button>
+          {healthOpen ? (
+            <>
+              <button className="healthsweep-backdrop" type="button" aria-label="Close check everything" onClick={() => setHealthOpen(false)} />
+              <HealthSweepPanel onClose={() => setHealthOpen(false)} />
+            </>
+          ) : null}
+        </div>
+        <div className="pulse-wrap">
+          <button className={`titlebar-icon ${pulseOpen ? "active" : ""}`} type="button" aria-label="Pulse" onClick={togglePulse}>
+            <Newspaper size={16} />
+            {hasUnseenUpdate ? <span className="pulse-dot" aria-hidden="true" /> : null}
+          </button>
+          {pulseOpen ? (
+            <>
+              <button className="pulse-backdrop" type="button" aria-label="Close Pulse" onClick={() => setPulseOpen(false)} />
+              <PulsePanel feed={pulse} />
+            </>
+          ) : null}
+        </div>
+      </div>
+      <div className="titlebar-drag" />
+      {hasWindow ? (
+        <div className="window-controls">
+          <button type="button" aria-label="Minimize" onClick={() => window.metisWindow?.minimize()}>
+            <Minus size={15} />
+          </button>
+          <button type="button" aria-label="Maximize" onClick={() => window.metisWindow?.toggleMaximize()}>
+            <Square size={12} />
+          </button>
+          <button type="button" className="window-close" aria-label="Close" onClick={() => window.metisWindow?.close()}>
+            <X size={15} />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Slim Pulse popover — Changelog / Community / News from featured.json
+ *  (docs/FABLE_PLANS.md section 8). Empty sections are hidden. */
+function PulsePanel({ feed }: { feed: PulseFeed }): JSX.Element {
+  const hasAny = feed.changelog.length > 0 || feed.community.length > 0 || feed.news.length > 0;
+  return (
+    <div className="pulse-panel" role="dialog" aria-label="Pulse">
+      <header className="pulse-panel-head">
+        <strong>Pulse</strong>
+        <small>{feed.status === "offline" ? "Showing cached feed" : "Community + news"}</small>
+      </header>
+      {!hasAny ? <p className="pulse-empty">Nothing new yet.</p> : null}
+      {feed.changelog.length ? (
+        <section className="pulse-section">
+          <h3>Changelog</h3>
+          {feed.changelog.map((entry) => (
+            <article className="pulse-entry" key={`${entry.date}-${entry.title}`}>
+              <strong>{entry.title}</strong>
+              <p>{entry.blurb}</p>
+              <small>{entry.date}</small>
+            </article>
+          ))}
+        </section>
+      ) : null}
+      {feed.community.length ? (
+        <section className="pulse-section">
+          <h3>Community</h3>
+          {feed.community.map((item) => (
+            <article className="pulse-entry" key={item.id}>
+              <strong>{item.name}</strong>
+              <p>{item.description}</p>
+              <small>{item.publisher}</small>
+            </article>
+          ))}
+        </section>
+      ) : null}
+      {feed.news.length ? (
+        <section className="pulse-section">
+          <h3>News</h3>
+          {feed.news.map((entry) => (
+            <button
+              className="pulse-entry pulse-entry-link"
+              key={entry.url}
+              type="button"
+              onClick={() => openExternal(entry.url)}
+            >
+              <strong>{entry.title}</strong>
+              {entry.blurb ? <p>{entry.blurb}</p> : null}
+            </button>
+          ))}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+type RowMenuTarget = { kind: "conversation"; id: string } | { kind: "project"; project: ProjectFolder };
+
+function Sidebar({
+  activeNav,
+  activeProject,
+  archivedConversations,
+  benchmarkLocked,
+  busyKeys,
+  collapsed,
+  conversationsByProject,
+  onConversationArchive,
+  onConversationDelete,
+  onConversationOpen,
+  onConversationRename,
+  onNewSession,
+  onNewSessionForProject,
+  onProjectDelete,
+  onProjectSelect,
+  onSelect,
+  onToggleCollapse,
+  onTogglePinned,
+  pinnedConversationIds,
+  pinnedConversations,
+  projects
+}: {
+  activeNav: NavKey;
+  activeProject: string | null;
+  archivedConversations: { id: string; title: string; age: string }[];
+  benchmarkLocked: boolean;
+  /** Parallel sessions phase A: conversation keys (real conversationId or
+   *  draft-<timestamp>) with a run currently streaming. Drives the pulsing
+   *  busy dot on sidebar rows; also lets the "New session" row show a dot
+   *  when an as-yet-unnamed draft session is mid-run. */
+  busyKeys: Set<string>;
+  collapsed: boolean;
+  conversationsByProject: Record<string, SidebarConversation[]>;
+  onConversationArchive: (id: string, archived: boolean) => void;
+  onConversationDelete: (id: string) => void;
+  onConversationOpen: (id: string) => void;
+  onConversationRename: (id: string, title: string) => void;
+  onNewSession: () => void;
+  onNewSessionForProject: (project: ProjectFolder) => void;
+  onProjectDelete: (project: ProjectFolder) => void;
+  onProjectSelect: (project: ProjectFolder) => void;
+  onSelect: (key: NavKey) => void;
+  onToggleCollapse: () => void;
+  onTogglePinned: (id: string) => void;
+  pinnedConversationIds: string[];
+  pinnedConversations: { id: string; title: string }[];
+  projects: ProjectFolder[];
+}): JSX.Element {
+  const [accountOpen, setAccountOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filterText, setFilterText] = useState("");
+  const [rowMenu, setRowMenu] = useState<RowMenuTarget | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [archivedOpen, setArchivedOpen] = useState(false);
+
+  function toggleRowMenu(target: RowMenuTarget): void {
+    setRowMenu((current) =>
+      current &&
+      current.kind === target.kind &&
+      (current.kind === "conversation" ? current.id === (target as { kind: "conversation"; id: string }).id : current.project.name === (target as { kind: "project"; project: ProjectFolder }).project.name)
+        ? null
+        : target
+    );
+  }
+
+  function beginRename(id: string, currentTitle: string): void {
+    setRenamingId(id);
+    setRenameDraft(currentTitle);
+  }
+
+  function commitRename(id: string): void {
+    const title = renameDraft.trim();
+    setRenamingId(null);
+    if (title) onConversationRename(id, title);
+  }
+
+  // Any still-streaming draft session (no conversationId yet) shows as a dot
+  // on "New session" itself, since there's no row for it yet.
+  const hasBusyDraft = useMemo(() => Array.from(busyKeys).some((key) => key.startsWith("draft-")), [busyKeys]);
+
+  const visibleProjects = useMemo(() => {
+    const query = filterText.trim().toLowerCase();
+    if (!query) return projects;
+    return projects.filter((project) => project.name.toLowerCase().includes(query) || project.latest.toLowerCase().includes(query));
+  }, [projects, filterText]);
+
+  function openSettings(): void {
+    setAccountOpen(false);
+    onSelect("settings");
+  }
+
+  return (
+    <aside className={`sidebar ${collapsed ? "collapsed" : ""}`}>
+      <button
+        className={`new-session ${activeNav === "session" ? "active" : ""}`}
+        type="button"
+        disabled={benchmarkLocked}
+        title={benchmarkLocked ? "Finish the benchmark wizard first" : undefined}
+        onClick={onNewSession}
+      >
+        <Plus size={18} />
+        <span>New session</span>
+        {hasBusyDraft ? <span className="row-busy-dot" aria-label="A new session is still running" title="A new session is still running" /> : null}
+      </button>
+
+      <div className="sidebar-scroll">
+      <nav className="sidebar-nav" aria-label="Primary">
+        <NavButton active={activeNav === "orchestration"} disabled={benchmarkLocked} icon={<GitBranch size={16} />} label="Orchestration" onClick={() => onSelect("orchestration")} />
+        <NavButton active={activeNav === "routines"} disabled={benchmarkLocked} icon={<CalendarClock size={16} />} label="Routines / schedules" onClick={() => onSelect("routines")} />
+        <NavButton active={activeNav === "todo"} disabled={benchmarkLocked} icon={<ListTodo size={16} />} label="To Do List" onClick={() => onSelect("todo")} />
+        <NavButton active={activeNav === "manager"} disabled={benchmarkLocked} icon={<Bot size={16} />} label="Manager" onClick={() => onSelect("manager")} />
+        <NavButton active={activeNav === "marketplace"} disabled={benchmarkLocked} icon={<Cable size={16} />} label="Marketplace" onClick={() => onSelect("marketplace")} />
+        {moreOpen ? (
+          <>
+            <NavButton active={activeNav === "gallery"} disabled={benchmarkLocked} icon={<GalleryHorizontalEnd size={16} />} label="Gallery" onClick={() => onSelect("gallery")} />
+            <NavButton active={activeNav === "graph"} disabled={benchmarkLocked} icon={<Network size={16} />} label="Graph View" onClick={() => onSelect("graph")} />
+            <NavButton active={activeNav === "benchmark"} icon={<Cpu size={16} />} label="Benchmark" onClick={() => onSelect("benchmark")} />
+          </>
+        ) : null}
+        <button className="nav-more" type="button" onClick={() => setMoreOpen((open) => !open)}>
+          <ChevronDown className={moreOpen ? "open" : ""} size={14} />
+          <span>{moreOpen ? "Less" : "More"}</span>
+        </button>
+      </nav>
+
+      {pinnedConversations.length ? (
+        <SidebarSection title="Pinned">
+          {pinnedConversations.map((item) => (
+            <button className="tiny-row" key={item.id} type="button" onClick={() => onConversationOpen(item.id)}>
+              <Pin size={13} />
+              <span>{item.title}</span>
+            </button>
+          ))}
+        </SidebarSection>
+      ) : null}
+
+      <SidebarSection
+        action={
+          <>
+            <button type="button" aria-label="Filter project folders" className={filterOpen ? "active" : ""} onClick={() => setFilterOpen((open) => !open)}>
+              <SlidersHorizontal size={14} />
+            </button>
+            <button type="button" aria-label="New session" onClick={onNewSession}>
+              <Plus size={15} />
+            </button>
+          </>
+        }
+        title="Project folders"
+      >
+        {filterOpen ? (
+          <div className="sidebar-filter" role="search">
+            <Search size={13} />
+            <input value={filterText} placeholder="Filter folders" onChange={(event) => setFilterText(event.target.value)} />
+            {filterText ? (
+              <button type="button" aria-label="Clear filter" onClick={() => setFilterText("")}>
+                <X size={12} />
+              </button>
+            ) : null}
           </div>
-        </header>
-
-        {graphOpen ? (
-          <PolicyGraph preset={selectedPreset.label} />
-        ) : (
-          <section className="chat-layout">
-            <div className="conversation-panel">
-              <div className="message-row user">
-                <div className="avatar">Y</div>
-                <div className="message-bubble">
-                  <span className="message-label">User prompt</span>
-                  <p>{prompt}</p>
-                </div>
-              </div>
-
-              <div className="message-row system">
-                <div className="avatar route"><Network size={17} /></div>
-                <div className="message-bubble route-card">
-                  <span className="message-label">Router decision</span>
-                  <h2>{selectedRoute ? routeLabel(selectedRoute) : "Loading policy decision"}</h2>
-                  <p>{decision?.reason ?? "Waiting for Metis Policy sample decision."}</p>
-                  <div className="decision-strip">
-                    <div>
-                      <span>Task</span>
-                      <strong>{decision?.task_type.replace("_", " ") ?? "unknown"}</strong>
-                    </div>
-                    <div>
-                      <span>Fallback</span>
-                      <strong>{fallback ? routeLabel(fallback) : "None"}</strong>
-                    </div>
-                    <div>
-                      <span>Raw prompt stored</span>
-                      <strong>{decision?.prompt_profile.raw_prompt_stored ? "Yes" : "No"}</strong>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="composer">
-                <textarea
-                  value={prompt}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  aria-label="Prompt"
-                />
-                <div className="composer-bar">
-                  <label className="select-shell">
-                    <Bot size={16} />
-                    <select value={routeChoice} onChange={(event) => setRouteChoice(event.target.value)}>
-                      {routeOptions.map((option) => (
-                        <option key={option}>{option}</option>
-                      ))}
-                    </select>
-                    <ChevronDown size={16} />
-                  </label>
-
-                  <label className="select-shell">
-                    <Sparkles size={16} />
-                    <select value={preset} onChange={(event) => setPreset(event.target.value as RouterPreset)}>
-                      {presets.map((item) => (
-                        <option key={item.id} value={item.id}>{item.label}</option>
-                      ))}
-                    </select>
-                    <ChevronDown size={16} />
-                  </label>
-
-                  <button className="send-button" type="button" aria-label="Send prompt">
-                    <Send size={18} />
+        ) : null}
+        <div className="project-list">
+          {visibleProjects.length === 0 && projects.length > 0 ? <p className="sidebar-empty">No folders match that filter.</p> : null}
+          {visibleProjects.map((project) => {
+            const expanded = activeProject === project.name;
+            const conversations = conversationsByProject[project.name] ?? [];
+            const projectMenuOpen = rowMenu?.kind === "project" && rowMenu.project.name === project.name;
+            return (
+              <div className={`project-group ${expanded ? "expanded" : ""}`} key={project.name}>
+                <div className="project-row-wrap row-menu-wrap">
+                  <button
+                    className={`project-row ${expanded ? "active" : ""}`}
+                    type="button"
+                    disabled={benchmarkLocked}
+                    title={benchmarkLocked ? "Finish the benchmark wizard first" : undefined}
+                    onClick={() => onProjectSelect(project)}
+                  >
+                    <ChevronRight className={expanded ? "open" : ""} size={14} />
+                    <Folder size={16} />
+                    <span>
+                      <strong>{project.name}</strong>
+                      <small>{project.latest}</small>
+                    </span>
                   </button>
+                  <button
+                    className={`row-menu-btn ${projectMenuOpen ? "open" : ""}`}
+                    type="button"
+                    aria-label={`More actions for ${project.name}`}
+                    disabled={benchmarkLocked}
+                    onClick={() => toggleRowMenu({ kind: "project", project })}
+                  >
+                    <MoreVertical size={14} />
+                  </button>
+                  {projectMenuOpen ? (
+                    <>
+                      <button className="router-backdrop" type="button" aria-label="Close menu" onClick={() => setRowMenu(null)} />
+                      <div className="row-menu-popover" role="menu">
+                        <button
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setRowMenu(null);
+                            onNewSessionForProject(project);
+                          }}
+                        >
+                          <Plus size={13} />
+                          <span>New session here</span>
+                        </button>
+                        <button
+                          type="button"
+                          role="menuitem"
+                          className="danger"
+                          onClick={() => {
+                            setRowMenu(null);
+                            onProjectDelete(project);
+                          }}
+                        >
+                          <Trash2 size={13} />
+                          <span>Delete chats</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : null}
                 </div>
+                {expanded ? (
+                  <div className="project-conversations">
+                    {conversations.map((conversation) => {
+                      const conversationMenuOpen = rowMenu?.kind === "conversation" && rowMenu.id === conversation.id;
+                      const isPinned = pinnedConversationIds.includes(conversation.id);
+                      const isRenaming = renamingId === conversation.id;
+                      return (
+                        <div className="project-conversation-wrap row-menu-wrap" key={conversation.id}>
+                          {isRenaming ? (
+                            <input
+                              autoFocus
+                              className="project-conversation-rename-input"
+                              value={renameDraft}
+                              onChange={(event) => setRenameDraft(event.target.value)}
+                              onBlur={() => commitRename(conversation.id)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  commitRename(conversation.id);
+                                } else if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  setRenamingId(null);
+                                }
+                              }}
+                            />
+                          ) : (
+                            <button className="project-conversation-row" type="button" onClick={() => onConversationOpen(conversation.id)}>
+                              <span>
+                                <strong>{conversation.title}</strong>
+                                <small>{conversation.summary}</small>
+                              </span>
+                            </button>
+                          )}
+                          {busyKeys.has(conversation.id) ? (
+                            <span className="row-busy-dot" aria-label="Run in progress" title="Run in progress" />
+                          ) : null}
+                          <button
+                            className={`row-menu-btn ${conversationMenuOpen ? "open" : ""}`}
+                            type="button"
+                            aria-label={`More actions for ${conversation.title}`}
+                            onClick={() => toggleRowMenu({ kind: "conversation", id: conversation.id })}
+                          >
+                            <MoreVertical size={14} />
+                          </button>
+                          {conversationMenuOpen ? (
+                            <>
+                              <button className="router-backdrop" type="button" aria-label="Close menu" onClick={() => setRowMenu(null)} />
+                              <div className="row-menu-popover" role="menu">
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setRowMenu(null);
+                                    onTogglePinned(conversation.id);
+                                  }}
+                                >
+                                  {isPinned ? <PinOff size={13} /> : <Pin size={13} />}
+                                  <span>{isPinned ? "Unpin" : "Pin"}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setRowMenu(null);
+                                    beginRename(conversation.id, conversation.title);
+                                  }}
+                                >
+                                  <Pencil size={13} />
+                                  <span>Rename</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  onClick={() => {
+                                    setRowMenu(null);
+                                    onConversationArchive(conversation.id, true);
+                                  }}
+                                >
+                                  <Archive size={13} />
+                                  <span>Archive</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  role="menuitem"
+                                  className="danger"
+                                  onClick={() => {
+                                    setRowMenu(null);
+                                    onConversationDelete(conversation.id);
+                                  }}
+                                >
+                                  <Trash2 size={13} />
+                                  <span>Delete</span>
+                                </button>
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </SidebarSection>
+
+      {archivedConversations.length > 0 ? (
+        <SidebarSection
+          action={
+            <button type="button" aria-label={archivedOpen ? "Collapse archived" : "Expand archived"} onClick={() => setArchivedOpen((open) => !open)}>
+              <ChevronDown className={archivedOpen ? "open" : ""} size={14} />
+            </button>
+          }
+          title="Archived"
+        >
+          {archivedOpen ? (
+            <div className="project-conversations">
+              {archivedConversations.map((conversation) => {
+                const conversationMenuOpen = rowMenu?.kind === "conversation" && rowMenu.id === conversation.id;
+                return (
+                  <div className="project-conversation-wrap row-menu-wrap" key={conversation.id}>
+                    <button className="project-conversation-row" type="button" onClick={() => onConversationOpen(conversation.id)}>
+                      <span>
+                        <strong>{conversation.title}</strong>
+                        <small>{conversation.age}</small>
+                      </span>
+                    </button>
+                    <button
+                      className={`row-menu-btn ${conversationMenuOpen ? "open" : ""}`}
+                      type="button"
+                      aria-label={`More actions for ${conversation.title}`}
+                      onClick={() => toggleRowMenu({ kind: "conversation", id: conversation.id })}
+                    >
+                      <MoreVertical size={14} />
+                    </button>
+                    {conversationMenuOpen ? (
+                      <>
+                        <button className="router-backdrop" type="button" aria-label="Close menu" onClick={() => setRowMenu(null)} />
+                        <div className="row-menu-popover" role="menu">
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setRowMenu(null);
+                              onConversationArchive(conversation.id, false);
+                            }}
+                          >
+                            <ArchiveRestore size={13} />
+                            <span>Unarchive</span>
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            className="danger"
+                            onClick={() => {
+                              setRowMenu(null);
+                              onConversationDelete(conversation.id);
+                            }}
+                          >
+                            <Trash2 size={13} />
+                            <span>Delete</span>
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </SidebarSection>
+      ) : null}
+      </div>
+
+      <div className="account-wrap">
+        {accountOpen ? (
+          <>
+            <button className="account-backdrop" type="button" aria-label="Close account menu" onClick={() => setAccountOpen(false)} />
+            <div className="account-menu" role="menu">
+              <div className="account-menu-head">{ACCOUNT_EMAIL}</div>
+              <div className="account-menu-group">
+                <button type="button" role="menuitem" onClick={openSettings}>
+                  <Settings size={15} />
+                  <span>Settings</span>
+                  <em>Ctrl ,</em>
+                </button>
+                <button type="button" role="menuitem">
+                  <Globe size={15} />
+                  <span>Language</span>
+                  <ChevronRight size={14} className="account-menu-caret" />
+                </button>
+                <button type="button" role="menuitem">
+                  <HelpCircle size={15} />
+                  <span>Get help</span>
+                </button>
+              </div>
+              <div className="account-menu-group">
+                <button type="button" role="menuitem" onClick={() => openExternal(METIS_REPO_URL)}>
+                  <Github size={15} />
+                  <span>GitHub repo</span>
+                </button>
+                <button type="button" role="menuitem">
+                  <ScrollText size={15} />
+                  <span>View changelog</span>
+                </button>
+              </div>
+              <div className="account-menu-group">
+                <button type="button" role="menuitem">
+                  <LogOut size={15} />
+                  <span>Log out</span>
+                </button>
               </div>
             </div>
-
-            <aside className="inspector">
-              <section className="inspector-section">
-                <div className="section-heading">
-                  <BrainCircuit size={18} />
-                  <div>
-                    <h2>Why this route?</h2>
-                    <p>{selectedPreset.detail}</p>
-                  </div>
-                </div>
-                <div className="route-hero">
-                  <span>Selected</span>
-                  <strong>{selectedRoute ? routeLabel(selectedRoute) : "Loading"}</strong>
-                  <div className="confidence-track">
-                    <span style={{ width: decision ? `${decision.confidence * 100}%` : "12%" }} />
-                  </div>
-                </div>
-              </section>
-
-              <section className="inspector-section">
-                <h3>Evidence</h3>
-                <ul className="evidence-list">
-                  {(decision?.evidence ?? []).slice(0, 5).map((item) => (
-                    <li key={item.id}>
-                      <span>{item.metric ?? item.source_type}</span>
-                      <p>{item.summary}</p>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-
-              <section className="inspector-section">
-                <h3>Route scores</h3>
-                <div className="score-list">
-                  {scoreRows.map((score) => (
-                    <div className="score-row" key={scoreLabel(score)}>
-                      <div>
-                        <strong>{routeLabel(score.route)}</strong>
-                        <span>{score.total.toFixed(3)}</span>
-                      </div>
-                      <ScoreBars score={score} />
-                    </div>
-                  ))}
-                </div>
-              </section>
-
-              <section className="inspector-section compact">
-                <h3>Next integration</h3>
-                <p>Connect this surface to `metis-policy decide`, then wire the selected route to Ollama or a configured provider.</p>
-              </section>
-            </aside>
-          </section>
-        )}
-      </main>
-    </div>
+          </>
+        ) : null}
+        <button className={`account-row ${accountOpen || activeNav === "settings" ? "active" : ""}`} type="button" onClick={() => setAccountOpen((open) => !open)}>
+          <span>bro</span>
+          <small>Pro</small>
+          <ChevronDown size={15} />
+        </button>
+      </div>
+    </aside>
   );
 }
 
-function ScoreBars({ score }: { score: RouteScore }): JSX.Element {
-  const items = [
-    ["Quality", score.components.quality],
-    ["Speed", score.components.speed],
-    ["Cost", score.components.cost],
-    ["Privacy", score.components.privacy]
-  ] as const;
+function NavButton({
+  active,
+  badge,
+  disabled = false,
+  icon,
+  label,
+  onClick
+}: {
+  active: boolean;
+  badge?: string;
+  disabled?: boolean;
+  icon: JSX.Element;
+  label: string;
+  onClick: () => void;
+}): JSX.Element {
+  return (
+    <button className={`nav-row ${active ? "active" : ""}`} type="button" disabled={disabled} title={disabled ? "Finish the benchmark wizard first" : undefined} onClick={onClick}>
+      {icon}
+      <span>{label}</span>
+      {badge ? <em>{badge}</em> : null}
+    </button>
+  );
+}
+
+function SidebarSection({ action, children, title }: { action?: JSX.Element; children: ReactNode; title: string }): JSX.Element {
+  return (
+    <section className="sidebar-section">
+      <div className="section-title">
+        <span>{title}</span>
+        {action ? <div className="section-actions">{action}</div> : null}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+type SelectOption = { value: string; label: string; hint?: string };
+
+function CustomSelect({
+  ariaLabel,
+  className,
+  onChange,
+  options,
+  placeholder,
+  value
+}: {
+  ariaLabel?: string;
+  className?: string;
+  onChange: (value: string) => void;
+  options: SelectOption[];
+  placeholder?: string;
+  value: string;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const current = options.find((option) => option.value === value);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointer(event: MouseEvent): void {
+      if (ref.current && !ref.current.contains(event.target as Node)) setOpen(false);
+    }
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
 
   return (
-    <div className="mini-bars">
-      {items.map(([label, value]) => (
-        <div className="mini-bar" key={label}>
-          <span>{label}</span>
-          <div><i style={{ width: `${value * 100}%` }} /></div>
+    <div className={`custom-select ${open ? "open" : ""} ${className ?? ""}`} ref={ref}>
+      <button type="button" className="custom-select-trigger" aria-haspopup="listbox" aria-expanded={open} aria-label={ariaLabel} onClick={() => setOpen((value) => !value)}>
+        <span>{current ? current.label : placeholder ?? "Select"}</span>
+        <ChevronDown className="custom-select-caret" size={15} />
+      </button>
+      {open ? (
+        <div className="custom-select-menu" role="listbox" aria-label={ariaLabel}>
+          {options.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              className={`custom-option ${option.value === value ? "selected" : ""}`}
+              onClick={() => {
+                onChange(option.value);
+                setOpen(false);
+              }}
+            >
+              <span className="custom-option-text">
+                <span>{option.label}</span>
+                {option.hint ? <small>{option.hint}</small> : null}
+              </span>
+              {option.value === value ? <Check size={15} /> : null}
+            </button>
+          ))}
         </div>
-      ))}
+      ) : null}
     </div>
   );
 }
 
-function PolicyGraph({ preset }: { preset: string }): JSX.Element {
-  const [selected, setSelected] = useState<TaskType>("summarisation");
-  const active = taskNodes.find((node) => node.type === selected) ?? taskNodes[0];
+const PERM_LEVELS: { key: "restricted" | "standard" | "trusted"; label: string; desc: string }[] = [
+  { key: "restricted", label: "Restricted", desc: "Read-only. No file writes or network calls." },
+  { key: "standard", label: "Standard", desc: "Read / write in the local workspace and this project." },
+  { key: "trusted", label: "Trusted", desc: "Workspace, project, graph memory, and network." }
+];
+
+const OVERVIEW_STATS = [
+  { label: "Sessions", value: "189" },
+  { label: "Messages", value: "26,665" },
+  { label: "Tokens routed", value: "34.3M" },
+  { label: "Active days", value: "21" },
+  { label: "Saved by routing", value: "41%" },
+  { label: "Top model", value: "Opus 4.8" }
+];
+
+const RANGE_DAYS: Record<"all" | "30d" | "7d", number | null> = { "7d": 7, "30d": 30, all: null };
+
+const TOKEN_REFERENCE_WORKS: { name: string; tokens: number }[] = [
+  { name: "an average novel", tokens: 120_000 },
+  { name: "The Lord of the Rings", tokens: 750_000 },
+  { name: "the Bible", tokens: 1_000_000 },
+  { name: "the Harry Potter series", tokens: 1_400_000 }
+];
+
+function estimateTokensFromText(text?: string): number {
+  return text ? Math.ceil(text.length / 4) : 0;
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 10_000 ? 0 : 1)}k`;
+  return String(Math.round(n));
+}
+
+const ONGOING_WORK_NOUNS = ["migration", "refactor", "rewrite", "cleanup", "clean-up", "integration", "deployment"];
+
+/** Derives one short, imperative "what's next" suggestion from the last
+ *  completed run and the last user message in an open conversation. Pure
+ *  heuristic (v1, no model calls) — see docs/FABLE_PLANS.md section 15.
+ *  Returns null far more often than not; silence beats a wrong guess. */
+function suggestNextStep(lastRun: SessionRun | undefined, lastUserMessage: string | undefined): string | null {
+  if (lastRun) {
+    const project = lastRun.projectResult;
+    if (project && project.verified === false) return "Fix the remaining verification errors";
+
+    const repairFailed =
+      /repair/i.test(lastRun.assistantText ?? "") &&
+      /(gave up|still fail|could not|failed)/i.test(lastRun.assistantText ?? "") ||
+      lastRun.steps?.some((step) => /repair/i.test(step.label) && step.status === "error");
+    if (repairFailed) return "Retry the build with a different model";
+
+    if (project && project.verified === true) {
+      const isBuildPipeline = /orchestration pipeline/i.test(lastRun.pipelineName ?? "");
+      if (isBuildPipeline) return "Add a second page";
+      return "Open the preview and refine the design";
+    }
+  }
+
+  if (lastUserMessage) {
+    const noun = ONGOING_WORK_NOUNS.find((word) => new RegExp(`\\b${word}\\b`, "i").test(lastUserMessage));
+    if (noun) return `Continue the ${noun}`;
+  }
+
+  return null;
+}
+
+function NewSessionWorkspace({
+  onConversationsChanged,
+  onNewSession,
+  openConversation,
+  storedConversations = [],
+  pendingByConversation,
+  setPendingByConversation,
+  busyKeys,
+  setBusyKeys,
+  draftToRealRef
+}: {
+  onConversationsChanged?: () => void;
+  onNewSession?: () => void;
+  openConversation?: ConversationRecord | null;
+  storedConversations?: ConversationRecord[];
+  /** Parallel sessions phase A — lifted to App() (see comment there) so runs
+   *  survive this component remounting on session switch. Keyed by
+   *  conversation key: real conversationId once known, else draft-<ts>. */
+  pendingByConversation: Record<string, ConversationTurn[]>;
+  setPendingByConversation: Dispatch<SetStateAction<Record<string, ConversationTurn[]>>>;
+  busyKeys: Set<string>;
+  setBusyKeys: Dispatch<SetStateAction<Set<string>>>;
+  draftToRealRef: MutableRefObject<Map<string, string>>;
+}): JSX.Element {
+  // Runs not tied to any stored conversation (rare, but the session bridge is
+  // the source of truth) are pulled in lazily so token telemetry stays accurate
+  // even before a conversation record exists. Absent in the browser preview.
+  const [runtimeTelemetryRuns, setRuntimeTelemetryRuns] = useState<SessionRun[]>([]);
+  useEffect(() => {
+    if (!window.metisSession) return;
+    let alive = true;
+    void window.metisSession.list().then((runs) => {
+      if (alive) setRuntimeTelemetryRuns(runs);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const [overviewTab, setOverviewTab] = useState<"overview" | "models">("overview");
+  const [range, setRange] = useState<"all" | "30d" | "7d">("all");
+
+  // One flattened pass over conversations + runtime runs into per-message and
+  // per-model-usage events, each carrying a timestamp so every stat below can
+  // simply filter by the selected range instead of re-walking the data.
+  type UsageEvent = { provider: string; model: string; tokens: number; at: number };
+  type MessageEvent = { conversationId: string; at: number; hour: number; dateKey: string };
+  const telemetryData = useMemo(() => {
+    const usageEvents: UsageEvent[] = [];
+    const userMessages: MessageEvent[] = [];
+    let messageCount = 0;
+
+    const addUsage = (provider: string | undefined, model: string | undefined, tokens: number, at: number): void => {
+      if (tokens <= 0 || !provider) return;
+      usageEvents.push({ provider, model: model ?? "", tokens, at });
+    };
+
+    const seenRunIds = new Set<string>();
+    const consumeRun = (run: SessionRun | undefined, at: number): void => {
+      if (!run || seenRunIds.has(run.id)) return;
+      seenRunIds.add(run.id);
+      const ts = Number.isNaN(new Date(run.createdAt).getTime()) ? at : new Date(run.createdAt).getTime();
+      addUsage(run.providerResult?.provider, run.providerResult?.model, estimateTokensFromText(run.providerResult?.output), ts);
+      run.stages?.forEach((stage) => addUsage(stage.provider, stage.model, estimateTokensFromText(stage.output), ts));
+      // Fall back to assistantText when there's no providerResult/stage breakdown
+      // (e.g. placeholder/local-only responses) so totals aren't undercounted.
+      if (!run.providerResult && !run.stages?.length) {
+        usageEvents.push({ provider: "", model: "", tokens: estimateTokensFromText(run.assistantText), at: ts });
+      }
+    };
+
+    storedConversations.forEach((conversation) => {
+      conversation.turns.forEach((turn) => {
+        const created = new Date(turn.createdAt);
+        const at = Number.isNaN(created.getTime()) ? Date.now() : created.getTime();
+        if (turn.role === "user") {
+          messageCount += 1;
+          usageEvents.push({ provider: "", model: "", tokens: estimateTokensFromText(turn.content), at });
+          userMessages.push({ conversationId: conversation.id, at, hour: created.getHours(), dateKey: created.toDateString() });
+        } else {
+          messageCount += 1;
+          consumeRun(turn.run, at);
+        }
+      });
+    });
+    runtimeTelemetryRuns.forEach((run) => consumeRun(run, new Date(run.createdAt).getTime()));
+
+    return { usageEvents, userMessages, messageCount };
+  }, [storedConversations, runtimeTelemetryRuns]);
+
+  const rangeCutoff = useMemo(() => {
+    const days = RANGE_DAYS[range];
+    if (days === null) return 0;
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    today.setDate(today.getDate() - (days - 1));
+    return today.getTime();
+  }, [range]);
+
+  const overviewStats = useMemo(() => {
+    const conversationsInRange = storedConversations.filter((conversation) => new Date(conversation.updatedAt).getTime() >= rangeCutoff);
+    const conversationIdsInRange = new Set(conversationsInRange.map((c) => c.id));
+    const userMessagesInRange = telemetryData.userMessages.filter((m) => m.at >= rangeCutoff);
+    const messagesInRange = conversationsInRange.reduce((total, c) => total + c.turns.length, 0);
+    const usageInRange = telemetryData.usageEvents.filter((e) => e.at >= rangeCutoff);
+    const totalTokens = usageInRange.reduce((sum, e) => sum + e.tokens, 0);
+
+    const activeDayKeys = new Set(userMessagesInRange.map((m) => m.dateKey));
+    const activeDays = activeDayKeys.size;
+
+    // Streaks over the full user-message history (streak math should not be
+    // truncated by the range window), expressed in days ending today.
+    const allDayKeys = new Set(telemetryData.userMessages.map((m) => m.dateKey));
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    let currentStreak = 0;
+    for (let i = 0; ; i++) {
+      const day = new Date(today);
+      day.setDate(day.getDate() - i);
+      if (allDayKeys.has(day.toDateString())) currentStreak += 1;
+      else break;
+    }
+    let longestStreak = 0;
+    let running = 0;
+    const sortedDayKeys = Array.from(allDayKeys)
+      .map((key) => new Date(key).getTime())
+      .sort((a, b) => a - b);
+    for (let i = 0; i < sortedDayKeys.length; i++) {
+      if (i === 0 || sortedDayKeys[i] - sortedDayKeys[i - 1] === 86_400_000) running += 1;
+      else running = 1;
+      longestStreak = Math.max(longestStreak, running);
+    }
+
+    // Peak hour = mode of local hour-of-day across in-range user messages.
+    const hourCounts = new Map<number, number>();
+    userMessagesInRange.forEach((m) => hourCounts.set(m.hour, (hourCounts.get(m.hour) ?? 0) + 1));
+    let peakHour: number | null = null;
+    let peakHourCount = 0;
+    hourCounts.forEach((count, hour) => {
+      if (count > peakHourCount) {
+        peakHourCount = count;
+        peakHour = hour;
+      }
+    });
+    const peakHourLabel = peakHour === null ? "—" : new Date(2000, 0, 1, peakHour).toLocaleTimeString(undefined, { hour: "numeric" }).replace(":00", "");
+
+    const modelTotals = new Map<string, { provider: ProviderKey; model: string; tokens: number }>();
+    usageInRange.forEach((e) => {
+      if (!e.provider || !e.model) return;
+      const key = `${e.provider}::${e.model}`;
+      const entry = modelTotals.get(key) ?? { provider: e.provider as ProviderKey, model: e.model, tokens: 0 };
+      entry.tokens += e.tokens;
+      modelTotals.set(key, entry);
+    });
+    let favoriteModel: { provider: ProviderKey; model: string; tokens: number } | null = null;
+    modelTotals.forEach((entry) => {
+      if (!favoriteModel || entry.tokens > favoriteModel.tokens) favoriteModel = entry;
+    });
+    const favoriteModelLabel = favoriteModel ? prettyModelName((favoriteModel as { provider: ProviderKey; model: string; tokens: number }).provider, (favoriteModel as { provider: ProviderKey; model: string; tokens: number }).model) : "—";
+
+    const localTokens = usageInRange.filter((e) => e.provider === "ollama").reduce((sum, e) => sum + e.tokens, 0);
+    const localSavedUsd = (localTokens / 1_000_000) * 3.0;
+    const localSavedLabel = localSavedUsd <= 0 ? "$0.00" : localSavedUsd < 0.1 ? "<$0.10" : `$${localSavedUsd.toFixed(1)}`;
+
+    const cells: { label: string; value: string; title?: string }[] = [
+      { label: "Sessions", value: String(conversationsInRange.length) },
+      { label: "Messages", value: String(messagesInRange) },
+      { label: "Total tokens", value: formatTokenCount(totalTokens) },
+      { label: "Active days", value: String(activeDays) },
+      { label: "Current streak", value: currentStreak > 0 ? `${currentStreak}d` : "0d" },
+      { label: "Longest streak", value: longestStreak > 0 ? `${longestStreak}d` : "0d" },
+      { label: "Peak hour", value: peakHourLabel },
+      { label: "Favorite model", value: favoriteModelLabel }
+    ];
+
+    return { cells, totalTokens, localTokens, localSavedLabel, conversationIdsInRange, modelTotals };
+  }, [storedConversations, telemetryData, rangeCutoff]);
+
+  const modelBreakdown = useMemo(() => {
+    let sum = 0;
+    overviewStats.modelTotals.forEach((entry) => (sum += entry.tokens));
+    return Array.from(overviewStats.modelTotals.values())
+      .sort((a, b) => b.tokens - a.tokens)
+      .map((entry) => ({
+        key: `${entry.provider}::${entry.model}`,
+        label: prettyModelName(entry.provider, entry.model),
+        tokens: entry.tokens,
+        pct: sum > 0 ? Math.round((entry.tokens / sum) * 100) : 0
+      }));
+  }, [overviewStats.modelTotals]);
+
+  const footerLine = useMemo(() => {
+    const total = overviewStats.totalTokens;
+    if (total < 100_000) {
+      const novel = TOKEN_REFERENCE_WORKS[0];
+      const ratio = total / novel.tokens;
+      return `~${ratio < 0.1 ? ratio.toFixed(2) : ratio.toFixed(1)}× of an average novel.`;
+    }
+    // Prefer whichever reference work lands the multiplier closest to (but
+    // within) a readable 1.5x-99x band; fall back to the closest option.
+    let best: { name: string; multiplier: number } | null = null;
+    for (const work of TOKEN_REFERENCE_WORKS) {
+      const multiplier = total / work.tokens;
+      if (multiplier >= 1.5 && multiplier <= 99) {
+        if (!best || Math.abs(multiplier - 10) < Math.abs(best.multiplier - 10)) best = { name: work.name, multiplier };
+      }
+    }
+    if (!best) {
+      const closest = TOKEN_REFERENCE_WORKS.reduce((acc, work) => {
+        const multiplier = total / work.tokens;
+        return Math.abs(multiplier - 1) < Math.abs(acc.multiplier - 1) ? { name: work.name, multiplier } : acc;
+      }, { name: TOKEN_REFERENCE_WORKS[0].name, multiplier: total / TOKEN_REFERENCE_WORKS[0].tokens });
+      best = closest;
+    }
+    const roundedMultiplier = best.multiplier >= 10 ? Math.round(best.multiplier) : Math.round(best.multiplier * 10) / 10;
+    return `You've used ~${roundedMultiplier}× more tokens than ${best.name}.`;
+  }, [overviewStats.totalTokens]);
+
+  // UPRIGHT github-style grid: 7 day-rows (Mon top) x N week-columns, most
+  // recent week rightmost. Column count adapts to range; "all" is capped so
+  // the card never needs horizontal scroll.
+  const heatmap = useMemo(() => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayDow = (today.getDay() + 6) % 7; // Monday = 0
+
+    const weeks = range === "7d" ? 1 : range === "30d" ? 5 : 26;
+    const totalDays = weeks * 7;
+    const gridStart = new Date(today);
+    gridStart.setDate(gridStart.getDate() - todayDow - (weeks - 1) * 7);
+
+    const counts = new Map<string, number>();
+    telemetryData.userMessages.forEach((m) => {
+      const d = new Date(m.at);
+      const key = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toDateString();
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    });
+
+    let max = 0;
+    const dayCells: { date: Date; count: number; future: boolean }[] = [];
+    for (let i = 0; i < totalDays; i++) {
+      const day = new Date(gridStart);
+      day.setDate(day.getDate() + i);
+      const future = day.getTime() > today.getTime();
+      const count = future ? 0 : counts.get(day.toDateString()) ?? 0;
+      if (!future) max = Math.max(max, count);
+      dayCells.push({ date: day, count, future });
+    }
+
+    const bucketFor = (count: number): number => {
+      if (count <= 0) return 0;
+      if (max <= 1) return 4;
+      const ratioVal = count / max;
+      return ratioVal > 0.75 ? 4 : ratioVal > 0.5 ? 3 : ratioVal > 0.25 ? 2 : 1;
+    };
+
+    // Columns first (weeks), each holding 7 day-rows (Mon..Sun) for CSS grid-auto-flow: column.
+    const columns: { date: Date; count: number; bucket: number; future: boolean; label: string }[][] = [];
+    for (let w = 0; w < weeks; w++) {
+      const col: (typeof columns)[number] = [];
+      for (let d = 0; d < 7; d++) {
+        const cell = dayCells[w * 7 + d];
+        col.push({
+          date: cell.date,
+          count: cell.count,
+          bucket: bucketFor(cell.count),
+          future: cell.future,
+          label: cell.future ? "" : `${cell.date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} — ${cell.count} message${cell.count === 1 ? "" : "s"}`
+        });
+      }
+      columns.push(col);
+    }
+
+    const totalMessages = dayCells.reduce((sum, c) => sum + c.count, 0);
+    const activeDays = dayCells.filter((c) => c.count > 0).length;
+    return { columns, totalMessages, activeDays };
+  }, [telemetryData.userMessages, range]);
+
+  const [level, setLevel] = useState<(typeof PERM_LEVELS)[number]["key"]>("standard");
+  const [projectPickerBusy, setProjectPickerBusy] = useState(false);
+  const [projectWorkspace, setProjectWorkspace] = useState<ProjectWorkspace | null>(null);
+  const [workspaceResources, setWorkspaceResources] = useState<ProjectWorkspaceResource[]>([]);
+  const [resourceMenuOpen, setResourceMenuOpen] = useState(false);
+  const [routerOpen, setRouterOpen] = useState(false);
+  const [selectedModel, setSelectedModel] = useState<ModelRef | null>(null);
+  const [routerFilter, setRouterFilter] = useState("");
+  const [addModelOpen, setAddModelOpen] = useState(false);
+  const [draftModelName, setDraftModelName] = useState("");
+  const [draftModelProvider, setDraftModelProvider] = useState<ProviderId>("claude");
+  const [customModels, setCustomModels] = useAppStoreState("customModels", [] as ModelRef[]);
+  const [remoteModelCatalog, setRemoteModelCatalog] = useState<CatalogModel[]>([]);
+
+  // Live model catalog (docs/FABLE_PLANS.md section 14) — fetched on mount from
+  // the registry's catalog/models.json (cached by main process for offline use).
+  // Guarded for browser preview where window.metisCatalog doesn't exist.
+  useEffect(() => {
+    if (!window.metisCatalog) return;
+    window.metisCatalog
+      .models()
+      .then((state) => setRemoteModelCatalog(state.models))
+      .catch(() => undefined);
+  }, []);
+
+  // Remote catalog entries mapped onto the picker's ModelRef shape and brand ids.
+  const remoteModelRefs = useMemo(
+    () => remoteModelCatalog.map((entry): ModelRef => ({ provider: CATALOG_PROVIDER_TO_BRAND[entry.provider], model: entry.name })),
+    [remoteModelCatalog]
+  );
+
+  // Cloud/Local -> brand -> models, filtered. Remote catalog models extend
+  // MODEL_LIBRARY (deduped by provider+display name); custom user models are
+  // an overlay on top of that.
+  const modelGroups = useMemo(() => {
+    const query = routerFilter.trim().toLowerCase();
+    const merged = [...MODEL_LIBRARY];
+    remoteModelRefs.forEach((ref) => {
+      if (!merged.some((existing) => existing.provider === ref.provider && existing.model === ref.model)) merged.push(ref);
+    });
+    const all = [...merged, ...customModels];
+    const tiers: { tier: "cloud" | "local"; label: string; brands: { provider: ProviderId; models: ModelRef[] }[] }[] = [
+      { tier: "cloud", label: "Cloud", brands: [] },
+      { tier: "local", label: "Local", brands: [] }
+    ];
+    (Object.keys(PROVIDERS) as ProviderId[]).forEach((provider) => {
+      const models = all.filter(
+        (ref) => ref.provider === provider && (!query || ref.model.toLowerCase().includes(query) || PROVIDERS[provider].label.toLowerCase().includes(query))
+      );
+      if (!models.length) return;
+      const tier = tiers.find((entry) => entry.tier === PROVIDERS[provider].tier);
+      tier?.brands.push({ provider, models });
+    });
+    return tiers.filter((entry) => entry.brands.length);
+  }, [routerFilter, customModels, remoteModelRefs]);
+
+  function addCustomModel(): void {
+    const name = draftModelName.trim();
+    if (!name) return;
+    void setCustomModels((current) => (current.some((ref) => ref.provider === draftModelProvider && ref.model === name) ? current : [...current, { provider: draftModelProvider, model: name }]));
+    setSelectedModel({ provider: draftModelProvider, model: name });
+    setDraftModelName("");
+    setAddModelOpen(false);
+    setRouterOpen(false);
+  }
+  const [activeConversationId, setActiveConversationId] = useState<string | undefined>();
+  // This workspace instance's own draft key, minted once per mount. Every
+  // "New session" click remounts NewSessionWorkspace (key={sessionKey} in
+  // App()), so a fresh draft key here is exactly "a new, distinct draft
+  // session" — while pendingByConversation/busyKeys live above the remount
+  // boundary, any run already in flight under a PREVIOUS draft key keeps
+  // streaming into its own bucket untouched.
+  const draftKeyRef = useRef(`draft-${Date.now()}`);
+  // The key this open view reads/writes pending turns under: the real
+  // conversationId once the first run has returned one, else our draft key.
+  const activeKey = activeConversationId ?? draftKeyRef.current;
+  const conversation = pendingByConversation[activeKey] ?? [];
+  const sessionBusy = busyKeys.has(activeKey);
+  // A live-readable mirror of activeKey for long-lived closures (the
+  // runStream event callback below persists for a run's whole lifetime, so it
+  // can't rely on the `activeKey` const captured at submit time to know
+  // whether the user is STILL looking at this conversation later on).
+  const activeKeyRef = useRef(activeKey);
+  activeKeyRef.current = activeKey;
+  const [history, setHistory] = useState<ConversationTurnRecord[]>([]);
+  const hasConversation = conversation.length > 0 || history.length > 0;
+  const homeScrollRef = useRef<HTMLDivElement>(null);
+  const [activeSection, setActiveSection] = useState(0);
+  const [workspaceContextOpen, setWorkspaceContextOpen] = useState(false);
+  const [previewRail, setPreviewRail] = useState<{ url: string; title: string } | null>(null);
+  const [previewRefreshTick, setPreviewRefreshTick] = useState(0);
+  const [contextRenaming, setContextRenaming] = useState(false);
+  const [contextRenameDraft, setContextRenameDraft] = useState("");
+  const [contextDeleteArmed, setContextDeleteArmed] = useState(false);
+
+  const openStoredConversation = useMemo(
+    () => storedConversations.find((item) => item.id === activeConversationId) ?? null,
+    [storedConversations, activeConversationId]
+  );
+
+  useEffect(() => {
+    setContextDeleteArmed(false);
+  }, [activeConversationId]);
+
+  function beginContextRename(): void {
+    if (!openStoredConversation) return;
+    setContextRenameDraft(openStoredConversation.title);
+    setContextRenaming(true);
+  }
+
+  async function commitContextRename(): Promise<void> {
+    setContextRenaming(false);
+    const title = contextRenameDraft.trim();
+    if (!title || !openStoredConversation || !window.metisConversations) return;
+    await window.metisConversations.rename(openStoredConversation.id, title);
+    onConversationsChanged?.();
+  }
+
+  async function archiveOpenConversation(): Promise<void> {
+    if (!openStoredConversation || !window.metisConversations) return;
+    await window.metisConversations.archive(openStoredConversation.id, true);
+    onConversationsChanged?.();
+    setWorkspaceContextOpen(false);
+    onNewSession?.();
+  }
+
+  async function deleteOpenConversation(): Promise<void> {
+    if (!openStoredConversation || !window.metisConversations) return;
+    if (!contextDeleteArmed) {
+      setContextDeleteArmed(true);
+      window.setTimeout(() => setContextDeleteArmed(false), 3000);
+      return;
+    }
+    await window.metisConversations.delete(openStoredConversation.id);
+    onConversationsChanged?.();
+    setWorkspaceContextOpen(false);
+    setContextDeleteArmed(false);
+    onNewSession?.();
+  }
+
+  const openPreviewRail = useCallback((url: string, title: string) => {
+    setPreviewRail((current) => (current ? { ...current, url, title } : { url, title }));
+  }, []);
+  const previewControl = useMemo(() => ({ open: openPreviewRail }), [openPreviewRail]);
+
+  // Minimap sections — one entry per user message ("part" of the conversation).
+  const sections = useMemo(() => {
+    const items: { id: string; label: string }[] = [];
+    history.forEach((turn, index) => {
+      if (turn.role === "user") items.push({ id: `sec-h-${index}`, label: turn.content });
+    });
+    conversation.forEach((turn) => items.push({ id: `sec-c-${turn.id}`, label: turn.prompt }));
+    return items;
+  }, [history, conversation]);
+
+  // Cap the minimap at 10 bars. Few messages -> one bar each; many -> bucket
+  // into 10 (~10% chunks), each bar jumping to the first message in its chunk.
+  const minimapBars = useMemo(() => {
+    const total = sections.length;
+    const count = Math.min(total, 10);
+    return Array.from({ length: count }, (_, index) => {
+      const sectionIndex = Math.floor((index * total) / count);
+      return { sectionIndex, section: sections[sectionIndex] };
+    });
+  }, [sections]);
+  const activeBar = sections.length === 0 ? 0 : Math.min(minimapBars.length - 1, Math.floor((activeSection * minimapBars.length) / sections.length));
+
+  // Smart composer suggestion (docs/FABLE_PLANS.md section 15) — derived from
+  // the last completed run and last user message in this open conversation.
+  // Dismissed (typing/Escape) until the next run completes or the
+  // conversation switches.
+  const lastRun = useMemo(() => {
+    const completedInSession = [...conversation].reverse().find((turn) => turn.status === "complete" && turn.run)?.run;
+    if (completedInSession) return completedInSession;
+    const lastHistoryRun = [...history].reverse().find((turn) => turn.role === "assistant" && turn.run)?.run;
+    return lastHistoryRun;
+  }, [conversation, history]);
+  const lastUserMessage = useMemo(() => {
+    const lastConversationPrompt = [...conversation].reverse().find((turn) => !turn.directive)?.prompt;
+    if (lastConversationPrompt) return lastConversationPrompt;
+    return [...history].reverse().find((turn) => turn.role === "user")?.content;
+  }, [conversation, history]);
+  const composerSuggestion = useMemo(() => suggestNextStep(lastRun, lastUserMessage), [lastRun, lastUserMessage]);
+
+  useEffect(() => {
+    const el = homeScrollRef.current;
+    if (!el || sections.length === 0) return;
+    function onScroll(): void {
+      if (!el) return;
+      // At (near) the bottom, the last message is the current one.
+      if (el.scrollTop + el.clientHeight >= el.scrollHeight - 6) {
+        setActiveSection(sections.length - 1);
+        return;
+      }
+      const threshold = el.getBoundingClientRect().top + 90;
+      let index = 0;
+      sections.forEach((section, i) => {
+        const anchor = document.getElementById(section.id);
+        if (anchor && anchor.getBoundingClientRect().top <= threshold) index = i;
+      });
+      setActiveSection(index);
+    }
+    el.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [sections]);
+
+  // Opening a stored conversation from the sidebar loads its turns as read-only
+  // history; new sends continue the same conversation below.
+  const openConversationId = openConversation?.id;
+  useEffect(() => {
+    if (!openConversation) return;
+    setHistory(openConversation.turns);
+    setActiveConversationId(openConversation.id);
+    // No need to clear pending turns here: `conversation` is now derived from
+    // pendingByConversation[activeKey] (parallel sessions phase A), so simply
+    // switching activeConversationId re-derives the feed from this
+    // conversation's own bucket — including a still-streaming turn if this
+    // conversation has a run in flight in the background.
+    setPreviewRail(null);
+    // Land at the top of the conversation, not the bottom.
+    requestAnimationFrame(() => homeScrollRef.current?.scrollTo({ top: 0 }));
+
+    // If the last run in this stored conversation has a preview/output URL,
+    // probe it — its per-run preview server may or may not still be alive.
+    // Reopen the rail only if it responds; stay silent otherwise.
+    const lastTurnRun = [...openConversation.turns].reverse().find((turn) => turn.run)?.run;
+    const candidateUrl = lastTurnRun?.projectResult?.previewUrl ?? lastTurnRun?.outputUrl;
+    if (!candidateUrl) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 1500);
+    void fetch(candidateUrl, { method: "HEAD", signal: controller.signal })
+      .then(() => {
+        if (cancelled) return;
+        const title = lastTurnRun?.projectResult ? projectNameFromPath(lastTurnRun.projectResult.projectRoot) : "Preview";
+        setPreviewRail({ url: candidateUrl, title });
+      })
+      .catch(() => {
+        // Dead port / no server — no error UI, just leave the rail closed.
+      })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [openConversationId]);
+
+  useEffect(() => {
+    if (!window.metisProject) return;
+    let alive = true;
+    void Promise.all([window.metisProject.getWorkspace(), window.metisProject.listResources()]).then(([workspace, resources]) => {
+      if (!alive) return;
+      setProjectWorkspace(workspace);
+      setWorkspaceResources(resources);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function chooseProjectFolder(): Promise<void> {
+    if (!window.metisProject || projectPickerBusy) return;
+    setProjectPickerBusy(true);
+    try {
+      const result = await window.metisProject.selectFolder();
+      if (!result.canceled && result.workspace) {
+        setProjectWorkspace(result.workspace);
+      }
+    } finally {
+      setProjectPickerBusy(false);
+    }
+  }
+
+  async function addWorkspaceResource(kind: "file" | "folder"): Promise<void> {
+    if (!window.metisProject || projectPickerBusy) return;
+    setResourceMenuOpen(false);
+    setProjectPickerBusy(true);
+    try {
+      const next = kind === "file" ? await window.metisProject.addFiles() : await window.metisProject.addFolder();
+      setWorkspaceResources(next);
+    } finally {
+      setProjectPickerBusy(false);
+    }
+  }
+
+  async function removeWorkspaceResource(id: string): Promise<void> {
+    if (!window.metisProject) return;
+    const next = await window.metisProject.removeResource(id);
+    setWorkspaceResources(next);
+  }
+
+  // Applies an update to one conversation key's pending-turn bucket, resolving
+  // through draftToRealRef first: if this key was a draft that has since
+  // migrated to a real conversationId (see the `complete` handling below),
+  // writes land in the migrated bucket instead of recreating the stale one.
+  function updatePendingTurns(key: string, updater: (current: ConversationTurn[]) => ConversationTurn[]): void {
+    setPendingByConversation((current) => {
+      const resolvedKey = draftToRealRef.current.get(key) ?? key;
+      const bucket = current[resolvedKey] ?? [];
+      return { ...current, [resolvedKey]: updater(bucket) };
+    });
+  }
+
+  async function submitPrompt(text: string): Promise<void> {
+    if (!text) return;
+    // Steering directives are per-active-conversation: this posts against the
+    // conversation currently open in this view, regardless of what else may
+    // be streaming elsewhere. Empty-prompt "stop" is handled by the composer's
+    // stop button, not here.
+    if (sessionBusy) {
+      if (!window.metisBus) return;
+      updatePendingTurns(activeKey, (current) => [
+        ...current,
+        { id: `directive-${Date.now()}`, prompt: text, status: "complete", directive: true }
+      ]);
+      void window.metisBus.post({ projectPath: projectWorkspace?.path, conversationId: activeConversationId, text });
+      return;
+    }
+    // Capture the key THIS run submits under. If this is a brand-new session
+    // it's the draft key; every event callback below closes over `runKey`
+    // (not `activeKey`, which can change if the user navigates elsewhere
+    // while this run streams) so writes always land in the right bucket.
+    const runKey = activeKey;
+    const turnId = `turn-${Date.now()}`;
+    const pending = makePendingTurn(turnId, text);
+    updatePendingTurns(runKey, (current) => [...current, pending]);
+    setBusyKeys((current) => new Set(current).add(runKey));
+    try {
+      if (!window.metisSession) {
+        const previewRun = makePreviewRun(text);
+        updatePendingTurns(runKey, (current) =>
+          current.map((turn) => (turn.id === turnId ? { ...turn, status: "complete", run: previewRun } : turn))
+        );
+        return;
+      }
+      const sessionInput: SessionRunInput = {
+        prompt: text,
+        conversationId: activeConversationId,
+        projectPath: projectWorkspace?.path,
+        permissionLevel: level,
+        rawPromptStorage: "local-only",
+        modelOverride: selectedModel
+          ? {
+              provider: PROVIDER_CONNECTIONS[selectedModel.provider],
+              model: selectedModel.model,
+              label: `${PROVIDERS[selectedModel.provider].label} ${selectedModel.model}`
+            }
+          : undefined
+      };
+      const run = window.metisSession.runStream
+        ? await window.metisSession.runStream(sessionInput, (streamEvent) => {
+            updatePendingTurns(runKey, (current) =>
+              current.map((turn) => (turn.id === turnId ? applyStreamEventToTurn(turn, streamEvent) : turn))
+            );
+            // A "project" event carries the latest written project (including
+            // repair-pass rewrites) — auto-open/refresh the rail only while
+            // this run's conversation is the one actually open right now, so
+            // a background run never hijacks the visible preview.
+            if (streamEvent.kind === "project" && streamEvent.project.previewUrl && activeKeyRef.current === runKey) {
+              const url = streamEvent.project.previewUrl;
+              const title = projectNameFromPath(streamEvent.project.projectRoot);
+              setPreviewRail((current) => (current ? { ...current, url, title } : { url, title }));
+              setPreviewRefreshTick((tick) => tick + 1);
+            }
+          })
+        : await window.metisSession.run(sessionInput);
+      // The backend creates the conversationId on the FIRST run of a brand-new
+      // session. Migrate this draft key's bucket to the real id so the open
+      // view (if still on this draft) follows seamlessly, and record the
+      // mapping so any writes still in flight under `runKey` (there shouldn't
+      // be more after this point, but future events from this same
+      // runStream call are also written via updatePendingTurns, which
+      // consults this map) land in the migrated bucket too.
+      const realConversationId = run.conversationId;
+      if (realConversationId && realConversationId !== runKey) {
+        draftToRealRef.current.set(runKey, realConversationId);
+        setPendingByConversation((current) => {
+          if (!(runKey in current)) return current;
+          const { [runKey]: migratedTurns, ...rest } = current;
+          return { ...rest, [realConversationId]: [...(current[realConversationId] ?? []), ...migratedTurns] };
+        });
+        setBusyKeys((current) => {
+          if (!current.has(runKey)) return current;
+          const next = new Set(current);
+          next.delete(runKey);
+          next.add(realConversationId);
+          return next;
+        });
+        // Only follow the view if the user is still looking at this draft
+        // (they may have switched to another conversation while this ran).
+        if (activeKeyRef.current === runKey) {
+          setActiveConversationId(realConversationId);
+        }
+      }
+      updatePendingTurns(runKey, (current) =>
+        current.map((turn) => (turn.id === turnId ? { ...turn, id: run.id, status: "complete", run } : turn))
+      );
+      const finalPreviewUrl = run.projectResult?.previewUrl ?? run.outputUrl;
+      if (finalPreviewUrl && activeKeyRef.current === runKey) {
+        const title = run.projectResult ? projectNameFromPath(run.projectResult.projectRoot) : "Preview";
+        setPreviewRail({ url: finalPreviewUrl, title });
+      }
+      onConversationsChanged?.();
+    } catch (error) {
+      updatePendingTurns(runKey, (current) =>
+        current.map((turn) =>
+          turn.id === turnId
+            ? {
+                ...turn,
+                status: "error",
+                error: error instanceof Error ? error.message : String(error)
+              }
+            : turn
+        )
+      );
+    } finally {
+      const settledKey = draftToRealRef.current.get(runKey) ?? runKey;
+      setBusyKeys((current) => {
+        if (!current.has(settledKey)) return current;
+        const next = new Set(current);
+        next.delete(settledKey);
+        return next;
+      });
+    }
+  }
 
   return (
-    <section className="graph-layout">
-      <div className="graph-canvas">
-        <div className="graph-root">
-          <Network size={24} />
-          <div>
-            <strong>Router: {preset}</strong>
-            <span>Default policy for this hardware</span>
+    <PreviewRailContext.Provider value={previewControl}>
+    <main className={`product-workspace session-home ${hasConversation ? "has-result" : ""}`} aria-label="New session">
+    <div className="session-home-main">
+      <div className="workspace-header">
+        <div className="workspace-context-wrap">
+          <button
+            className={`workspace-context-btn ${workspaceContextOpen ? "active" : ""}`}
+            type="button"
+            aria-label="Project context"
+            aria-expanded={workspaceContextOpen}
+            title={projectWorkspace?.path ?? "Project context"}
+            onClick={() => setWorkspaceContextOpen((open) => !open)}
+          >
+            <MoreHorizontal size={16} />
+          </button>
+          {workspaceContextOpen ? (
+            <>
+              <button className="router-backdrop" type="button" aria-label="Close project context" onClick={() => setWorkspaceContextOpen(false)} />
+              <div className="workspace-context-popover" role="dialog" aria-label="Project context">
+                <header>
+                  <Folder size={14} />
+                  <strong>Project context</strong>
+                  <button type="button" aria-label="Close" onClick={() => setWorkspaceContextOpen(false)}>
+                    <X size={13} />
+                  </button>
+                </header>
+                <div className="workspace-context-path" title={projectWorkspace?.path}>
+                  {projectWorkspace ? projectWorkspace.path : "No project folder selected yet."}
+                </div>
+                {workspaceResources.length > 0 ? (
+                  <div className="workspace-context-resources">
+                    {workspaceResources.map((resource) => (
+                      <div className="workspace-context-resource" key={resource.id}>
+                        <Folder size={12} />
+                        <span title={resource.path}>{resource.name}</span>
+                        <button type="button" aria-label={`Remove ${resource.name}`} onClick={() => void removeWorkspaceResource(resource.id)}>
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="workspace-context-actions">
+                  <button type="button" disabled={projectPickerBusy || !window.metisProject} onClick={chooseProjectFolder}>
+                    {projectPickerBusy ? <Loader2 size={13} /> : <Folder size={13} />}
+                    {projectWorkspace ? "Change folder" : "Choose folder"}
+                  </button>
+                </div>
+                <div className="workspace-context-divider" role="separator" aria-hidden="true" />
+                {window.metisConversations && openStoredConversation ? (
+                  <div className="workspace-context-actions workspace-context-conversation-actions">
+                    {contextRenaming ? (
+                      <input
+                        autoFocus
+                        className="project-conversation-rename-input"
+                        value={contextRenameDraft}
+                        onChange={(event) => setContextRenameDraft(event.target.value)}
+                        onBlur={() => void commitContextRename()}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            void commitContextRename();
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            setContextRenaming(false);
+                          }
+                        }}
+                      />
+                    ) : (
+                      <button type="button" onClick={beginContextRename}>
+                        <Pencil size={13} />
+                        Rename
+                      </button>
+                    )}
+                    <button type="button" onClick={() => void archiveOpenConversation()}>
+                      <Archive size={13} />
+                      Archive
+                    </button>
+                    <button type="button" className={`danger ${contextDeleteArmed ? "armed" : ""}`} onClick={() => void deleteOpenConversation()}>
+                      <Trash2 size={13} />
+                      {contextDeleteArmed ? "Confirm delete" : "Delete"}
+                    </button>
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+        </div>
+      </div>
+      <div className="home-scroll" ref={homeScrollRef}>
+        {hasConversation ? (
+          openConversation ? <div className="conversation-title">{openConversation.title}</div> : null
+        ) : (
+          <header className="home-greeting">
+            <Sparkles size={22} />
+            <h1>What&rsquo;s up next, bro?</h1>
+          </header>
+        )}
+
+        {hasConversation ? null : (
+        <section className="overview-card" aria-label="Usage overview">
+          <div className="overview-top">
+            <div className="seg" role="tablist" aria-label="Overview view">
+              <button type="button" role="tab" aria-selected={overviewTab === "overview"} className={overviewTab === "overview" ? "active" : ""} onClick={() => setOverviewTab("overview")}>
+                Overview
+              </button>
+              <button type="button" role="tab" aria-selected={overviewTab === "models"} className={overviewTab === "models" ? "active" : ""} onClick={() => setOverviewTab("models")}>
+                Models
+              </button>
+            </div>
+            <div className="seg" role="tablist" aria-label="Time range">
+              {(["all", "30d", "7d"] as const).map((key) => (
+                <button key={key} type="button" role="tab" aria-selected={range === key} className={range === key ? "active" : ""} onClick={() => setRange(key)}>
+                  {key === "all" ? "All" : key}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {overviewTab === "overview" ? (
+            <>
+              <div className="stat-grid">
+                {overviewStats.cells.map((stat) => (
+                  <div className="stat-cell" key={stat.label} title={stat.title}>
+                    <small>{stat.label}</small>
+                    <strong>{stat.value}</strong>
+                  </div>
+                ))}
+              </div>
+              <div className="overview-heat" aria-hidden="true">
+                {heatmap.columns.map((col, colIndex) => (
+                  <div className="heat-col" key={colIndex}>
+                    {col.map((cell, rowIndex) => (
+                      <div
+                        className={cell.future ? "heat-cell future" : cell.bucket > 0 ? "heat-cell filled" : "heat-cell"}
+                        key={rowIndex}
+                        style={!cell.future && cell.bucket > 0 ? ({ "--a": HEAT_ALPHAS[cell.bucket] } as CSSProperties) : undefined}
+                        title={cell.label || undefined}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <p
+                className="overview-foot"
+                title={overviewStats.localTokens > 0 ? `~${formatTokenCount(overviewStats.localTokens)} tokens kept local · ≈ ${overviewStats.localSavedLabel} saved` : undefined}
+              >
+                {footerLine}
+                {overviewStats.localTokens > 0 ? ` · ~${formatTokenCount(overviewStats.localTokens)} kept local (≈ ${overviewStats.localSavedLabel} saved)` : ""}
+              </p>
+            </>
+          ) : (
+            <div className="model-share-list">
+              {modelBreakdown.length === 0 ? (
+                <p className="overview-foot">No model usage yet in this range.</p>
+              ) : (
+                modelBreakdown.map((entry) => (
+                  <div className="model-share-row" key={entry.key}>
+                    <span className="model-share-name">{entry.label}</span>
+                    <span className="model-share-bar">
+                      <span className="model-share-fill" style={{ width: `${Math.max(entry.pct, entry.tokens > 0 ? 2 : 0)}%` } as CSSProperties} />
+                    </span>
+                    <span className="model-share-tokens">{formatTokenCount(entry.tokens)}</span>
+                    <span className="model-share-pct">{entry.pct}%</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </section>
+        )}
+
+        {hasConversation ? (
+          <section className="conversation-feed" aria-label="Conversation">
+            {history.map((turn, index) =>
+              turn.role === "user" ? (
+                <div className="message-row user-message" id={`sec-h-${index}`} key={`history-${index}`}>
+                  <div className="user-bubble">
+                    <p>{turn.content}</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="message-row assistant-message" key={`history-${index}`}>
+                  {turn.run ? <CompletedRun run={turn.run} /> : <Markdown>{turn.content}</Markdown>}
+                </div>
+              )
+            )}
+            {conversation.map((turn) => (
+              <ConversationTurnCard key={turn.id} anchorId={`sec-c-${turn.id}`} turn={turn} />
+            ))}
+          </section>
+        ) : null}
+      </div>
+
+      {hasConversation && minimapBars.length > 1 ? (
+        <nav className="conversation-minimap" aria-label="Jump to message">
+          {minimapBars.map((bar, index) => (
+            <button
+              key={bar.section.id}
+              type="button"
+              className={`minimap-tick ${index === activeBar ? "active" : ""}`}
+              onClick={() => document.getElementById(bar.section.id)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+            >
+              <span className="minimap-tip">{bar.section.label.slice(0, 70)}</span>
+            </button>
+          ))}
+        </nav>
+      ) : null}
+
+      <div className="home-dock">
+        <SessionComposer
+          sessionBusy={sessionBusy}
+          projectWorkspace={projectWorkspace}
+          suggestion={composerSuggestion}
+          suggestionResetKey={`${lastRun?.id ?? "none"}::${activeConversationId ?? "none"}`}
+          onSubmit={submitPrompt}
+          level={level}
+          setLevel={setLevel}
+          resourceMenuOpen={resourceMenuOpen}
+          setResourceMenuOpen={setResourceMenuOpen}
+          projectPickerBusy={projectPickerBusy}
+          addWorkspaceResource={addWorkspaceResource}
+          selectedModel={selectedModel}
+          setSelectedModel={setSelectedModel}
+          modelGroups={modelGroups}
+          routerFilter={routerFilter}
+          setRouterFilter={setRouterFilter}
+          addModelOpen={addModelOpen}
+          setAddModelOpen={setAddModelOpen}
+          draftModelName={draftModelName}
+          setDraftModelName={setDraftModelName}
+          draftModelProvider={draftModelProvider}
+          setDraftModelProvider={setDraftModelProvider}
+          addCustomModel={addCustomModel}
+        />
+      </div>
+    </div>
+    {previewRail ? (
+      <PreviewRail
+        key={previewRail.url}
+        onClose={() => setPreviewRail(null)}
+        refreshTick={previewRefreshTick}
+        title={previewRail.title}
+        url={previewRail.url}
+      />
+    ) : null}
+    </main>
+    </PreviewRailContext.Provider>
+  );
+}
+
+type SessionComposerModelGroups = { tier: "cloud" | "local"; label: string; brands: { provider: ProviderId; models: ModelRef[] }[] }[];
+
+// Owns the `prompt` string locally so every keystroke only re-renders the
+// composer, not the whole workspace (conversation feed, telemetry card,
+// minimap, model picker data all live in the parent and are passed as props).
+function SessionComposer({
+  sessionBusy,
+  projectWorkspace,
+  suggestion,
+  suggestionResetKey,
+  onSubmit,
+  level,
+  setLevel,
+  resourceMenuOpen,
+  setResourceMenuOpen,
+  projectPickerBusy,
+  addWorkspaceResource,
+  selectedModel,
+  setSelectedModel,
+  modelGroups,
+  routerFilter,
+  setRouterFilter,
+  addModelOpen,
+  setAddModelOpen,
+  draftModelName,
+  setDraftModelName,
+  draftModelProvider,
+  setDraftModelProvider,
+  addCustomModel
+}: {
+  sessionBusy: boolean;
+  projectWorkspace: ProjectWorkspace | null;
+  suggestion: string | null | undefined;
+  suggestionResetKey: string;
+  onSubmit: (text: string) => void | Promise<void>;
+  level: (typeof PERM_LEVELS)[number]["key"];
+  setLevel: (level: (typeof PERM_LEVELS)[number]["key"]) => void;
+  resourceMenuOpen: boolean;
+  setResourceMenuOpen: (value: boolean | ((open: boolean) => boolean)) => void;
+  projectPickerBusy: boolean;
+  addWorkspaceResource: (kind: "file" | "folder") => void | Promise<void>;
+  selectedModel: ModelRef | null;
+  setSelectedModel: (ref: ModelRef | null) => void;
+  modelGroups: SessionComposerModelGroups;
+  routerFilter: string;
+  setRouterFilter: (value: string) => void;
+  addModelOpen: boolean;
+  setAddModelOpen: (open: boolean) => void;
+  draftModelName: string;
+  setDraftModelName: (value: string) => void;
+  draftModelProvider: ProviderId;
+  setDraftModelProvider: (provider: ProviderId) => void;
+  addCustomModel: () => void;
+}): JSX.Element {
+  const [prompt, setPrompt] = useState("");
+  const [permOpen, setPermOpen] = useState(false);
+  const [routerOpen, setRouterOpen] = useState(false);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+
+  useEffect(() => {
+    setSuggestionDismissed(false);
+  }, [suggestionResetKey]);
+
+  const showSuggestion = Boolean(suggestion) && !suggestionDismissed && !sessionBusy && prompt.trim().length === 0;
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>): void {
+    event.preventDefault();
+    const text = prompt.trim();
+    if (!text) return;
+    setPrompt("");
+    void onSubmit(text);
+  }
+
+  return (
+    <form className="home-composer" onSubmit={handleSubmit}>
+      <div className="composer-input-wrap">
+        <textarea
+          value={prompt}
+          rows={3}
+          placeholder={showSuggestion ? "" : sessionBusy ? "Steer the running build — e.g. “skip the b feature, add d instead”" : "Describe a task or ask a question"}
+          aria-label={showSuggestion ? `Prompt — suggestion: ${suggestion} — press Tab to accept` : "Prompt"}
+          onChange={(event) => {
+            setPrompt(event.target.value);
+            if (event.target.value) setSuggestionDismissed(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Tab" && showSuggestion && suggestion) {
+              event.preventDefault();
+              setPrompt(suggestion);
+              return;
+            }
+            if (event.key === "Escape" && showSuggestion) {
+              setSuggestionDismissed(true);
+            }
+          }}
+        />
+        {showSuggestion && suggestion ? (
+          <button
+            type="button"
+            className="composer-suggestion"
+            onClick={() => setPrompt(suggestion)}
+            tabIndex={-1}
+            aria-hidden="true"
+          >
+            <span className="composer-suggestion-text">{suggestion}</span>
+            <span className="composer-suggestion-chip">↹ Tab</span>
+          </button>
+        ) : null}
+      </div>
+      <div className="home-composer-bar">
+        <div className="composer-tools">
+          <div className="perm-wrap">
+            <button
+              className={`tool-btn ${permOpen ? "active" : ""}`}
+              type="button"
+              aria-label="Permissions"
+              aria-expanded={permOpen}
+              onClick={() => setPermOpen((open) => !open)}
+            >
+              <Shield size={16} />
+            </button>
+            {permOpen ? (
+              <>
+                <div className="perm-backdrop" onClick={() => setPermOpen(false)} />
+                <div className="perm-popover" role="dialog" aria-label="Permissions">
+                  <header>
+                    <Shield size={15} />
+                    <strong>Permissions</strong>
+                    <button type="button" aria-label="Close" onClick={() => setPermOpen(false)}>
+                      <X size={14} />
+                    </button>
+                  </header>
+                  <div className="perm-levels">
+                    {PERM_LEVELS.map((option) => (
+                      <button key={option.key} type="button" className={`perm-level ${level === option.key ? "active" : ""}`} onClick={() => setLevel(option.key)}>
+                        <span className="perm-radio" />
+                        <span>
+                          <strong>{option.label}</strong>
+                          <small>{option.desc}</small>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="perm-scope">
+                    <span>This session can touch</span>
+                    <ul>
+                      <li className="on">
+                        <HardDrive size={13} /> Local workspace
+                      </li>
+                      <li className={level !== "restricted" ? "on" : ""}>
+                        <Folder size={13} /> Project folder · Metis
+                      </li>
+                      <li className={level === "trusted" ? "on" : ""}>
+                        <Network size={13} /> Graph memory + network
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </div>
+          <div className="resource-wrap">
+            <button
+              className={`tool-btn ${resourceMenuOpen ? "active" : ""}`}
+              type="button"
+              aria-label="Add files or folders"
+              aria-expanded={resourceMenuOpen}
+              disabled={projectPickerBusy || !window.metisProject}
+              onClick={() => setResourceMenuOpen((open) => !open)}
+            >
+              <Plus size={16} />
+            </button>
+            {resourceMenuOpen ? (
+              <>
+                <div className="resource-backdrop" onClick={() => setResourceMenuOpen(false)} />
+                <div className="resource-popover" role="menu" aria-label="Add workspace context">
+                  <button type="button" role="menuitem" onClick={() => void addWorkspaceResource("file")}>
+                    <FilePlus size={15} />
+                    <span>
+                      <strong>Add files</strong>
+                      <small>Attach docs, specs, logs, or notes</small>
+                    </span>
+                  </button>
+                  <button type="button" role="menuitem" onClick={() => void addWorkspaceResource("folder")}>
+                    <Folder size={15} />
+                    <span>
+                      <strong>Add folder</strong>
+                      <small>Index a repo, memory folder, or assets</small>
+                    </span>
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
+          <button className="tool-btn" type="button" aria-label="Voice input">
+            <Mic size={16} />
+          </button>
+        </div>
+        <div className="composer-send">
+          <div className="router-wrap">
+            <button className={`router-pill ${routerOpen ? "active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={routerOpen} onClick={() => setRouterOpen((open) => !open)}>
+              <img src={selectedModel ? PROVIDERS[selectedModel.provider].logo : AUTOROUTER_LOGO} alt="" />
+              {selectedModel ? selectedModel.model : "Auto router"}
+              <ChevronUp className={`router-caret ${routerOpen ? "open" : ""}`} size={14} />
+            </button>
+            {routerOpen ? (
+              <>
+                <div className="router-backdrop" onClick={() => setRouterOpen(false)} />
+                <div className="router-menu" role="listbox" aria-label="Choose a model">
+                  <div className="router-menu-search">
+                    <Search size={13} />
+                    <input value={routerFilter} placeholder="Search models" autoFocus onChange={(event) => setRouterFilter(event.target.value)} />
+                  </div>
+                  <div className="router-menu-scroll">
+                    {!routerFilter.trim() ? (
+                      <button type="button" role="option" aria-selected={!selectedModel} className={`router-option auto ${!selectedModel ? "active" : ""}`} onClick={() => { setSelectedModel(null); setRouterOpen(false); }}>
+                        <img src={AUTOROUTER_LOGO} alt="" />
+                        <span><strong>Auto router</strong><small>Let Metis Policy choose</small></span>
+                        {!selectedModel ? <Check size={14} /> : null}
+                      </button>
+                    ) : null}
+                    {modelGroups.map((tier) => (
+                      <div className="router-tier" key={tier.tier}>
+                        <div className="router-tier-label">{tier.label}</div>
+                        {tier.brands.map((brand) => (
+                          <div className="router-brand" key={brand.provider}>
+                            <div className="router-brand-label">
+                              <img src={PROVIDERS[brand.provider].logo} alt="" />
+                              {PROVIDERS[brand.provider].label}
+                            </div>
+                            {brand.models.map((ref) => {
+                              const active = selectedModel?.provider === ref.provider && selectedModel?.model === ref.model;
+                              return (
+                                <button key={`${ref.provider}-${ref.model}`} type="button" role="option" aria-selected={active} className={`router-option ${active ? "active" : ""}`} onClick={() => { setSelectedModel(ref); setRouterOpen(false); }}>
+                                  <span className="router-option-name">{ref.model}</span>
+                                  {active ? <Check size={14} /> : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                    {modelGroups.length === 0 ? <p className="router-empty">No models match. Add one below.</p> : null}
+                  </div>
+                  {addModelOpen ? (
+                    <div className="router-add-form">
+                      <input value={draftModelName} placeholder="Model name (e.g. GPT-5.6)" onChange={(event) => setDraftModelName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") addCustomModel(); }} />
+                      <select value={draftModelProvider} onChange={(event) => setDraftModelProvider(event.target.value as ProviderId)}>
+                        {(Object.keys(PROVIDERS) as ProviderId[]).map((provider) => (
+                          <option key={provider} value={provider}>{PROVIDERS[provider].label}</option>
+                        ))}
+                      </select>
+                      <div className="router-add-actions">
+                        <button type="button" onClick={addCustomModel}>Add</button>
+                        <button type="button" className="ghost" onClick={() => setAddModelOpen(false)}>Cancel</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button type="button" className="router-add-trigger" onClick={() => setAddModelOpen(true)}>
+                      <Plus size={13} /> Add a model
+                    </button>
+                  )}
+                </div>
+              </>
+            ) : null}
+          </div>
+          {sessionBusy && !prompt.trim() ? (
+            <button
+              className="send-btn stop-btn"
+              type="button"
+              aria-label="Stop the run"
+              title="Stop — the run halts at its next stage boundary"
+              // NOTE (parallel sessions phase A): metisSession.cancel is
+              // projectPath-scoped, not conversation-scoped, in the main
+              // process today. If two conversations in this same project
+              // folder are both streaming, this can stop the sibling run too.
+              // Acceptable for phase A — a conversation-scoped cancel is a
+              // backend change out of this refactor's contained scope.
+              onClick={() => window.metisSession?.cancel?.(projectWorkspace?.path)}
+            >
+              <Square size={13} fill="currentColor" />
+            </button>
+          ) : (
+            <button
+              className="send-btn"
+              type="submit"
+              aria-label={sessionBusy ? "Send direction to the running build" : "Send message"}
+              disabled={!prompt.trim() || (sessionBusy && !window.metisBus)}
+            >
+              <ArrowUp size={17} />
+            </button>
+          )}
+        </div>
+      </div>
+    </form>
+  );
+}
+
+function PreviewRail({
+  onClose,
+  refreshTick,
+  title,
+  url
+}: {
+  onClose: () => void;
+  refreshTick: number;
+  title: string;
+  url: string;
+}): JSX.Element {
+  const [manualRefreshTick, setManualRefreshTick] = useState(0);
+  return (
+    <aside className="preview-rail" aria-label="Live preview">
+      <div className="preview-rail-header">
+        <Monitor size={15} />
+        <span className="preview-rail-title" title={title}>{title}</span>
+        <div className="preview-rail-actions">
+          <button type="button" aria-label="Refresh preview" onClick={() => setManualRefreshTick((tick) => tick + 1)}>
+            <RefreshCw size={14} />
+          </button>
+          <button type="button" aria-label="Open in browser" onClick={() => openExternal(url)}>
+            <ExternalLink size={14} />
+          </button>
+          <button type="button" aria-label="Close preview" onClick={onClose}>
+            <X size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="preview-rail-body">
+        <iframe
+          key={`${refreshTick}-${manualRefreshTick}`}
+          sandbox="allow-scripts allow-same-origin"
+          src={url}
+          title={title}
+        />
+      </div>
+    </aside>
+  );
+}
+
+function reactNodeToPlainText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(reactNodeToPlainText).join("");
+  if (isValidElement(node)) return reactNodeToPlainText((node.props as { children?: ReactNode }).children);
+  return "";
+}
+
+function CodeBlock({ children }: { children?: ReactNode }): JSX.Element | null {
+  const ref = useRef<HTMLPreElement>(null);
+  const [copied, setCopied] = useState(false);
+  if (!reactNodeToPlainText(children).trim()) return null;
+  function copy(): void {
+    const text = ref.current?.innerText ?? "";
+    void navigator.clipboard?.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  }
+  return (
+    <div className="md-codeblock">
+      <button type="button" className="md-copy" onClick={copy} aria-label="Copy code">
+        {copied ? <Check size={12} /> : <Copy size={12} />}
+        {copied ? "Copied" : "Copy"}
+      </button>
+      <pre ref={ref}>{children}</pre>
+    </div>
+  );
+}
+
+const MARKDOWN_COMPONENTS: Components = {
+  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  code: ({ className, children }) => (className ? <code className={className}>{children}</code> : <code className="md-inline">{children}</code>),
+  a: ({ href, children }) => (
+    <a
+      href={href}
+      onClick={(event) => {
+        event.preventDefault();
+        if (href) openExternal(href);
+      }}
+    >
+      {children}
+    </a>
+  )
+};
+
+function Markdown({ children }: { children: string }): JSX.Element {
+  return (
+    <div className="markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+        {children}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+/** Builds a clean markdown transcript of one completed turn — assistant text
+ *  plus each pipeline stage's output — from the run data itself (never DOM
+ *  innerText), for the per-turn copy affordance. */
+function turnToMarkdown(run: SessionRun): string {
+  const parts: string[] = [];
+  if (run.assistantText.trim()) parts.push(run.assistantText.trim());
+  for (const stage of run.stages ?? []) {
+    if (!stage.output.trim()) continue;
+    parts.push(`## ${stage.label} (${prettyModelName(stage.provider, stage.model)})\n\n${stage.output.trim()}`);
+  }
+  return parts.join("\n\n").trim();
+}
+
+function TurnCopyButton({ run }: { run: SessionRun }): JSX.Element | null {
+  const [copied, setCopied] = useState(false);
+  const text = turnToMarkdown(run);
+  if (!text) return null;
+  function copy(): void {
+    void navigator.clipboard?.writeText(text);
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1400);
+  }
+  return (
+    <button type="button" className="turn-copy" onClick={copy} aria-label="Copy conversation turn">
+      {copied ? <Check size={12} /> : <Copy size={12} />}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+const ConversationTurnCard = memo(function ConversationTurnCard({ anchorId, turn }: { anchorId?: string; turn: ConversationTurn }): JSX.Element {
+  if (turn.directive) {
+    return (
+      <article className="conversation-turn directive" id={anchorId}>
+        <div className="message-row user-message">
+          <div className="user-bubble">
+            <p>{turn.prompt}</p>
           </div>
         </div>
-        <div className="graph-grid">
-          {taskNodes.map((node) => (
+        <div className="message-row assistant-message">
+          <div className="route-line">
+            <Waypoints size={13} />
+            <span>Direction queued — the running build picks it up before its next stage.</span>
+          </div>
+        </div>
+      </article>
+    );
+  }
+  return (
+    <article className={`conversation-turn ${turn.status}`} id={anchorId}>
+      <div className="message-row user-message">
+        <div className="user-bubble">
+          <p>{turn.prompt}</p>
+        </div>
+      </div>
+
+      <div className="message-row assistant-message">
+        {turn.run ? (
+          <>
+            <TurnCopyButton run={turn.run} />
+            <CompletedRun run={turn.run} />
+          </>
+        ) : (
+          <PendingRun turn={turn} />
+        )}
+      </div>
+    </article>
+  );
+});
+
+function PendingRun({ turn }: { turn: ConversationTurn }): JSX.Element {
+  if (turn.status === "error") {
+    return <small className="session-warning">{turn.error ?? "Something went wrong on that route."}</small>;
+  }
+  if (turn.streamEvents?.length || turn.liveAssistantText || turn.liveThoughtText) {
+    return <LiveRunTimeline turn={turn} />;
+  }
+  return (
+    <details className="route-line-details pending-thinking">
+      <summary className="route-line running" role="status" aria-label="Thinking">
+        <ChevronRight className="stage-caret" size={14} />
+        <Waypoints size={13} />
+        <span className="thinking-text" aria-hidden="true" />
+        <span className="sr-only">Thinking...</span>
+      </summary>
+      <div className="route-trace-body">
+        <p>Waiting for the first streamed model or tool event.</p>
+      </div>
+    </details>
+  );
+}
+
+function LiveRunTimeline({ turn }: { turn: ConversationTurn }): JSX.Element {
+  return (
+    <div className="run-timeline live">
+      {turn.liveAssistantText?.trim() ? (
+        <AssistantResponse source={{ kind: "local", label: "Local output" }}>{turn.liveAssistantText}</AssistantResponse>
+      ) : null}
+      {turn.liveThoughtText?.trim() ? <ModelThoughts text={turn.liveThoughtText} live /> : null}
+      {turn.streamEvents?.map((event) => {
+        if (event.kind === "text") {
+          return <AssistantResponse key={event.id} source={{ kind: "metis", label: "Metis synthesis" }}>{event.content}</AssistantResponse>;
+        }
+        if (event.kind === "route") {
+          return (
+            <details className="route-line-details" key={event.id}>
+              <summary className="route-line">
+                <ChevronRight className="stage-caret" size={14} />
+                <Waypoints size={13} />
+                <span>Routed via {event.label ?? "Metis"}</span>
+              </summary>
+              <div className="route-trace-body">
+                {turn.streamSteps?.length ? <PipelineSteps steps={turn.streamSteps} /> : <p className="live-pending-note">Route selected. Waiting for the next pipeline event.</p>}
+              </div>
+            </details>
+          );
+        }
+        if (event.kind === "stage") {
+          const stage = turn.streamStages?.find((item) => item.id === event.stageId);
+          return stage ? <StageBlock key={event.id} stage={stage} /> : <LiveStatusLine key={event.id} label="Running model stage" />;
+        }
+        if (event.kind === "operations") {
+          const eventOperations = event.operationIds?.length
+            ? (turn.streamOperations ?? []).filter((operation) => event.operationIds?.includes(operation.id))
+            : turn.streamOperations ?? [];
+          return eventOperations.length ? (
+            <TimelineOperations key={event.id} detail={event.detail} operations={eventOperations} project={turn.streamProject} title={event.title} />
+          ) : (
+            <LiveStatusLine key={event.id} label={event.title} />
+          );
+        }
+        return null;
+      })}
+      <div className="route-line running" role="status" aria-label="Still running">
+        <Waypoints size={13} />
+        <span className="thinking-text" aria-hidden="true" />
+        <span className="sr-only">Thinking...</span>
+      </div>
+    </div>
+  );
+}
+
+function ModelThoughts({ live = false, text }: { live?: boolean; text: string }): JSX.Element {
+  if (!text.trim()) return <></>;
+  return (
+    <details className={`route-line-details model-thoughts ${live ? "live" : ""}`}>
+      <summary className="route-line">
+        <ChevronRight className="stage-caret" size={14} />
+        <Waypoints size={13} />
+        <span>{live ? "Thinking" : "Model thoughts"}</span>
+      </summary>
+      <div className="route-trace-body thought-body">
+        <Markdown>{text}</Markdown>
+      </div>
+    </details>
+  );
+}
+
+function LiveStatusLine({ label }: { label: string }): JSX.Element {
+  return (
+    <div className="route-line running">
+      <Waypoints size={13} />
+      <span>{label}</span>
+    </div>
+  );
+}
+
+function routeDisplayName(run: SessionRun): string {
+  if (run.routeLabel) return run.routeLabel;
+  const name = run.pipelineName
+    .replace(/\s*Orchestration Pipeline$/i, "")
+    .replace(/\s*Assistant Pipeline$/i, "")
+    .replace(/\s*Pipeline$/i, "")
+    .trim();
+  return name || "Metis";
+}
+
+function providerLabel(provider: ProviderKey): string {
+  if (provider === "anthropic") return "Anthropic";
+  if (provider === "openai") return "OpenAI";
+  if (provider === "gemini") return "Gemini";
+  if (provider === "deepseek") return "DeepSeek";
+  if (provider === "openrouter") return "OpenRouter";
+  return "Ollama";
+}
+
+// Known API model ids -> human display names. Anything not listed falls back
+// to a generic prettifier (strip provider prefixes, split on separators,
+// capitalize words, keep version dots/numbers intact).
+const PRETTY_MODEL_NAMES: Record<string, string> = {
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "claude-sonnet-4-5": "Claude Sonnet 4.5",
+  "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-opus-4-6": "Claude Opus 4.6",
+  "claude-sonnet-5": "Claude Sonnet 5",
+  "claude-haiku-4-5": "Claude Haiku 4.5",
+  "gemini-2.5-pro": "Gemini 2.5 Pro",
+  "gemini-2.5-flash": "Gemini 2.5 Flash",
+  "gemini-2.0-flash": "Gemini 2.0 Flash",
+  "deepseek-chat": "DeepSeek V3",
+  "deepseek-reasoner": "DeepSeek R1",
+  "gpt-5.1": "GPT-5.1",
+  "gpt-5": "GPT-5",
+  "gpt-4.1": "GPT-4.1",
+  "gpt-4o": "GPT-4o",
+  "qwen3:8b": "Qwen3 8B",
+  "qwen3:14b": "Qwen3 14B",
+  "qwen3:32b": "Qwen3 32B",
+  "llama3.1:8b": "Llama 3.1 8B",
+  "llama3.1:70b": "Llama 3.1 70B",
+  "mistral:7b": "Mistral 7B"
+};
+
+function prettyModelName(provider: ProviderKey, model: string): string {
+  if (!model) return providerLabel(provider);
+  const known = PRETTY_MODEL_NAMES[model.toLowerCase()];
+  if (known) return known;
+
+  // Generic fallback: strip a leading provider-ish prefix, split on common
+  // separators, capitalize each word, and keep version numbers (with dots)
+  // and trailing size suffixes (e.g. "8b", "70b") intact.
+  const stripped = model.replace(/^(claude|gemini|gpt|deepseek|qwen|llama|mistral|openrouter)[-:_]?/i, (match) =>
+    // Keep the prefix if stripping would leave nothing usable.
+    match.length >= model.length ? match : ""
+  );
+  const base = stripped || model;
+  const words = base.split(/[-_:\/\s]+/).filter(Boolean);
+  const pretty = words
+    .map((word) => {
+      if (/^v?\d+(\.\d+)*[a-z]?$/i.test(word)) return word.replace(/^v/i, "v").toUpperCase().replace(/^V/, "v");
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
+  const prefixLabel = providerLabel(provider);
+  return pretty ? `${prefixLabel} ${pretty}`.replace(/\s+/g, " ").trim() : prefixLabel;
+}
+
+function responseSource(run: SessionRun): { kind: "cloud" | "local" | "metis"; label: string } {
+  const providerResult = run.providerResult;
+  const providerOutput = providerResult?.source !== "placeholder" ? providerResult?.output.trim() : "";
+  if (providerOutput && run.assistantText.trim() === providerOutput) {
+    const local = providerResult?.provider === "ollama";
+    return {
+      kind: local ? "local" : "cloud",
+      label: `${local || !providerResult ? "Local" : providerLabel(providerResult.provider)} output`
+    };
+  }
+  return { kind: "metis", label: "Metis synthesis" };
+}
+
+function AssistantResponse({ children, source }: { children: string; source: ReturnType<typeof responseSource> }): JSX.Element {
+  // The provider/source is shown in the "Routed via" line — no per-message label.
+  return (
+    <div className={`assistant-response ${source.kind}`}>
+      <Markdown>{children}</Markdown>
+    </div>
+  );
+}
+
+const CompletedRun = memo(function CompletedRun({ run }: { run: SessionRun }): JSX.Element {
+  const warnings = visibleRunWarnings(run.warnings);
+  const showRouteTrace = shouldShowRouteTrace(run, warnings);
+
+  if (run.timeline?.length) {
+    return <RunTimeline run={run} events={run.timeline} warnings={warnings} />;
+  }
+
+  if (run.stages && run.stages.length > 0) {
+    return (
+      <>
+        <Markdown>{run.assistantText}</Markdown>
+        {run.stages.map((stage) => (
+          <StageBlock stage={stage} key={stage.id} />
+        ))}
+        {run.projectResult ? <ProjectArtifacts run={run} /> : null}
+        <details className="route-line-details">
+          <summary className="route-line">
+            <Waypoints size={13} />
+            <span>Routed via {routeDisplayName(run)}</span>
+          </summary>
+          <div className="route-trace-body">
+            <PipelineSteps steps={run.steps} />
+          </div>
+        </details>
+        {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
+      </>
+    );
+  }
+
+  const [opening, followUp] = splitAssistantTextForTimeline(run.assistantText);
+  const source = responseSource(run);
+  return (
+    <>
+      <AssistantResponse source={source}>{showRouteTrace ? opening : run.assistantText}</AssistantResponse>
+      {run.modelThoughts ? <ModelThoughts text={run.modelThoughts} /> : null}
+      {run.projectResult ? <ProjectArtifacts run={run} /> : null}
+      {!run.projectResult && run.operations?.length ? <RunOperations operations={run.operations} /> : null}
+      {showRouteTrace ? (
+        <details className="route-line-details">
+          <summary className="route-line">
+            <Waypoints size={13} />
+            <span>Routed via {routeDisplayName(run)}</span>
+          </summary>
+          <div className="route-trace-body">
+            <PipelineSteps steps={run.steps} />
+          </div>
+        </details>
+      ) : null}
+      {showRouteTrace && followUp ? <AssistantResponse source={source}>{followUp}</AssistantResponse> : null}
+      {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
+    </>
+  );
+});
+
+function RunTimeline({ events, run, warnings }: { events: SessionTimelineEvent[]; run: SessionRun; warnings: string[] }): JSX.Element {
+  const source = responseSource(run);
+  const operations = run.operations ?? [];
+  return (
+    <div className="run-timeline">
+      {events.map((event) => {
+        if (event.kind === "text") {
+          return <AssistantResponse key={event.id} source={source}>{event.content}</AssistantResponse>;
+        }
+        if (event.kind === "route") {
+          return (
+            <details className="route-line-details" key={event.id}>
+              <summary className="route-line">
+                <ChevronRight className="stage-caret" size={14} />
+                <Waypoints size={13} />
+                <span>Routed via {routeDisplayName(run)}</span>
+              </summary>
+              <div className="route-trace-body">
+                <PipelineSteps steps={run.steps} />
+              </div>
+            </details>
+          );
+        }
+        if (event.kind === "stage") {
+          const stage = run.stages?.find((item) => item.id === event.stageId);
+          return stage ? <StageBlock key={event.id} stage={stage} /> : null;
+        }
+        if (event.kind === "operations") {
+          const eventOperations = event.operationIds?.length ? operations.filter((operation) => event.operationIds?.includes(operation.id)) : operations;
+          if (eventOperations.length === 0) return null;
+          return <TimelineOperations key={event.id} detail={event.detail} operations={eventOperations} project={run.projectResult} title={event.title} />;
+        }
+        return null;
+      })}
+      {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
+    </div>
+  );
+}
+
+function StageBlock({ stage }: { stage: NonNullable<SessionRun["stages"]>[number] }): JSX.Element {
+  return (
+    <details className={`stage-block ${stage.failed ? "failed" : ""}`}>
+      <summary className="stage-head">
+        <ChevronRight className="stage-caret" size={14} />
+        <span className="stage-name">{stage.label}</span>
+        <span className="stage-model">{prettyModelName(stage.provider, stage.model)}</span>
+      </summary>
+      <div className="stage-body">
+        {stage.fallbackNotes.map((note, index) => (
+          <p className="stage-fallback" key={index}>{note}</p>
+        ))}
+        {stage.thoughts?.trim() ? <ModelThoughts text={stage.thoughts} /> : null}
+        {stage.output ? <Markdown>{stage.output}</Markdown> : stage.failed ? <p className="stage-fallback">This stage produced no output.</p> : null}
+      </div>
+    </details>
+  );
+}
+
+/** Slim, Claude-Code-style single-line operation rows for the conversation
+ *  feed. No box, no headers, no filter tabs — just a stack of collapsed
+ *  one-liners that expand into the full detail on click. */
+const SLIM_OPERATION_VISIBLE_LIMIT = 6;
+
+function operationBasename(operation: AgentOperation): string {
+  const source = operation.target ?? operation.command ?? "";
+  if (!source) return operation.label;
+  const base = source.split(/[\\/]/).pop() ?? source;
+  return base || operation.label;
+}
+
+function operationFullPath(operation: AgentOperation): string | undefined {
+  return operation.target ?? operation.cwd;
+}
+
+function SlimOperationLine({ operation, targetDir }: { operation: AgentOperation; targetDir?: string }): JSX.Element {
+  const isFile = operation.kind === "file_edit" || operation.kind === "file_create";
+  const isCheck = operation.kind === "command" || operation.kind === "browser_check";
+  const fullPath = operationFullPath(operation);
+  const hasBody = Boolean(
+    fullPath ||
+      targetDir ||
+      operation.detail ||
+      operation.title ||
+      operation.command ||
+      operation.cwd ||
+      operation.stdout ||
+      operation.stderr ||
+      operation.permission ||
+      operation.screenshotPath ||
+      operation.consoleErrors?.length
+  );
+  const summaryContent = (
+    <>
+      <OperationIcon kind={operation.kind} />
+      <span>{isFile ? `${operation.label} ${operationBasename(operation)}` : operation.label}</span>
+      {isFile ? (
+        <em className="diff-stat">
+          <b>+{operation.addedLines ?? 0}</b>
+          <i>-{operation.removedLines ?? 0}</i>
+        </em>
+      ) : isCheck ? (
+        <em>
+          {operation.status === "complete" ? "ok" : operation.status}
+          {operation.durationMs !== undefined ? ` · ${operation.durationMs}ms` : ""}
+        </em>
+      ) : operation.status !== "complete" ? (
+        <em>{operation.status}</em>
+      ) : null}
+    </>
+  );
+  if (!hasBody) {
+    return <div className={`slim-op-line ${operation.status}`}>{summaryContent}</div>;
+  }
+  return (
+    <details className={`slim-op-line-details ${operation.status}`}>
+      <summary className="slim-op-line">{summaryContent}</summary>
+      <div className="operation-detail-body">
+        {targetDir ? <small>Target folder: {targetDir}</small> : null}
+        {fullPath ? <small>Path: {fullPath}</small> : null}
+        {operation.detail ? <p>{operation.detail}</p> : null}
+        {operation.title ? <small>Title: {operation.title}</small> : null}
+        {operation.durationMs !== undefined ? <small>Duration: {operation.durationMs}ms</small> : null}
+        {operation.command ? <code>{operation.command}</code> : null}
+        {operation.cwd ? <small>CWD: {operation.cwd}</small> : null}
+        {operation.permission ? <small>Permission: {operation.permission}</small> : null}
+        {operation.screenshotPath ? (
+          <span className="operation-file-link">
+            <small>Screenshot: {operation.screenshotPath}</small>
+            {window.metisShell ? (
+              <button type="button" onClick={() => openLocalPath(operation.screenshotPath ?? "")}>
+                Open
+              </button>
+            ) : null}
+          </span>
+        ) : null}
+        {operation.consoleErrors?.length ? <pre className="error">{operation.consoleErrors.join("\n")}</pre> : null}
+        {operation.stdout ? <pre>{operation.stdout}</pre> : null}
+        {operation.stderr ? <pre className="error">{operation.stderr}</pre> : null}
+      </div>
+    </details>
+  );
+}
+
+function SlimOperationList({
+  extraDetail,
+  operations,
+  previewUrl,
+  targetDir
+}: {
+  extraDetail?: string;
+  operations: AgentOperation[];
+  previewUrl?: string;
+  targetDir?: string;
+}): JSX.Element | null {
+  const previewControl = useContext(PreviewRailContext);
+  if (operations.length === 0 && !previewUrl) return null;
+  const visible = operations.slice(0, SLIM_OPERATION_VISIBLE_LIMIT);
+  const overflow = operations.slice(SLIM_OPERATION_VISIBLE_LIMIT);
+  return (
+    <div className="slim-op-list">
+      {visible.map((operation, index) => (
+        <SlimOperationLine key={operation.id} operation={operation} targetDir={index === 0 && overflow.length === 0 ? targetDir : undefined} />
+      ))}
+      {overflow.length > 0 ? (
+        <details className="slim-op-line-details">
+          <summary className="slim-op-line">
+            <Folder size={14} />
+            <span>and {overflow.length} more</span>
+          </summary>
+          <div className="operation-detail-body">
+            {targetDir ? <small>Target folder: {targetDir}</small> : null}
+            {overflow.map((operation) => (
+              <SlimOperationLine key={operation.id} operation={operation} />
+            ))}
+          </div>
+        </details>
+      ) : null}
+      {previewUrl ? (
+        <div className="slim-op-line preview-line">
+          <Monitor size={14} />
+          <a
+            href={previewUrl}
+            onClick={(event) => {
+              event.preventDefault();
+              openPreviewOrExternal(previewControl, previewUrl, targetDir ? projectNameFromPath(targetDir) : "Preview");
+            }}
+          >
+            Preview
+          </a>
+        </div>
+      ) : null}
+      {extraDetail ? <p className="slim-op-extra">{extraDetail}</p> : null}
+    </div>
+  );
+}
+
+function TimelineOperations({
+  detail,
+  operations,
+  project,
+  title
+}: {
+  detail?: string;
+  operations: AgentOperation[];
+  project?: SessionRun["projectResult"];
+  title: string;
+}): JSX.Element | null {
+  const showPreview = Boolean(project?.previewUrl && title.toLowerCase().includes("verification"));
+  if (operations.length === 0 && !showPreview) return null;
+  return (
+    <SlimOperationList
+      operations={operations}
+      previewUrl={showPreview ? project?.previewUrl : undefined}
+      extraDetail={detail}
+    />
+  );
+}
+
+function splitAssistantTextForTimeline(text: string): [string, string] {
+  const trimmed = text.trim();
+  if (!trimmed) return ["", ""];
+  // Never split text that contains a markdown list — splitting mid-list left
+  // list items dangling with no content (e.g. "1. 2. 3." rendering empty).
+  if (/^\s*(\d+\.|[-*])\s/m.test(trimmed)) return [trimmed, ""];
+  const paragraphBreak = trimmed.search(/\n\s*\n/);
+  if (paragraphBreak > 0) {
+    return [trimmed.slice(0, paragraphBreak).trim(), trimmed.slice(paragraphBreak).trim()];
+  }
+  const sentenceMatch = /([.!?])\s+/.exec(trimmed);
+  if (!sentenceMatch || sentenceMatch.index < 0) return [trimmed, ""];
+  const splitAt = sentenceMatch.index + sentenceMatch[0].length;
+  return [trimmed.slice(0, splitAt).trim(), trimmed.slice(splitAt).trim()];
+}
+
+function visibleRunWarnings(warnings: string[]): string[] {
+  return warnings.filter((warning) => !/proxy evidence|quality for .* uses proxy|needs judge or human visual validation/i.test(warning));
+}
+
+function shouldShowRouteTrace(run: SessionRun, warnings: string[]): boolean {
+  if (run.projectResult) return true;
+  if (warnings.length > 0) return true;
+  return run.decision.decision.task_type !== "general_chat";
+}
+
+function ProjectArtifacts({ run }: { run: SessionRun }): JSX.Element | null {
+  const project = run.projectResult;
+  if (!project) return null;
+  const operations = run.operations?.length ? run.operations : operationsFromArtifacts(run);
+  const showPreview = Boolean(project.previewUrl);
+  return (
+    <SlimOperationList
+      operations={operations}
+      previewUrl={showPreview ? project.previewUrl : undefined}
+      targetDir={project.projectRoot}
+      extraDetail={!project.verified ? project.verificationDetail : undefined}
+    />
+  );
+}
+
+function RunOperations({ operations }: { operations: AgentOperation[] }): JSX.Element | null {
+  if (operations.length === 0) return null;
+  return <SlimOperationList operations={operations} />;
+}
+
+type OperationFilter = "all" | "files" | "checks" | "issues";
+
+const OPERATION_FILTERS: { key: OperationFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "files", label: "Files" },
+  { key: "checks", label: "Checks" },
+  { key: "issues", label: "Issues" }
+];
+
+function OperationTimeline({ operations }: { operations: AgentOperation[] }): JSX.Element {
+  const [filter, setFilter] = useState<OperationFilter>("all");
+  const edits = operations.filter((operation) => operation.kind === "file_edit" || operation.kind === "file_create").length;
+  const checks = operations.filter((operation) => operation.kind === "browser_check" || operation.kind === "command").length;
+  const issues = operations.filter((operation) => operation.status !== "complete").length;
+  const visibleOperations = operations.filter((operation) => operationMatchesFilter(operation, filter));
+  return (
+    <section className="operation-timeline" aria-label="Agent operations">
+      <header>
+        <span>Operations</span>
+        <em className="operation-summary">{edits} edit{edits === 1 ? "" : "s"} / {checks} check{checks === 1 ? "" : "s"} / {issues} issue{issues === 1 ? "" : "s"}</em>
+        <em>{edits} edit{edits === 1 ? "" : "s"} · {checks} check{checks === 1 ? "" : "s"}</em>
+      </header>
+      <div className="operation-filters" role="tablist" aria-label="Operation filters">
+        {OPERATION_FILTERS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            role="tab"
+            aria-selected={filter === item.key}
+            className={filter === item.key ? "active" : ""}
+            onClick={() => setFilter(item.key)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </div>
+      <div className="artifact-list">
+        {visibleOperations.map((operation) => (
+          <OperationRow key={operation.id} operation={operation} />
+        ))}
+        {visibleOperations.length === 0 ? <p className="operation-empty">No operations in this view yet.</p> : null}
+      </div>
+    </section>
+  );
+}
+
+function operationMatchesFilter(operation: AgentOperation, filter: OperationFilter): boolean {
+  if (filter === "files") return operation.kind === "file_edit" || operation.kind === "file_create" || operation.kind === "directory_create";
+  if (filter === "checks") return operation.kind === "browser_check" || operation.kind === "command" || operation.kind === "mcp_call" || operation.kind === "git";
+  if (filter === "issues") return operation.status !== "complete";
+  return true;
+}
+
+function OperationRow({ operation }: { operation: AgentOperation }): JSX.Element {
+  const hasDetails = Boolean(
+    operation.detail ||
+      operation.title ||
+      operation.durationMs !== undefined ||
+      operation.command ||
+      operation.cwd ||
+      operation.stdout ||
+      operation.stderr ||
+      operation.permission ||
+      operation.screenshotPath ||
+      operation.consoleErrors?.length
+  );
+  const row = (
+    <>
+      <span className="artifact-icon">
+        <OperationIcon kind={operation.kind} />
+      </span>
+      <span>
+        <strong>{operation.label}</strong>
+        <small>{operation.target ?? operation.command ?? operation.detail ?? operation.kind}</small>
+      </span>
+      <OperationMeta operation={operation} />
+    </>
+  );
+  if (!hasDetails) {
+    return <div className={`artifact-row ${operation.kind} ${operation.status}`}>{row}</div>;
+  }
+  return (
+    <details className={`artifact-row operation-details ${operation.kind} ${operation.status}`}>
+      <summary>{row}</summary>
+      <div className="operation-detail-body">
+        {operation.detail ? <p>{operation.detail}</p> : null}
+        {operation.title ? <small>Title: {operation.title}</small> : null}
+        {operation.durationMs !== undefined ? <small>Duration: {operation.durationMs}ms</small> : null}
+        {operation.command ? <code>{operation.command}</code> : null}
+        {operation.cwd ? <small>CWD: {operation.cwd}</small> : null}
+        {operation.permission ? <small>Permission: {operation.permission}</small> : null}
+        {operation.screenshotPath ? (
+          <span className="operation-file-link">
+            <small>Screenshot: {operation.screenshotPath}</small>
+            {window.metisShell ? (
+              <button type="button" onClick={() => openLocalPath(operation.screenshotPath ?? "")}>
+                Open
+              </button>
+            ) : null}
+          </span>
+        ) : null}
+        {operation.consoleErrors?.length ? (
+          <pre className="error">{operation.consoleErrors.join("\n")}</pre>
+        ) : null}
+        {operation.stdout ? <pre>{operation.stdout}</pre> : null}
+        {operation.stderr ? <pre className="error">{operation.stderr}</pre> : null}
+      </div>
+    </details>
+  );
+}
+
+function OperationIcon({ kind }: { kind: AgentOperation["kind"] }): JSX.Element {
+  if (kind === "file_edit" || kind === "file_create") return <Pencil size={14} />;
+  if (kind === "command") return <Terminal size={14} />;
+  if (kind === "browser_check") return <Monitor size={14} />;
+  if (kind === "mcp_call") return <Plug size={14} />;
+  if (kind === "git") return <GitBranch size={14} />;
+  return <Folder size={14} />;
+}
+
+function OperationMeta({ operation }: { operation: AgentOperation }): JSX.Element | null {
+  if (operation.kind === "file_edit" || operation.kind === "file_create") {
+    return (
+      <em className="diff-stat">
+        <b>+{operation.addedLines ?? 0}</b>
+        <i>-{operation.removedLines ?? 0}</i>
+      </em>
+    );
+  }
+  if (operation.kind === "command") {
+    return (
+      <em className="command-stat">
+        <Terminal size={12} /> {operation.exitCode === 0 ? "ok" : `exit ${operation.exitCode ?? "?"}`}{operation.durationMs !== undefined ? ` · ${operation.durationMs}ms` : ""}
+      </em>
+    );
+  }
+  if (operation.kind === "browser_check") {
+    return (
+      <em className="command-stat">
+        <Monitor size={12} /> {operation.status === "complete" ? "ok" : operation.status}{operation.durationMs !== undefined ? ` · ${operation.durationMs}ms` : ""}
+      </em>
+    );
+  }
+  if (operation.status !== "complete") return <em className="command-stat">{operation.status}</em>;
+  return null;
+}
+
+function operationsFromArtifacts(run: SessionRun): AgentOperation[] {
+  const project = run.projectResult;
+  if (!project) return [];
+  return project.artifacts.map((artifact, index) => {
+    if (artifact.kind === "file" || artifact.kind === "file_create") {
+      return {
+        id: `${run.id}-artifact-${index}`,
+        kind: artifact.kind === "file_create" ? "file_create" : "file_edit",
+        label: `${artifact.kind === "file_create" ? "Created" : "Edited"} ${artifact.label}`,
+        target: artifact.path,
+        status: "complete",
+        addedLines: artifact.addedLines ?? 0,
+        removedLines: artifact.removedLines ?? 0,
+        permission: "filesystem.write",
+        detail: artifact.bytes ? `${Math.round(artifact.bytes / 100) / 10} KB written` : undefined
+      };
+    }
+    if (artifact.kind === "preview") {
+      return {
+        id: `${run.id}-artifact-${index}`,
+        kind: "browser_check",
+        label: "Checked local preview",
+        target: artifact.url,
+        url: artifact.url,
+        title: project.verificationTitle,
+        screenshotPath: project.verificationScreenshotPath,
+        consoleErrors: project.verificationConsoleErrors,
+        status: project.verified ? "complete" : "warning",
+        permission: "network.web",
+        durationMs: project.verificationDurationMs,
+        detail: project.verificationDetail
+      };
+    }
+    return {
+      id: `${run.id}-artifact-${index}`,
+      kind: "directory_create",
+      label: artifact.label,
+      target: artifact.path,
+      status: "complete",
+      permission: "filesystem.write"
+    };
+  });
+}
+
+function PipelineSteps({ steps }: { steps: SessionPipelineStep[] }): JSX.Element {
+  return (
+    <ol className="pipeline-steps">
+      {steps.map((step) => (
+        <li className="pipeline-step" key={step.id}>
+          {step.label}
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function introForPipeline(name: string): string {
+  if (name.includes("Front End")) {
+    return "I can totally design the front end for you. I routed this according to your orchestration pipeline, then prepared the testing pass.";
+  }
+  if (name.includes("Coding")) {
+    return "I can handle that. I routed it through the coding pipeline and prepared the verification pass.";
+  }
+  return "I routed this according to your orchestration pipeline and kept the route trace attached.";
+}
+
+function makePendingTurn(id: string, prompt: string): ConversationTurn {
+  return { id, prompt, status: "running" };
+}
+
+function makePreviewRun(prompt: string): SessionRun {
+  const createdAt = new Date().toISOString();
+  const isFrontend = /\b(front\s*end|landing page|website|ui|design)\b/i.test(prompt);
+  const pipelineName = isFrontend ? "Front End Orchestration Pipeline" : "General Assistant Pipeline";
+  const steps: SessionPipelineStep[] = [
+    {
+      id: "route",
+      label: "Route through Metis Policy",
+      detail: "Browser preview cannot access Electron IPC, so this uses the safe preview route.",
+      status: "complete",
+      startedAt: createdAt,
+      completedAt: createdAt
+    },
+    {
+      id: "orchestration",
+      label: `Run ${pipelineName}`,
+      detail: "The desktop app will load skills, presets, context, and route overrides here.",
+      status: "complete",
+      startedAt: createdAt,
+      completedAt: createdAt
+    },
+    {
+      id: "provider",
+      label: "Call selected model",
+      detail: "Skipped in browser preview so no prompt is sent anywhere.",
+      status: "skipped",
+      startedAt: createdAt,
+      completedAt: createdAt
+    },
+    {
+      id: "verify",
+      label: isFrontend ? "Run Testing Orchestration Pipeline" : "Run Verification Pipeline",
+      detail: "The desktop app will connect this to browser checks, tests, screenshots, and file diffs.",
+      status: "skipped",
+      startedAt: createdAt,
+      completedAt: createdAt
+    }
+  ];
+  return {
+    id: `preview-${Date.now()}`,
+    createdAt,
+    completedAt: createdAt,
+    promptSha256: "preview",
+    promptPreview: prompt.slice(0, 180),
+    rawPromptStored: false,
+    pipelineName,
+    decision: {
+      source: "sample",
+      decision: {
+        ...samplePreviewDecision,
+        task_type: isFrontend ? "frontend_design" : "general_chat",
+        reason: "Browser preview cannot access Electron runtime APIs. The desktop app will route this through Metis Policy."
+      },
+      warnings: ["Electron runtime APIs are unavailable in browser preview."]
+    },
+    steps,
+    assistantText: isFrontend
+      ? "Your front end route is ready in the desktop runtime. Once project tools are enabled, Metis will create the files, start the preview, run checks, and return the localhost URL."
+      : "Your route is ready in the desktop runtime. Once providers and project tools are enabled, Metis will run the selected model and attach the result here.",
+    warnings: ["Electron runtime APIs are unavailable in browser preview."]
+  };
+}
+
+const samplePreviewDecision: PolicyDecisionResult["decision"] = {
+  schema_version: "0.1.0",
+  policy_version: "0.1.0",
+  created_at: "2026-06-29T00:00:00.000Z",
+  task_type: "general_chat",
+  prompt_profile: {
+    estimated_tokens: 0,
+    signals: [],
+    raw_prompt_stored: false,
+    prompt_sha256: "preview"
+  },
+  router_preset: "balanced",
+  selected_route: {
+    kind: "router",
+    preset: "balanced",
+    availability: "available"
+  },
+  confidence: 0,
+  fallback_routes: [],
+  reason: "Browser preview cannot access Electron runtime APIs. The desktop app will route this through Metis Policy.",
+  evidence: [],
+  scores: [],
+  warnings: [],
+  reproducibility: {
+    ruleset_version: "preview",
+    deterministic: true,
+    profile_id: "preview"
+  }
+};
+
+type Interaction =
+  | { type: "pan"; startClient: Vec; startPan: Vec }
+  | { type: "node"; id: string; offset: Vec; isSkill: boolean; moved: boolean }
+  | null;
+
+function loadNodes(): GraphNode[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as { nodes?: GraphNode[] };
+      if (parsed.nodes?.length) return parsed.nodes;
+    }
+  } catch {
+    /* ignore malformed cache */
+  }
+  return SEED_NODES;
+}
+
+function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; gallerySkills: string[] }): JSX.Element {
+  const [nodes, setNodes] = useState<GraphNode[]>(loadNodes);
+  const [pan, setPan] = useState<Vec>({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [interaction, setInteraction] = useState<Interaction>(null);
+  const [drag, setDrag] = useState<GhostDrag | null>(null);
+  const [overTarget, setOverTarget] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [pulse, setPulse] = useState<{ agentId: string; key: number } | null>(null);
+  const [routeTest, setRouteTest] = useState<RouteTestState | null>(null);
+  const [connectionStates, setConnectionStates] = useState<Partial<Record<ProviderKey, ProviderConnectionState>>>({ ollama: "local" });
+  const [sidePanelCollapsed, setSidePanelCollapsed] = useState(false);
+  const [hasSavedPreset, setHasSavedPreset] = useState(() => {
+    try {
+      return Boolean(localStorage.getItem(PRESET_STORAGE_KEY));
+    } catch {
+      return false;
+    }
+  });
+
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const ghostRef = useRef<HTMLDivElement | null>(null);
+  const lineRef = useRef<SVGLineElement | null>(null);
+  const pointerRef = useRef<Vec>({ x: 0, y: 0 });
+  const ghostPosRef = useRef<Vec>({ x: 0, y: 0 });
+  const rafRef = useRef<number | null>(null);
+  const idSeq = useRef(0);
+
+  const panRef = useRef(pan);
+  const zoomRef = useRef(zoom);
+  const nodesRef = useRef(nodes);
+  const dragRef = useRef(drag);
+  const overRef = useRef(overTarget);
+  const selectedRef = useRef(selected);
+  panRef.current = pan;
+  zoomRef.current = zoom;
+  nodesRef.current = nodes;
+  dragRef.current = drag;
+  overRef.current = overTarget;
+  selectedRef.current = selected;
+
+  const nextId = useCallback((prefix: string) => `${prefix}-${Date.now().toString(36)}-${idSeq.current++}`, []);
+  const posOf = useCallback((id: string): Vec => nodesRef.current.find((n) => n.id === id)?.pos ?? { x: 0, y: 0 }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ nodes }));
+    } catch {
+      /* storage may be unavailable */
+    }
+  }, [nodes]);
+
+  useEffect(() => {
+    let alive = true;
+    async function loadConnections(): Promise<void> {
+      if (!window.metisSecrets) return;
+      const secrets = await window.metisSecrets.list();
+      if (!alive) return;
+      const next: Partial<Record<ProviderKey, ProviderConnectionState>> = { ollama: "local" };
+      for (const secret of secrets) {
+        next[secret.provider] = secret.provider === "ollama" ? "local" : secret.hasSecret ? "connected" : "missing";
+      }
+      setConnectionStates(next);
+    }
+    void loadConnections();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const fitTo = useCallback((list: GraphNode[]) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect || list.length === 0) return;
+    const margin = 120;
+    const footprint = 78;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of list) {
+      minX = Math.min(minX, node.pos.x - footprint);
+      minY = Math.min(minY, node.pos.y - footprint);
+      maxX = Math.max(maxX, node.pos.x + footprint);
+      maxY = Math.max(maxY, node.pos.y + footprint);
+    }
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    const nextZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min((rect.width - margin * 2) / spanX, (rect.height - margin * 2) / spanY)));
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    setZoom(nextZoom);
+    setPan({ x: rect.width / 2 - cx * nextZoom, y: rect.height / 2 - cy * nextZoom });
+  }, []);
+
+  useLayoutEffect(() => {
+    fitTo(nodesRef.current);
+  }, [fitTo]);
+
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el) return;
+    function onWheel(event: WheelEvent): void {
+      event.preventDefault();
+      const rect = el!.getBoundingClientRect();
+      const cx = event.clientX - rect.left;
+      const cy = event.clientY - rect.top;
+      setZoom((prevZoom) => {
+        const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prevZoom * Math.exp(-event.deltaY * 0.0012)));
+        setPan((prevPan) => ({ x: cx - ((cx - prevPan.x) / prevZoom) * next, y: cy - ((cy - prevPan.y) / prevZoom) * next }));
+        return next;
+      });
+    }
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  function toWorld(clientX: number, clientY: number): Vec {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return { x: (clientX - rect.left - panRef.current.x) / zoomRef.current, y: (clientY - rect.top - panRef.current.y) / zoomRef.current };
+  }
+
+  // ----- Canvas pan + node repositioning (router / agent / skill) -----
+
+  function beginPan(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (event.button !== 0) return;
+    canvasRef.current?.setPointerCapture(event.pointerId);
+    setInteraction({ type: "pan", startClient: { x: event.clientX, y: event.clientY }, startPan: pan });
+  }
+
+  function onNodePointerDown(event: ReactPointerEvent<HTMLElement>, node: GraphNode): void {
+    if (event.button !== 0) return;
+    event.stopPropagation();
+    setSelected(node.id);
+    canvasRef.current?.setPointerCapture(event.pointerId);
+    const world = toWorld(event.clientX, event.clientY);
+    setInteraction({ type: "node", id: node.id, offset: { x: world.x - node.pos.x, y: world.y - node.pos.y }, isSkill: node.kind === "skill", moved: false });
+  }
+
+  function onCanvasPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (!interaction) return;
+    if (interaction.type === "pan") {
+      setPan({ x: interaction.startPan.x + (event.clientX - interaction.startClient.x), y: interaction.startPan.y + (event.clientY - interaction.startClient.y) });
+      return;
+    }
+    const world = toWorld(event.clientX, event.clientY);
+    const nextPos = { x: world.x - interaction.offset.x, y: world.y - interaction.offset.y };
+    setNodes((current) => current.map((node) => (node.id === interaction.id ? { ...node, pos: nextPos } : node)));
+    if (!interaction.moved) setInteraction({ ...interaction, moved: true });
+    if (interaction.isSkill) setOverTarget(nearestSkillTarget(nextPos, interaction.id));
+  }
+
+  function endCanvasPointer(event: ReactPointerEvent<HTMLDivElement>): void {
+    if (interaction?.type === "node" && interaction.isSkill && interaction.moved && overTarget) {
+      attachSkillToAgent(interaction.id, overTarget);
+    }
+    setOverTarget(null);
+    setInteraction(null);
+    if (canvasRef.current?.hasPointerCapture(event.pointerId)) canvasRef.current.releasePointerCapture(event.pointerId);
+  }
+
+  function nearestSkillTarget(pos: Vec, skipId?: string): string | null {
+    const isExistingSkill = Boolean(skipId && nodesRef.current.some((node) => node.id === skipId && node.kind === "skill"));
+    const nodeRadius = (isExistingSkill ? EXISTING_SKILL_TARGET_RADIUS : TARGET_RADIUS) / zoomRef.current;
+    const routeRadius = (isExistingSkill ? EXISTING_SKILL_ROUTE_RADIUS : ROUTE_TARGET_RADIUS) / zoomRef.current;
+    const router = nodesRef.current.find((node) => node.kind === "router");
+    const currentAgentId = skipId ? attachedAgentForSkill(skipId) : null;
+    let best: string | null = null;
+    let bestDist = Infinity;
+    let currentDist = Infinity;
+    for (const node of nodesRef.current) {
+      if (node.kind !== "agent" || node.id === skipId) continue;
+      let dist = Math.hypot(node.pos.x - pos.x, node.pos.y - pos.y);
+      let threshold = nodeRadius;
+      if (router) {
+        const skillIds = (node.skills ?? []).filter((id) => id !== skipId);
+        for (const segment of routeSegments(router.pos, node, skillIds, posOf)) {
+          const routeDist = distancePointToSegment(pos, segment.from, segment.to);
+          if (routeDist < dist) {
+            dist = routeDist;
+            threshold = routeRadius;
+          }
+        }
+      }
+      if (node.id === currentAgentId) currentDist = dist;
+      if (dist < threshold && dist < bestDist) {
+        bestDist = dist;
+        best = node.id;
+      }
+    }
+    if (isExistingSkill && currentAgentId && best && best !== currentAgentId && currentDist < Infinity && bestDist > currentDist * 0.55) {
+      return currentAgentId;
+    }
+    return best;
+  }
+
+  function attachedAgentForSkill(skillId: string): string | null {
+    return nodesRef.current.find((node) => node.kind === "agent" && node.skills?.includes(skillId))?.id ?? null;
+  }
+
+  function attachSkillToAgent(skillId: string, agentId: string): void {
+    setNodes((list) =>
+      list.map((node) => {
+        if (node.kind !== "agent") return node;
+        const without = (node.skills ?? []).filter((id) => id !== skillId);
+        if (node.id === agentId) return { ...node, skills: [...without, skillId] };
+        return without.length === (node.skills ?? []).length ? node : { ...node, skills: without };
+      })
+    );
+  }
+
+  // ----- Ghost drag from the palette (wobble physics) -----
+
+  const findGhostTarget = useCallback((clientX: number, clientY: number): string | null => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const payload = dragRef.current?.payload;
+    if (!rect || !payload) return null;
+    const wx = (clientX - rect.left - panRef.current.x) / zoomRef.current;
+    const wy = (clientY - rect.top - panRef.current.y) / zoomRef.current;
+    if (payload.kind === "skill") return nearestSkillTarget({ x: wx, y: wy });
+    const radius = TARGET_RADIUS / zoomRef.current;
+    let best: string | null = null;
+    let bestDist = radius;
+    for (const node of nodesRef.current) {
+      if (node.kind !== "agent" && node.kind !== "router") continue;
+      const dist = Math.hypot(node.pos.x - wx, node.pos.y - wy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = node.id;
+      }
+    }
+    return best;
+  }, []);
+
+  const ghostFrame = useCallback(() => {
+    const pointer = pointerRef.current;
+    const ghost = ghostPosRef.current;
+    ghost.x += (pointer.x - ghost.x) * GHOST_FOLLOW;
+    ghost.y += (pointer.y - ghost.y) * GHOST_FOLLOW;
+    const lagX = pointer.x - ghost.x;
+    const tilt = prefersReducedMotion ? 0 : Math.max(-MAX_TILT, Math.min(MAX_TILT, lagX * 0.45));
+    if (ghostRef.current) {
+      ghostRef.current.style.transform = `translate(${ghost.x}px, ${ghost.y}px) translate(-50%, -50%) scale(${zoomRef.current}) rotate(${tilt}deg)`;
+    }
+    if (lineRef.current) {
+      const over = overRef.current;
+      const payload = dragRef.current?.payload;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      const target = over ? nodesRef.current.find((node) => node.id === over) : null;
+      if (over && target && rect && payload?.kind === "skill") {
+        lineRef.current.setAttribute("opacity", "1");
+        lineRef.current.setAttribute("x1", String(ghost.x));
+        lineRef.current.setAttribute("y1", String(ghost.y));
+        lineRef.current.setAttribute("x2", String(rect.left + panRef.current.x + target.pos.x * zoomRef.current));
+        lineRef.current.setAttribute("y2", String(rect.top + panRef.current.y + target.pos.y * zoomRef.current));
+      } else {
+        lineRef.current.setAttribute("opacity", "0");
+      }
+    }
+    rafRef.current = requestAnimationFrame(ghostFrame);
+  }, []);
+
+  const onGhostMove = useCallback(
+    (event: PointerEvent) => {
+      pointerRef.current = { x: event.clientX, y: event.clientY };
+      const next = findGhostTarget(event.clientX, event.clientY);
+      if (next !== overRef.current) setOverTarget(next);
+    },
+    [findGhostTarget]
+  );
+
+  const finishGhostDrag = useCallback((): void => {
+    window.removeEventListener("pointermove", onGhostMove);
+    window.removeEventListener("pointerup", finishGhostDrag);
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+
+    const current = dragRef.current;
+    const pointer = pointerRef.current;
+    const over = overRef.current ?? findGhostTarget(pointer.x, pointer.y);
+    const dropElement = document.elementFromPoint(pointer.x, pointer.y);
+    const cancelledIntoLibrary = Boolean(dropElement?.closest(".side-panel-shell, .palette, .utility-panel, .panel-rail-toggle"));
+    const inspectorDrop = Boolean(dropElement?.closest(".palette.inspector"));
+    if (current) {
+      const { payload } = current;
+      const inspectorTarget = inspectorDrop ? selectedRef.current : null;
+      if (payload.kind === "model" && inspectorTarget) {
+        setNodes((list) => list.map((node) => (node.id === inspectorTarget && node.kind !== "skill" ? { ...node, provider: payload.provider, model: payload.model } : node)));
+        setSelected(inspectorTarget);
+      } else if (cancelledIntoLibrary) {
+        /* The user dragged it back to the library, so treat this as cancel. */
+      } else if (payload.kind === "model" && over) {
+        setNodes((list) => list.map((node) => (node.id === over ? { ...node, provider: payload.provider, model: payload.model } : node)));
+        setSelected(over);
+      } else if (payload.kind === "model") {
+        const world = toWorld(pointer.x, pointer.y);
+        const agentId = nextId("agent");
+        setNodes((list) => [
+          ...list,
+          {
+            id: agentId,
+            kind: "agent",
+            label: payload.model,
+            pos: world,
+            provider: payload.provider,
+            model: payload.model,
+            intent: "new route",
+            temperature: 0.4,
+            skills: []
+          }
+        ]);
+        setSelected(agentId);
+      } else if (payload.kind === "skill") {
+        const world = toWorld(pointer.x, pointer.y);
+        const skillId = nextId("skill");
+        setNodes((list) => {
+          const next = [...list, { id: skillId, kind: "skill" as const, label: payload.name, pos: world }];
+          if (!over) return next;
+          return next.map((node) =>
+            node.kind === "agent" && node.id === over ? { ...node, skills: [...(node.skills ?? []), skillId] } : node
+          );
+        });
+      }
+    }
+    setDrag(null);
+    setOverTarget(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [findGhostTarget, nextId, onGhostMove]);
+
+  function startGhostDrag(clientX: number, clientY: number, payload: DragPayload): void {
+    pointerRef.current = { x: clientX, y: clientY };
+    ghostPosRef.current = { x: clientX, y: clientY };
+    setDrag({ payload });
+    setOverTarget(findGhostTarget(clientX, clientY));
+    window.addEventListener("pointermove", onGhostMove);
+    window.addEventListener("pointerup", finishGhostDrag);
+    rafRef.current = requestAnimationFrame(ghostFrame);
+  }
+
+  useEffect(() => {
+    return () => {
+      window.removeEventListener("pointermove", onGhostMove);
+      window.removeEventListener("pointerup", finishGhostDrag);
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, [onGhostMove, finishGhostDrag]);
+
+  // ----- Node mutations (inspector) -----
+
+  const updateNode = useCallback((id: string, patch: Partial<GraphNode>) => {
+    setNodes((list) => list.map((node) => (node.id === id ? { ...node, ...patch } : node)));
+  }, []);
+
+  function removeNode(id: string): void {
+    setNodes((list) =>
+      list.filter((node) => node.id !== id).map((node) => (node.kind === "agent" && node.skills ? { ...node, skills: node.skills.filter((s) => s !== id) } : node))
+    );
+    setSelected((current) => (current === id ? null : current));
+  }
+
+  function detachSkill(skillId: string): void {
+    setNodes((list) => list.map((node) => (node.kind === "agent" && node.skills?.includes(skillId) ? { ...node, skills: node.skills.filter((s) => s !== skillId) } : node)));
+  }
+
+  function applyPreset(key: PresetKey): void {
+    const preset = PRESETS.find((p) => p.key === key);
+    if (!preset) return;
+    setNodes((list) =>
+      list.map((node) => {
+        if (node.kind === "router") return { ...node, provider: preset.router.provider, model: preset.router.model };
+        if (node.kind === "agent") {
+          const ref = preset.pick((node.intent ?? node.label).toLowerCase());
+          return { ...node, provider: ref.provider, model: ref.model };
+        }
+        return node;
+      })
+    );
+  }
+
+  function savePreset(): void {
+    try {
+      localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify({ nodes: nodesRef.current, saved_at: new Date().toISOString() }));
+      setHasSavedPreset(true);
+    } catch {
+      /* storage may be unavailable */
+    }
+  }
+
+  function loadPreset(): void {
+    try {
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { nodes?: GraphNode[] };
+      if (!parsed.nodes?.length) return;
+      setNodes(parsed.nodes);
+      setSelected(null);
+      fitTo(parsed.nodes);
+    } catch {
+      /* ignore malformed presets */
+    }
+  }
+
+  function runTest(agentId: string): void {
+    const agent = nodesRef.current.find((node) => node.id === agentId);
+    const status = agent?.provider ? providerConnectionStatus(agent.provider, connectionStates) : "unknown";
+    setPulse({ agentId, key: Date.now() });
+    setSelected(agentId);
+    if (status !== "local" && status !== "connected") {
+      setRouteTest({
+        agentId,
+        status: "error",
+        startedAt: Date.now(),
+        completedAt: Date.now(),
+        message: "Provider API key is not connected. Add it in Settings before testing this route."
+      });
+      window.setTimeout(() => setPulse((current) => (current?.agentId === agentId ? null : current)), 900);
+      return;
+    }
+    setRouteTest({ agentId, status: "running", startedAt: Date.now() });
+    window.setTimeout(() => setPulse((current) => (current?.agentId === agentId ? null : current)), 2000);
+    window.setTimeout(() => setRouteTest((current) => (current?.agentId === agentId ? { ...current, status: "complete", completedAt: Date.now() } : current)), 1900);
+  }
+
+  function zoomBy(factor: number): void {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    const cx = rect ? rect.width / 2 : 0;
+    const cy = rect ? rect.height / 2 : 0;
+    setZoom((prevZoom) => {
+      const next = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, prevZoom * factor));
+      setPan((prevPan) => ({ x: cx - ((cx - prevPan.x) / prevZoom) * next, y: cy - ((cy - prevPan.y) / prevZoom) * next }));
+      return next;
+    });
+  }
+
+  function resetGraph(): void {
+    setNodes(SEED_NODES);
+    setSelected(null);
+    fitTo(SEED_NODES);
+  }
+
+  const agents = nodes.filter((node) => node.kind === "agent");
+  const routerNode = nodes.find((node) => node.kind === "router");
+  const selectedNode = nodes.find((node) => node.id === selected) ?? null;
+  const gridSize = 42 * zoom;
+
+  type EdgeSeg = { id: string; d: string; active: boolean };
+  const edges: EdgeSeg[] = [];
+  const intentPills: { id: string; pos: Vec; text: string; agentId: string; active: boolean }[] = [];
+  if (routerNode) {
+    for (const agent of agents) {
+      const active = selected === agent.id || selected === routerNode.id || (agent.skills ?? []).includes(selected ?? "");
+      const skillIds = agent.skills ?? [];
+      routeSegments(routerNode.pos, agent, skillIds, posOf).forEach((segment, index) => {
+        edges.push({ id: `${agent.id}-route-${index}`, d: curve(segment.from, segment.to), active });
+      });
+      if (agent.intent) {
+        intentPills.push({ id: `intent-${agent.id}`, pos: lerp(routerNode.pos, agent.pos, 0.4), text: agent.intent, agentId: agent.id, active });
+      }
+    }
+  }
+  const pulseAgent = pulse ? nodes.find((n) => n.id === pulse.agentId) : null;
+  const pulsePath = pulse && routerNode && pulseAgent ? curve(routerNode.pos, pulseAgent.pos) : "";
+  // Packet that travels the route while a test run is in flight. It rides the
+  // actual drawn route segments (router -> skills -> agent), not a straight
+  // center-to-center line, so it visibly follows the path.
+  const packetAgent = routeTest && routeTest.status !== "error" ? nodes.find((n) => n.id === routeTest.agentId) : null;
+  const packetPath = packetAgent
+    ? edges
+        .filter((edge) => edge.id.startsWith(`${packetAgent.id}-route-`))
+        .map((edge) => edge.d)
+        .join(" ")
+    : "";
+  const packetRunning = routeTest?.status === "running";
+  const sidePanel = selectedNode ? (
+    <NodeInspector
+      node={selectedNode}
+      nodes={nodes}
+      onClose={() => setSelected(null)}
+      onUpdate={updateNode}
+      onDelete={removeNode}
+      onDetachSkill={detachSkill}
+      connectionStates={connectionStates}
+      routeTest={routeTest?.agentId === selectedNode.id ? routeTest : null}
+      onTest={runTest}
+    />
+  ) : activeNav === "routines" ? (
+    <RoutinesPanel />
+  ) : (
+    <Palette
+      gallerySkills={gallerySkills}
+      hasSavedPreset={hasSavedPreset}
+      onLoadPreset={loadPreset}
+      onPick={startGhostDrag}
+      onPreset={applyPreset}
+      onSavePreset={savePreset}
+    />
+  );
+
+  return (
+    <main className={`graph-workspace ${sidePanelCollapsed ? "panel-collapsed" : ""}`} aria-label="Router pipeline graph">
+      <div
+        className={`graph-canvas ${interaction?.type === "pan" ? "panning" : ""} ${drag ? "dragging-item" : ""}`}
+        ref={canvasRef}
+        onPointerDown={beginPan}
+        onPointerMove={onCanvasPointerMove}
+        onPointerUp={endCanvasPointer}
+        onPointerCancel={endCanvasPointer}
+        style={{ backgroundPosition: `${pan.x}px ${pan.y}px`, backgroundSize: `${gridSize}px ${gridSize}px` }}
+      >
+        <div className="graph-world" style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}>
+          <svg className="graph-edges" width="1" height="1" aria-hidden="true">
+            {edges.map((edge) => (
+              <g key={edge.id}>
+                <path className={`edge route-edge ${edge.active ? "active" : ""}`} d={edge.d} vectorEffect="non-scaling-stroke" />
+                {!prefersReducedMotion ? <path className={`edge route-flow ${edge.active ? "active" : ""}`} d={edge.d} vectorEffect="non-scaling-stroke" /> : null}
+              </g>
+            ))}
+            {packetPath && packetRunning && !prefersReducedMotion ? (
+              // key by the run's start time so each Run Test remounts + restarts the SMIL motion.
+              <g className="route-packet running" key={routeTest?.startedAt}>
+                <rect className="packet-trail" x="-11" y="-5" width="22" height="10" rx="5">
+                  <animateMotion dur="0.95s" path={packetPath} rotate="auto" repeatCount="indefinite" />
+                </rect>
+                <rect className="packet-body" x="-7" y="-4" width="14" height="8" rx="3">
+                  <animateMotion dur="0.95s" path={packetPath} rotate="auto" repeatCount="indefinite" />
+                </rect>
+              </g>
+            ) : pulse && pulsePath ? (
+              <circle key={pulse.key} className="route-pulse" r="7">
+                <animateMotion dur="1.2s" path={pulsePath} fill="freeze" />
+              </circle>
+            ) : null}
+          </svg>
+
+          {intentPills.map((pill) => (
             <button
-              className={`graph-node ${node.status} ${node.type === selected ? "selected" : ""}`}
-              key={node.type}
+              key={pill.id}
+              className={`route-pill ${pill.active ? "active" : ""}`}
               type="button"
-              onClick={() => setSelected(node.type)}
+              style={{ left: `${pill.pos.x}px`, top: `${pill.pos.y}px` }}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                setSelected(pill.agentId);
+              }}
             >
-              <span>{node.label}</span>
-              <strong>{node.route}</strong>
-              <small>{node.confidence}</small>
+              {pill.text}
+            </button>
+          ))}
+
+          {nodes.map((node) => (
+            <NodeCard
+              key={node.id}
+              node={node}
+              selected={selected === node.id}
+              targetMode={overTarget === node.id ? (drag?.payload.kind ?? (interaction?.type === "node" && interaction.isSkill ? "skill" : null)) : null}
+              onPointerDown={onNodePointerDown}
+              onDelete={removeNode}
+            />
+          ))}
+        </div>
+
+        <div className="graph-toolbar" role="toolbar" aria-label="Canvas controls">
+          <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)}>
+            <ZoomOut size={16} />
+          </button>
+          <span className="zoom-readout">{Math.round(zoom * 100)}%</span>
+          <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.2)}>
+            <ZoomIn size={16} />
+          </button>
+          <span className="toolbar-divider" aria-hidden="true" />
+          <button type="button" aria-label="Fit to view" onClick={() => fitTo(nodesRef.current)}>
+            <Maximize2 size={15} />
+          </button>
+          <button type="button" aria-label="Reset pipeline" onClick={resetGraph}>
+            <RotateCcw size={15} />
+          </button>
+          <button
+            type="button"
+            className="toolbar-run"
+            aria-label="Run selected route test"
+            disabled={selectedNode?.kind !== "agent"}
+            onClick={() => {
+              if (selectedNode?.kind === "agent") runTest(selectedNode.id);
+            }}
+          >
+            <Play size={14} />
+            <span>Run test</span>
+          </button>
+        </div>
+
+        <p className="graph-hint">Drag to pan - scroll to zoom - click a node to inspect it - drag skills and models from Library</p>
+      </div>
+
+      {sidePanelCollapsed ? (
+        <button className="panel-rail-toggle" type="button" onClick={() => setSidePanelCollapsed(false)}>
+          <ChevronLeft size={16} />
+          <span>Library</span>
+        </button>
+      ) : (
+        <div className="side-panel-shell">
+          <button className="panel-collapse-toggle" type="button" aria-label="Collapse library panel" onClick={() => setSidePanelCollapsed(true)}>
+            <ChevronRight size={16} />
+          </button>
+          {sidePanel}
+        </div>
+      )}
+
+      {drag ? (
+        <div className="drag-layer" aria-hidden="true">
+          <svg className="drag-overlay">
+            <line ref={lineRef} className="pending-line" opacity="0" />
+          </svg>
+          <div className="drag-ghost" ref={ghostRef}>
+            {drag.payload.kind === "model" ? (
+              <>
+                <span className="node-icon logo">
+                  <img alt="" src={PROVIDERS[drag.payload.provider].logo} />
+                </span>
+                <span className="node-caption">
+                  <strong>{PROVIDERS[drag.payload.provider].label}</strong>
+                  <small>{drag.payload.model}</small>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="node-icon skill">
+                  <ClipboardList size={24} strokeWidth={1.8} />
+                </span>
+                <span className="node-caption">
+                  <strong>{drag.payload.name}</strong>
+                  <small>Skill · loads first</small>
+                </span>
+              </>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </main>
+  );
+}
+
+function NodeCard({
+  node,
+  selected,
+  targetMode,
+  onPointerDown,
+  onDelete
+}: {
+  node: GraphNode;
+  selected: boolean;
+  targetMode: DragPayload["kind"] | null;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>, node: GraphNode) => void;
+  onDelete: (id: string) => void;
+}): JSX.Element {
+  const provider = node.provider ? PROVIDERS[node.provider] : null;
+  const sublabel = node.kind === "skill" ? "Skill · loads first" : `${provider?.label ?? "Unassigned"}${node.model ? ` · ${node.model}` : ""}`;
+  const fallbacks = node.fallbacks ?? [];
+
+  return (
+    <article
+      aria-label={`${node.label} ${sublabel}`}
+      className={["graph-node", `${node.kind}-node`, selected ? "selected" : "", targetMode === "model" ? "target-model" : "", targetMode === "skill" ? "target-skill" : ""]
+        .filter(Boolean)
+        .join(" ")}
+      role="button"
+      tabIndex={0}
+      style={{ left: `${node.pos.x}px`, top: `${node.pos.y}px` }}
+      onPointerDown={(event) => onPointerDown(event, node)}
+    >
+      <span className={node.kind === "skill" ? "node-icon skill" : "node-icon logo"}>
+        {node.kind !== "router" ? (
+          <button
+            className="node-delete"
+            type="button"
+            aria-label={`Remove ${node.label}`}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete(node.id);
+            }}
+          >
+            <X size={12} />
+          </button>
+        ) : null}
+        {node.kind === "router" ? <span className="node-tag">ROUTER</span> : null}
+        {provider?.tier === "local" && node.kind !== "skill" ? <span className="node-pill">local</span> : null}
+        {node.kind === "skill" ? <ClipboardList size={24} strokeWidth={1.8} /> : <img alt="" src={provider?.logo ?? PROVIDERS.qwen.logo} />}
+      </span>
+
+      <span className="node-caption">
+        <strong>{node.label}</strong>
+        <small>{sublabel}</small>
+      </span>
+
+      {fallbacks.length ? (
+        <span className="node-fallbacks" aria-hidden="true">
+          {fallbacks.slice(0, 3).map((ref, index) => (
+            <span className="fallback-dot" key={`${ref.provider}-${ref.model}-${index}`} title={`${PROVIDERS[ref.provider].label} ${ref.model}`}>
+              <img alt="" src={PROVIDERS[ref.provider].logo} />
+            </span>
+          ))}
+          <em>fallback</em>
+        </span>
+      ) : null}
+    </article>
+  );
+}
+
+function Palette({
+  gallerySkills,
+  hasSavedPreset,
+  onLoadPreset,
+  onPick,
+  onPreset,
+  onSavePreset
+}: {
+  gallerySkills: string[];
+  hasSavedPreset: boolean;
+  onLoadPreset: () => void;
+  onPick: (clientX: number, clientY: number, payload: DragPayload) => void;
+  onPreset: (key: PresetKey) => void;
+  onSavePreset: () => void;
+}): JSX.Element {
+  const [tab, setTab] = useState<"skills" | "models" | "presets">("skills");
+  const [query, setQuery] = useState("");
+
+  const skills = useMemo(() => [...new Set([...SKILL_LIBRARY, ...gallerySkills])].filter((name) => name.toLowerCase().includes(query.toLowerCase())), [gallerySkills, query]);
+  const models = useMemo(() => MODEL_LIBRARY.filter((entry) => `${PROVIDERS[entry.provider].label} ${entry.model}`.toLowerCase().includes(query.toLowerCase())), [query]);
+  const showSearch = tab === "skills" || tab === "models";
+
+  function pick(event: ReactPointerEvent<HTMLDivElement>, payload: DragPayload): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    onPick(event.clientX, event.clientY, payload);
+  }
+
+  return (
+    <aside className="palette" aria-label="Pipeline library">
+      <header className="palette-head">
+        <h2>Library</h2>
+        <p>Drag onto the pipeline to wire it up</p>
+      </header>
+
+      <div className="palette-tabs" role="tablist">
+        <button type="button" role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}>
+          <Layers size={15} /> Skills
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "models"} className={tab === "models" ? "active" : ""} onClick={() => setTab("models")}>
+          <Cpu size={15} /> Models
+        </button>
+        <button type="button" role="tab" aria-selected={tab === "presets"} className={tab === "presets" ? "active" : ""} onClick={() => setTab("presets")}>
+          <Star size={15} /> Presets
+        </button>
+      </div>
+
+      {showSearch ? (
+        <label className="palette-search">
+          <Search size={14} />
+          <input type="text" value={query} placeholder={tab === "skills" ? "Search skills" : "Search models"} onChange={(event) => setQuery(event.target.value)} />
+        </label>
+      ) : null}
+
+      <div className="palette-list">
+        {tab === "skills"
+          ? skills.map((name) => (
+              <div key={name} className="palette-item skill" onPointerDown={(event) => pick(event, { kind: "skill", name })}>
+                <span className="palette-icon skill">
+                  <ClipboardList size={16} strokeWidth={1.9} />
+                </span>
+                <span className="palette-label">{name}</span>
+              </div>
+            ))
+          : tab === "models"
+            ? models.map((entry) => (
+              <div key={`${entry.provider}-${entry.model}`} className="palette-item model" onPointerDown={(event) => pick(event, { kind: "model", provider: entry.provider, model: entry.model })}>
+                <span className="palette-icon logo">
+                  <img alt="" src={PROVIDERS[entry.provider].logo} />
+                </span>
+                <span className="palette-label">
+                  <strong>{PROVIDERS[entry.provider].label}</strong>
+                  <small>
+                    {entry.model}
+                    {PROVIDERS[entry.provider].tier === "local" ? " · local" : ""}
+                  </small>
+                </span>
+              </div>
+            ))
+          : null}
+        {tab === "presets" ? (
+          <div className="preset-library">
+            {PRESETS.map((preset) => (
+              <button key={preset.key} type="button" className={`preset-library-card ${preset.key === "recommended" ? "recommended" : ""}`} onClick={() => onPreset(preset.key)}>
+                <span>{preset.label}</span>
+                <small>{preset.note}</small>
+              </button>
+            ))}
+            <div className="panel-actions">
+              <button type="button" onClick={onSavePreset}>
+                Save current
+              </button>
+              <button type="button" disabled={!hasSavedPreset} onClick={onLoadPreset}>
+                Load saved
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <footer className="palette-foot">
+        {tab === "skills"
+          ? "Drag a skill onto an agent or route line. It will load before that route runs."
+          : tab === "models"
+            ? "Drag a model onto an agent or router to set who handles that call."
+            : "Presets are local for now. Save/load keeps this graph read-write without a backend."}
+      </footer>
+    </aside>
+  );
+}
+
+/** Assigns a project (or other grouping key) a stable muted hue from GRAPH_HUE_RAMP, so the same project always gets the same color group. */
+function hueForKey(key: string): number {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0;
+  return GRAPH_HUE_RAMP[hash % GRAPH_HUE_RAMP.length];
+}
+
+/** Base built-in color-group rules: packages first (distinct base tone), then per-project hues, falling back to node-type greys. A rule is {match, color} so query-based rules can slot in later without touching the renderer.
+ *  Owner feedback (docs/FABLE_PLANS.md section 17): the hue ramp is OPT-IN via the graph settings
+ *  "Colour by project" toggle (default off) — when disabled this returns no rules at all, so every
+ *  node falls through to the sleek-dark greyscale in colorForNode(). */
+function buildColorRules(graphNodes: MemoryGraphNode[], colorByProject: boolean): ColorRule[] {
+  if (!colorByProject) return [];
+  const projectKeys = new Set<string>();
+  for (const node of graphNodes) {
+    if (node.type === "project") projectKeys.add(node.id);
+  }
+  const rules: ColorRule[] = [
+    { id: "package", match: (node) => node.type === "file" && node.detail === "installed package", color: "hsl(45 55% 58%)", label: "Packages" }
+  ];
+  for (const key of projectKeys) {
+    rules.push({
+      id: `project:${key}`,
+      match: (node) => node.id === key || node.path?.includes(key) === true,
+      color: `hsl(${hueForKey(key)} 38% 58%)`,
+      label: key
+    });
+  }
+  return rules;
+}
+
+/** Sleek-dark greyscale body fill — colour (when the opt-in "Colour by project" rule matches) is the
+ *  only source of hue; otherwise every node type reads as the same neutral dark grey per node.kind
+ *  weight (home slightly brighter than a leaf note), matching the rest of the app's palette. */
+function colorForNode(node: MemoryGraphNode, rules: ColorRule[]): string {
+  for (const rule of rules) {
+    if (rule.match(node)) return rule.color;
+  }
+  switch (node.type) {
+    case "home":
+      return "#3a3a3a";
+    case "project":
+      return "#333333";
+    case "conversation":
+      return "#2f2f2f";
+    case "run":
+      return "#2d2d2d";
+    case "operation":
+      return "#2b2b2b";
+    case "folder":
+      return "#2a2a2a";
+    default:
+      return "#2a2a2a";
+  }
+}
+
+const GRAPH_KINETIC_SLEEP_THRESHOLD = 0.015;
+const GRAPH_DAMPING = 0.86;
+
+/** Seeds physics bodies for a node set, reusing prior positions/velocity where the id already existed (keeps the sim continuous across data refreshes). */
+function seedPhysicsNodes(graphNodes: MemoryGraphNode[], degree: Map<string, number>, prior: Map<string, PhysicsNode>): Map<string, PhysicsNode> {
+  const next = new Map<string, PhysicsNode>();
+  graphNodes.forEach((node, index) => {
+    const existing = prior.get(node.id);
+    const d = degree.get(node.id) ?? 0;
+    const radius = Math.max(6, Math.min(30, 6 + d * 2.4 + (node.size ?? 18) * 0.25));
+    if (existing) {
+      next.set(node.id, { ...existing, degree: d, radius });
+      return;
+    }
+    const angle = (index / Math.max(1, graphNodes.length)) * Math.PI * 2;
+    const spread = 90 + (index % 7) * 40;
+    const x = node.pos.x || Math.cos(angle) * spread;
+    const y = node.pos.y || Math.sin(angle) * spread;
+    next.set(node.id, { id: node.id, x, y, px: x, py: y, degree: d, pinned: false, radius });
+  });
+  return next;
+}
+
+/**
+ * One verlet-integration physics step for the Graph View force sim (Obsidian-style):
+ * pairwise Coulomb-ish repulsion (capped, O(n^2) — fine at the hundreds-of-nodes scale this view sees),
+ * spring attraction along edges toward `linkDistance`, and gravity pulling every free node toward the origin.
+ * Returns the total kinetic energy so the caller can decide whether the sim should keep animating or sleep.
+ */
+function stepPhysics(
+  nodes: Map<string, PhysicsNode>,
+  links: MemoryGraphLink[],
+  settings: GraphPhysicsSettings,
+  draggingId: string | null,
+  dt: number
+): number {
+  const list = Array.from(nodes.values());
+  const forces = new Map<string, Vec>(list.map((n) => [n.id, { x: 0, y: 0 }]));
+
+  // Pairwise repulsion (Coulomb-ish, capped so close overlaps don't blow up).
+  const repelK = 2600 * settings.repelForce;
+  for (let i = 0; i < list.length; i++) {
+    for (let j = i + 1; j < list.length; j++) {
+      const a = list[i];
+      const b = list[j];
+      let dx = a.x - b.x;
+      let dy = a.y - b.y;
+      let distSq = dx * dx + dy * dy;
+      if (distSq < 1) {
+        dx = Math.random() - 0.5;
+        dy = Math.random() - 0.5;
+        distSq = 1;
+      }
+      const dist = Math.sqrt(distSq);
+      const force = Math.min(120, repelK / distSq);
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      forces.get(a.id)!.x += fx;
+      forces.get(a.id)!.y += fy;
+      forces.get(b.id)!.x -= fx;
+      forces.get(b.id)!.y -= fy;
+    }
+  }
+
+  // Spring attraction along edges toward the target link distance.
+  const springK = 0.045;
+  for (const link of links) {
+    const a = nodes.get(link.from);
+    const b = nodes.get(link.to);
+    if (!a || !b) continue;
+    let dx = b.x - a.x;
+    let dy = b.y - a.y;
+    const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
+    const target = settings.linkDistance * (link.strength ? 1 / Math.min(2, link.strength) : 1);
+    const delta = (dist - target) * springK;
+    const fx = (dx / dist) * delta;
+    const fy = (dy / dist) * delta;
+    forces.get(a.id)!.x += fx;
+    forces.get(a.id)!.y += fy;
+    forces.get(b.id)!.x -= fx;
+    forces.get(b.id)!.y -= fy;
+  }
+
+  // Center gravity — keeps free nodes from drifting off into the void.
+  const gravityK = 0.0022 * settings.centerForce;
+  for (const node of list) {
+    forces.get(node.id)!.x += -node.x * gravityK;
+    forces.get(node.id)!.y += -node.y * gravityK;
+  }
+
+  let kinetic = 0;
+  for (const node of list) {
+    if (node.id === draggingId) {
+      node.px = node.x;
+      node.py = node.y;
+      continue;
+    }
+    const f = forces.get(node.id)!;
+    const vx = (node.x - node.px) * GRAPH_DAMPING + f.x * dt * dt;
+    const vy = (node.y - node.py) * GRAPH_DAMPING + f.y * dt * dt;
+    node.px = node.x;
+    node.py = node.y;
+    node.x += vx;
+    node.y += vy;
+    kinetic += vx * vx + vy * vy;
+  }
+  return kinetic;
+}
+
+/** Builds the neighbor-depth filter for local graph mode: BFS out from `rootId` up to `depth` hops. */
+function localGraphIds(rootId: string, links: MemoryGraphLink[], depth: number): Set<string> {
+  const adjacency = new Map<string, string[]>();
+  for (const link of links) {
+    (adjacency.get(link.from) ?? adjacency.set(link.from, []).get(link.from)!).push(link.to);
+    (adjacency.get(link.to) ?? adjacency.set(link.to, []).get(link.to)!).push(link.from);
+  }
+  const visited = new Set<string>([rootId]);
+  let frontier = [rootId];
+  for (let hop = 0; hop < depth; hop++) {
+    const next: string[] = [];
+    for (const id of frontier) {
+      for (const neighbor of adjacency.get(id) ?? []) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          next.push(neighbor);
+        }
+      }
+    }
+    frontier = next;
+    if (frontier.length === 0) break;
+  }
+  return visited;
+}
+
+function MemoryGraphWorkspace({
+  onConversationOpen,
+  sidebarProjects = [],
+  sidebarConversationsByProject = {}
+}: {
+  onConversationOpen?: (id: string) => void;
+  /** Same project/conversation data the left Sidebar uses (docs/FABLE_PLANS.md section 16/17) —
+   *  powers the right directory rail so the graph doubles as a quick-access file browser. */
+  sidebarProjects?: ProjectFolder[];
+  sidebarConversationsByProject?: Record<string, SidebarConversation[]>;
+}): JSX.Element {
+  const [pan, setPan] = useState<Vec>({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [treeCollapsed, setTreeCollapsed] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [focusRoot, setFocusRoot] = useState<string | null>(null);
+  const [focusDepth, setFocusDepth] = useState(2);
+  const [runtimeConversations, setRuntimeConversations] = useState<ConversationRecord[]>([]);
+  const [runtimeRuns, setRuntimeRuns] = useState<SessionRun[]>([]);
+  const [installedPackages, setInstalledPackages] = useState<RegistryPackage[]>([]);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [physics, setPhysics, physicsLoaded] = useAppStoreState<GraphPhysicsSettings>("graphPhysics", DEFAULT_GRAPH_PHYSICS);
+  const [colorByProject, setColorByProject] = useAppStoreState<boolean>("graphColorByProject", false);
+  const [railCollapsed, setRailCollapsed] = useAppStoreState<boolean>("graphRailCollapsed", false);
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({
+    "agent-memory": true,
+    "ad-helpdesk": true,
+    metis: true,
+    "metis-orchestrator": true,
+    runtime: true
+  });
+  const [dragging, setDragging] = useState<{ startClient: Vec; startPan: Vec } | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+  const canvasElRef = useRef<HTMLCanvasElement | null>(null);
+  // Tracks the pointerdown client position so pointerup can tell a click (no/tiny movement) from a
+  // drag (owner feedback: click on a conversation-backed node should OPEN it, drag should still move it).
+  const pointerDownAtRef = useRef<Vec | null>(null);
+
+  const runtimeGraph = useMemo(() => buildRuntimeMemoryGraph(runtimeConversations, runtimeRuns), [runtimeConversations, runtimeRuns]);
+
+  const packageNodes = useMemo<MemoryGraphNode[]>(
+    () =>
+      installedPackages.slice(0, 40).map((pkg, index) => ({
+        id: `package-${pkg.id}`,
+        label: pkg.name,
+        type: "file" as MemoryNodeType,
+        pos: { x: 900 + (index % 5) * 90, y: 400 + Math.floor(index / 5) * 70 },
+        size: 12,
+        detail: "installed package",
+        path: pkg.kind
+      })),
+    [installedPackages]
+  );
+
+  const allNodes = useMemo(() => [...MEMORY_GRAPH_NODES, ...runtimeGraph.nodes, ...packageNodes], [runtimeGraph.nodes, packageNodes]);
+  const allLinks = useMemo(() => {
+    const links = [...MEMORY_GRAPH_LINKS, ...runtimeGraph.links];
+    for (const pkgNode of packageNodes) links.push({ from: "marketplace", to: pkgNode.id });
+    return links;
+  }, [runtimeGraph.links, packageNodes]);
+
+  // Welcome cluster: if there's truly no live data (no runtime conversations, no packages), the static
+  // MEMORY_GRAPH_NODES/LINKS above already act as the seeded "welcome" cluster, so the view is never blank.
+  const graphTree = useMemo(() => (runtimeGraph.tree ? [...MEMORY_TREE, runtimeGraph.tree] : MEMORY_TREE), [runtimeGraph.tree]);
+
+  const degree = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const link of allLinks) {
+      map.set(link.from, (map.get(link.from) ?? 0) + 1);
+      map.set(link.to, (map.get(link.to) ?? 0) + 1);
+    }
+    return map;
+  }, [allLinks]);
+
+  const visibleIds = useMemo(() => {
+    if (!focusRoot) return null;
+    return localGraphIds(focusRoot, allLinks, focusDepth);
+  }, [focusRoot, allLinks, focusDepth]);
+
+  const graphNodes = useMemo(() => (visibleIds ? allNodes.filter((n) => visibleIds.has(n.id)) : allNodes), [allNodes, visibleIds]);
+  const graphLinks = useMemo(
+    () => (visibleIds ? allLinks.filter((l) => visibleIds.has(l.from) && visibleIds.has(l.to)) : allLinks),
+    [allLinks, visibleIds]
+  );
+
+  const colorRules = useMemo(() => buildColorRules(graphNodes, colorByProject), [graphNodes, colorByProject]);
+  const nodeMap = useMemo(() => new Map(graphNodes.map((node) => [node.id, node])), [graphNodes]);
+  const selectedNode = selected ? nodeMap.get(selected) : undefined;
+  const connected = useMemo(() => {
+    const ids = new Set<string>();
+    if (!selected) return ids;
+    for (const link of graphLinks) {
+      if (link.from === selected) ids.add(link.to);
+      if (link.to === selected) ids.add(link.from);
+    }
+    return ids;
+  }, [graphLinks, selected]);
+
+  // Physics bodies persist across renders in a ref (not state) so the rAF loop can mutate them every
+  // frame without triggering React re-renders — only the canvas draw call reads them each tick.
+  const physicsRef = useRef<Map<string, PhysicsNode>>(new Map());
+  const draggingNodeRef = useRef<string | null>(null);
+  const rafRef = useRef<number | null>(null);
+
+  // Live refs so the rAF frame callback (created once) always reads current props/state without
+  // needing to be re-created — this lets wake() start the loop directly, from any event handler.
+  const liveRef = useRef({ graphNodes, graphLinks, physics, pan, zoom, selected, hoveredId, colorRules, connected });
+  liveRef.current = { graphNodes, graphLinks, physics, pan, zoom, selected, hoveredId, colorRules, connected };
+
+  useEffect(() => {
+    physicsRef.current = seedPhysicsNodes(graphNodes, degree, physicsRef.current);
+    wake();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphNodes, degree]);
+
+  const refreshRuntimeGraph = useCallback(() => {
+    if (window.metisConversations) void window.metisConversations.list().then(setRuntimeConversations);
+    if (window.metisSession) void window.metisSession.list().then(setRuntimeRuns);
+    if (window.metisRegistry) void window.metisRegistry.listInstalled().then(setInstalledPackages).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refreshRuntimeGraph();
+  }, [refreshRuntimeGraph]);
+
+  function drawGraph(): void {
+    const { graphNodes: nodesToDraw, graphLinks: linksToDraw, physics: currentPhysics, pan: currentPan, zoom: currentZoom, selected: currentSelected, hoveredId: currentHovered, colorRules: currentRules } =
+      liveRef.current;
+    const canvas = canvasElRef.current;
+    const container = canvasRef.current;
+    if (!canvas || !container) return;
+    const dpr = window.devicePixelRatio || 1;
+    const rect = container.getBoundingClientRect();
+    if (canvas.width !== rect.width * dpr || canvas.height !== rect.height * dpr) {
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.save();
+    ctx.translate(rect.width / 2 + currentPan.x, rect.height / 2 + currentPan.y);
+    ctx.scale(currentZoom, currentZoom);
+
+    const nodes = physicsRef.current;
+    const textFadeThreshold = 0.62;
+    const showAllLabels = currentZoom >= textFadeThreshold;
+
+    ctx.lineCap = "round";
+    for (const link of linksToDraw) {
+      const a = nodes.get(link.from);
+      const b = nodes.get(link.to);
+      if (!a || !b) continue;
+      const active = currentSelected === link.from || currentSelected === link.to;
+      ctx.strokeStyle = active ? "rgba(220,220,220,0.9)" : "rgba(120,120,120,0.4)";
+      ctx.lineWidth = (currentPhysics.linkThickness * (link.strength ?? 1)) / currentZoom;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+
+    for (const node of nodesToDraw) {
+      const body = nodes.get(node.id);
+      if (!body) continue;
+      const active = currentSelected === node.id;
+      const related = liveRef.current.connected.has(node.id);
+      const hovered = currentHovered === node.id;
+      const color = colorForNode(node, currentRules);
+      ctx.beginPath();
+      ctx.arc(body.x, body.y, body.radius, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = active || related || hovered ? 1 : 0.82;
+      ctx.fill();
+      // Node border stays a neutral grey line always; colour is reserved for a subtle accent ring
+      // on the selected/hovered node only (owner feedback: no coloured hue-ramp fills, sleek dark).
+      ctx.lineWidth = 1 / currentZoom;
+      ctx.strokeStyle = "#3a3a3a";
+      ctx.stroke();
+      if (active || hovered) {
+        ctx.beginPath();
+        ctx.arc(body.x, body.y, body.radius + 2.5 / currentZoom, 0, Math.PI * 2);
+        ctx.lineWidth = 1.6 / currentZoom;
+        ctx.strokeStyle = "#aeb7c6"; // --accent — canvas context can't read CSS custom properties directly
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+
+      // Text fade: labels fade below the zoom threshold, and small-degree nodes lose labels first.
+      const labelChance = Math.min(1, (body.degree + 1) / 4);
+      if ((showAllLabels || active || hovered) && (labelChance >= 1 || currentZoom > textFadeThreshold * (1.4 - labelChance))) {
+        ctx.font = `${active ? "700" : "500"} ${12 / currentZoom}px 'Inter', system-ui, sans-serif`;
+        ctx.fillStyle = active ? "#f2f2f2" : "rgba(200,200,200,0.85)";
+        ctx.textAlign = "center";
+        ctx.fillText(node.label, body.x, body.y + body.radius + 13 / currentZoom);
+      }
+    }
+    ctx.restore();
+  }
+
+  // The rAF physics + draw loop. wake() (re)starts it; it sleeps (cancels the frame) once kinetic
+  // energy drops below GRAPH_KINETIC_SLEEP_THRESHOLD so an idle graph doesn't burn battery.
+  function frame(): void {
+    const { graphLinks: currentLinks, physics: currentPhysics } = liveRef.current;
+    const kinetic = stepPhysics(physicsRef.current, currentLinks, currentPhysics, draggingNodeRef.current, 1);
+    drawGraph();
+    if (draggingNodeRef.current || kinetic > GRAPH_KINETIC_SLEEP_THRESHOLD) {
+      rafRef.current = requestAnimationFrame(frame);
+    } else {
+      rafRef.current = null;
+    }
+  }
+
+  function wake(): void {
+    if (rafRef.current === null) rafRef.current = requestAnimationFrame(frame);
+  }
+
+  // Wake on any prop/state change that should redraw or resume the sim (zoom, pan, focus, selection, hover).
+  useEffect(() => {
+    wake();
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [graphLinks, graphNodes, physics, pan, zoom, selected, hoveredId, colorRules]);
+
+  function screenToWorld(clientX: number, clientY: number): Vec {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    const cx = clientX - rect.left - rect.width / 2 - pan.x;
+    const cy = clientY - rect.top - rect.height / 2 - pan.y;
+    return { x: cx / zoom, y: cy / zoom };
+  }
+
+  function hitTest(clientX: number, clientY: number): string | null {
+    const world = screenToWorld(clientX, clientY);
+    let closest: { id: string; dist: number } | null = null;
+    for (const node of graphNodes) {
+      const body = physicsRef.current.get(node.id);
+      if (!body) continue;
+      const dx = body.x - world.x;
+      const dy = body.y - world.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist <= body.radius + 3 && (!closest || dist < closest.dist)) closest = { id: node.id, dist };
+    }
+    return closest?.id ?? null;
+  }
+
+  function toggleFolder(name: string): void {
+    setExpanded((current) => ({ ...current, [name]: !current[name] }));
+  }
+
+  function selectByLabel(label: string): void {
+    const normalized = normalizeMemoryLabel(label);
+    const match = graphNodes.find((node) => node.id === normalized || normalizeMemoryLabel(node.label) === normalized);
+    if (match) setSelected(match.id);
+  }
+
+  function onWheel(event: ReactWheelEvent<HTMLElement>): void {
+    event.preventDefault();
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const cx = event.clientX - rect.left - rect.width / 2;
+    const cy = event.clientY - rect.top - rect.height / 2;
+    setZoom((prevZoom) => {
+      const next = Math.min(2.6, Math.max(0.2, prevZoom * Math.exp(-event.deltaY * 0.0012)));
+      setPan((prevPan) => ({ x: cx - ((cx - prevPan.x) / prevZoom) * next, y: cy - ((cy - prevPan.y) / prevZoom) * next }));
+      return next;
+    });
+    wake();
+  }
+
+  function beginPan(event: ReactPointerEvent<HTMLElement>): void {
+    if (event.button !== 0) return;
+    pointerDownAtRef.current = { x: event.clientX, y: event.clientY };
+    const hitId = hitTest(event.clientX, event.clientY);
+    canvasRef.current?.setPointerCapture(event.pointerId);
+    if (hitId) {
+      draggingNodeRef.current = hitId;
+      wake();
+      return;
+    }
+    setDragging({ startClient: { x: event.clientX, y: event.clientY }, startPan: pan });
+  }
+
+  function movePan(event: ReactPointerEvent<HTMLElement>): void {
+    if (draggingNodeRef.current) {
+      const world = screenToWorld(event.clientX, event.clientY);
+      const body = physicsRef.current.get(draggingNodeRef.current);
+      if (body) {
+        body.x = world.x;
+        body.y = world.y;
+      }
+      wake();
+      return;
+    }
+    if (dragging) {
+      setPan({ x: dragging.startPan.x + (event.clientX - dragging.startClient.x), y: dragging.startPan.y + (event.clientY - dragging.startClient.y) });
+      return;
+    }
+    setHoveredId(hitTest(event.clientX, event.clientY));
+  }
+
+  function endPan(event: ReactPointerEvent<HTMLElement>): void {
+    if (draggingNodeRef.current) {
+      draggingNodeRef.current = null;
+      wake();
+    }
+    setDragging(null);
+    if (canvasRef.current?.hasPointerCapture(event.pointerId)) canvasRef.current.releasePointerCapture(event.pointerId);
+  }
+
+  function onCanvasClick(event: ReactPointerEvent<HTMLElement>): void {
+    if (dragging) return;
+    const downAt = pointerDownAtRef.current;
+    pointerDownAtRef.current = null;
+    const moved = downAt ? Math.hypot(event.clientX - downAt.x, event.clientY - downAt.y) : 0;
+    const hitId = hitTest(event.clientX, event.clientY);
+    // Click (< 4px movement) on a conversation-backed node OPENS it directly — the graph is a
+    // launcher, not just a viewer. A bigger movement means the pointerdown/up pair was a drag that
+    // just ended on top of a node, so it still only selects. Non-openable nodes (projects, packages,
+    // welcome nodes with no conversationId) keep the existing select/detail-panel behavior.
+    if (hitId && moved < 4) {
+      const node = nodeMap.get(hitId);
+      if (node?.conversationId && onConversationOpen) {
+        onConversationOpen(node.conversationId);
+        return;
+      }
+    }
+    setSelected(hitId);
+  }
+
+  function zoomBy(factor: number): void {
+    setZoom((current) => Math.min(2.6, Math.max(0.2, current * factor)));
+    wake();
+  }
+
+  function updatePhysics(patch: Partial<GraphPhysicsSettings>): void {
+    setPhysics((current) => ({ ...current, ...patch }));
+    wake();
+  }
+
+  return (
+    <main className={`memory-workspace ${treeCollapsed ? "tree-collapsed" : ""}`} aria-label="Graph View">
+      <section
+        className={`memory-canvas ${dragging ? "panning" : ""} ${draggingNodeRef.current ? "dragging-node" : ""}`}
+        ref={canvasRef}
+        onWheel={onWheel}
+        onPointerDown={beginPan}
+        onPointerMove={movePan}
+        onPointerUp={(event) => {
+          endPan(event);
+          onCanvasClick(event);
+        }}
+        onPointerCancel={endPan}
+      >
+        <canvas ref={canvasElRef} className="memory-canvas-surface" />
+        <div className="memory-toolbar">
+          <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.18)}>
+            <ZoomOut size={16} />
+          </button>
+          <span>{Math.round(zoom * 100)}%</span>
+          <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.18)}>
+            <ZoomIn size={16} />
+          </button>
+          <button type="button" aria-label="Center graph" onClick={() => { setPan({ x: 0, y: 0 }); setZoom(1); wake(); }}>
+            <Maximize2 size={15} />
+          </button>
+          <button type="button" aria-label="Refresh runtime memory" onClick={refreshRuntimeGraph}>
+            <RotateCcw size={15} />
+          </button>
+          <div className="memory-settings-anchor">
+            <button type="button" aria-label="Graph settings" className={settingsOpen ? "active" : ""} onClick={() => setSettingsOpen((v) => !v)}>
+              <Settings size={15} />
+            </button>
+            {settingsOpen ? (
+              <div className="perm-popover graph-settings-popover" role="dialog" aria-label="Graph settings">
+                <header>
+                  <SlidersHorizontal size={14} />
+                  <span>Graph physics</span>
+                  <button type="button" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>
+                    <X size={14} />
+                  </button>
+                </header>
+                <div className="field">
+                  <span>Repel force</span>
+                  <input type="range" min={0.2} max={3} step={0.05} value={physics.repelForce} onChange={(e) => updatePhysics({ repelForce: Number(e.target.value) })} />
+                </div>
+                <div className="field">
+                  <span>Center force</span>
+                  <input type="range" min={0} max={3} step={0.05} value={physics.centerForce} onChange={(e) => updatePhysics({ centerForce: Number(e.target.value) })} />
+                </div>
+                <div className="field">
+                  <span>Link distance</span>
+                  <input type="range" min={40} max={260} step={2} value={physics.linkDistance} onChange={(e) => updatePhysics({ linkDistance: Number(e.target.value) })} />
+                </div>
+                <div className="field">
+                  <span>Link thickness</span>
+                  <input type="range" min={0.3} max={4} step={0.1} value={physics.linkThickness} onChange={(e) => updatePhysics({ linkThickness: Number(e.target.value) })} />
+                </div>
+                <div className="field field-checkbox">
+                  <span>Colour by project</span>
+                  <input type="checkbox" checked={colorByProject} onChange={(e) => setColorByProject(e.target.checked)} />
+                </div>
+                {!physicsLoaded ? <p className="field-hint">Loading saved settings…</p> : null}
+              </div>
+            ) : null}
+          </div>
+        </div>
+        <div className="memory-title">Graph View</div>
+        {focusRoot ? (
+          <div className="memory-focus-bar">
+            <span>Local graph — depth {focusDepth}</span>
+            <input type="range" min={1} max={3} step={1} value={focusDepth} onChange={(e) => setFocusDepth(Number(e.target.value))} />
+            <button type="button" aria-label="Exit local graph" onClick={() => setFocusRoot(null)}>
+              <X size={13} /> Global graph
+            </button>
+          </div>
+        ) : null}
+        {selectedNode ? (
+          <aside className="memory-detail">
+            <small>{selectedNode.type}</small>
+            <strong>{selectedNode.label}</strong>
+            <span>{selectedNode.detail}</span>
+            <em>{connected.size} linked node{connected.size === 1 ? "" : "s"}</em>
+            <div className="memory-detail-actions">
+              {selectedNode.id !== focusRoot ? (
+                <button type="button" onClick={() => setFocusRoot(selectedNode.id)}>
+                  Focus local graph
+                </button>
+              ) : null}
+              {selectedNode.conversationId && onConversationOpen ? (
+                <button type="button" onClick={() => onConversationOpen(selectedNode.conversationId ?? "")}>
+                  Open conversation
+                </button>
+              ) : null}
+            </div>
+            {selectedNode.path ? <code>{selectedNode.path}</code> : null}
+          </aside>
+        ) : null}
+        {treeCollapsed ? (
+          <button className="panel-rail-toggle memory-panel-widget" type="button" onClick={() => setTreeCollapsed(false)}>
+            <ChevronLeft size={16} />
+            <span>Files</span>
+          </button>
+        ) : null}
+      </section>
+
+      {!treeCollapsed ? (
+        <aside className="memory-tree" aria-label="Note folders">
+          <header className="memory-tree-head">
+            <div className="memory-tree-actions">
+              <button type="button" aria-label="New note">
+                <Plus size={15} />
+              </button>
+              <button type="button" aria-label="New folder">
+                <Folder size={15} />
+              </button>
+              <button type="button" aria-label="Graph settings" onClick={() => setSettingsOpen((v) => !v)}>
+                <Network size={15} />
+              </button>
+              <button type="button" aria-label="Search notes">
+                <Search size={16} />
+              </button>
+              <button type="button" aria-label="Pinned notes">
+                <Pin size={15} />
+              </button>
+            </div>
+            <button className="memory-tree-collapse" type="button" aria-label="Collapse file directory" onClick={() => setTreeCollapsed(true)}>
+              <ChevronRight size={16} />
+            </button>
+          </header>
+          <div className="memory-tree-list">
+            {graphTree.map((folder) => (
+              <MemoryTreeFolder key={folder.name} depth={0} expanded={expanded} folder={folder} onPick={selectByLabel} onToggle={toggleFolder} />
+            ))}
+          </div>
+        </aside>
+      ) : null}
+
+      {railCollapsed ? (
+        <button className="panel-rail-toggle graph-rail-toggle" type="button" onClick={() => setRailCollapsed(false)}>
+          <ChevronLeft size={16} />
+          <span>Directory</span>
+        </button>
+      ) : (
+        <aside className="graph-directory-rail" aria-label="Project directory">
+          <header className="graph-directory-rail-head">
+            <strong>Directory</strong>
+            <button type="button" aria-label="Collapse directory rail" onClick={() => setRailCollapsed(true)}>
+              <ChevronRight size={16} />
+            </button>
+          </header>
+          <div className="graph-directory-rail-list project-list">
+            {sidebarProjects.length === 0 ? <p className="sidebar-empty">No project folders yet.</p> : null}
+            {sidebarProjects.map((project) => {
+              const conversations = sidebarConversationsByProject[project.name] ?? [];
+              const projectNodeId = graphNodes.find((node) => node.type === "project" && node.label === project.name)?.id;
+              return (
+                <div className="project-group expanded" key={project.name}>
+                  <button
+                    className="project-row"
+                    type="button"
+                    title={project.path}
+                    onClick={() => {
+                      if (projectNodeId) {
+                        setSelected(projectNodeId);
+                        setFocusRoot(projectNodeId);
+                      }
+                    }}
+                  >
+                    <Folder size={16} />
+                    <span>
+                      <strong>{project.name}</strong>
+                      <small>{project.latest}</small>
+                    </span>
+                  </button>
+                  {conversations.length ? (
+                    <div className="project-conversations">
+                      {conversations.map((conversation) => (
+                        <button
+                          className="project-conversation-row"
+                          key={conversation.id}
+                          type="button"
+                          onClick={() => onConversationOpen?.(conversation.id)}
+                        >
+                          <span>
+                            <strong>{conversation.title}</strong>
+                            <small>{conversation.summary}</small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </aside>
+      )}
+    </main>
+  );
+}
+
+function MemoryTreeFolder({
+  depth,
+  expanded,
+  folder,
+  onPick,
+  onToggle
+}: {
+  depth: number;
+  expanded: Record<string, boolean>;
+  folder: MemoryFolder;
+  onPick: (label: string) => void;
+  onToggle: (name: string) => void;
+}): JSX.Element {
+  const isOpen = Boolean(expanded[folder.name]);
+  return (
+    <div className="memory-tree-group">
+      <button className="memory-tree-row folder" type="button" style={{ paddingLeft: `${depth * 14 + 10}px` }} onClick={() => onToggle(folder.name)}>
+        <ChevronRight className={isOpen ? "open" : ""} size={14} />
+        <span>{folder.name}</span>
+      </button>
+      {isOpen ? (
+        <>
+          {folder.children?.map((child) => (
+            <MemoryTreeFolder key={child.name} depth={depth + 1} expanded={expanded} folder={child} onPick={onPick} onToggle={onToggle} />
+          ))}
+          {folder.notes?.map((note) => (
+            <button key={note} className="memory-tree-row note" type="button" style={{ paddingLeft: `${(depth + 1) * 14 + 20}px` }} onClick={() => onPick(note)}>
+              <span>{note}</span>
+            </button>
+          ))}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function MemoryGraphPanel(): JSX.Element {
+  return (
+    <aside className="palette utility-panel" aria-label="Memory graph">
+      <header className="panel-head">
+        <span>
+          <small>Context graph</small>
+          <h2>Graph View</h2>
+        </span>
+        <Network size={18} />
+      </header>
+      <div className="library-panel">
+        <PanelRow icon={<Network size={16} />} title="Conversation graph" detail="Logs, notes, tasks, and files as linked nodes instead of one dumped context blob." />
+        <PanelRow icon={<Search size={16} />} title="Traversal retrieval" detail="Follow relevant links first, then expand only when the route needs more evidence." />
+        <PanelRow icon={<ClipboardList size={16} />} title="Token budget view" detail="Show what was loaded, why it was loaded, and what stayed out of context." />
+      </div>
+      <footer className="palette-foot">This is separate from Orchestration. Orchestration routes work; Graph View explains and retrieves memory.</footer>
+    </aside>
+  );
+}
+
+function BenchmarkWorkspace({
+  locked,
+  onComplete,
+  onWizardChange,
+  wizard
+}: {
+  locked: boolean;
+  onComplete: () => void;
+  onWizardChange: (next: BenchmarkWizardState | ((current: BenchmarkWizardState) => BenchmarkWizardState)) => void;
+  wizard: BenchmarkWizardState;
+}): JSX.Element {
+  const setWizard = onWizardChange;
+  const [gpuId, setGpuId] = useState("rtx3060");
+  const runChecks = ["Preflight hardware check", "Prompt suite loaded", "Simulated decode/VRAM capture", "Recommendation generated"];
+
+  useEffect(() => {
+    if (wizard.step !== "running" || wizard.status !== "running") return;
+    const id = window.setInterval(() => {
+      setWizard((current) => {
+        if (current.step !== "running" || current.status !== "running") return current;
+        const nextProgress = Math.min(100, current.progress + 14);
+        if (nextProgress < 100) {
+          return { ...current, progress: nextProgress, completedChecks: runChecks.slice(0, Math.max(1, Math.floor(nextProgress / 28))), updatedAt: new Date().toISOString() };
+        }
+        return { ...current, status: "complete", progress: 100, completedChecks: runChecks, updatedAt: new Date().toISOString() };
+      });
+    }, 480);
+    return () => window.clearInterval(id);
+  }, [setWizard, wizard.status, wizard.step]);
+
+  const gpu = GPUS.find((item) => item.id === gpuId) ?? GPUS[0];
+  const scored: ScoredModel[] = useMemo(() => LOCAL_MODELS.map((model) => ({ ...model, fit: fitFor(gpu.vram, model.vram) })), [gpu.vram]);
+  const greatFits = scored.filter((model) => model.fit === "great");
+  const usableFits = scored.filter((model) => model.fit === "great" || model.fit === "tight");
+  const router = greatFits[0] ?? usableFits[0] ?? scored[0];
+  const workhorse = usableFits[usableFits.length - 1] ?? router;
+
+  function applySetup(): void {
+    setWizard((current) => ({
+      ...current,
+      step: "review",
+      status: "complete",
+      progress: 100,
+      completedChecks: ["Hardware matched", "Recommendation generated"],
+      recommendation: {
+        preset: "Balanced local-first router",
+        model: `${router.name} router · ${workhorse.name} workhorse · Claude fallback`,
+        summary: `Matched to your ${gpu.label} (${gpu.note}). Local routes handle fast / private work and hard prompts escalate to a cloud fallback.`,
+        next: ["Open Orchestration and tweak the routes", "Add a cloud fallback for design-heavy work", "Run a full benchmark when you install a new model"]
+      },
+      updatedAt: new Date().toISOString()
+    }));
+    onComplete();
+  }
+
+  function startRun(): void {
+    setWizard((current) => ({ ...current, step: "running", status: "running", progress: 0, completedChecks: [], updatedAt: new Date().toISOString() }));
+  }
+
+  const running = wizard.step === "running" && wizard.status === "running";
+
+  return (
+    <main className="product-workspace benchmark-workspace" aria-label="Hardware and models">
+      <section className="product-hero">
+        <span className="hero-icon">
+          <Cpu size={20} />
+        </span>
+        <div>
+          <small>Metis Benchmark</small>
+          <h1>Hardware &amp; models</h1>
+          <p>Metis matched your hardware to a recommended local setup from existing benchmark data — no run required. Run a full benchmark later for proof-grade numbers.</p>
+        </div>
+        <span className={`wizard-status-pill ${locked ? "locked" : "complete"}`}>
+          {locked ? <Loader2 size={14} /> : <CheckCircle2 size={14} />}
+          {locked ? "Setup required" : "Setup ready"}
+        </span>
+      </section>
+
+      <div className="bench-grid">
+        <section className="bench-panel">
+          <header className="bench-panel-head">
+            <span><Monitor size={15} /> Detected hardware</span>
+            <label className="bench-select">
+              GPU
+              <CustomSelect
+                ariaLabel="Detected GPU"
+                value={gpuId}
+                onChange={setGpuId}
+                options={GPUS.map((item) => ({ value: item.id, label: item.label, hint: item.note }))}
+              />
+            </label>
+          </header>
+          <div className="bench-specs">
+            <div className="stat-cell">
+              <small>GPU</small>
+              <strong>{gpu.label}</strong>
+            </div>
+            <div className="stat-cell">
+              <small>VRAM</small>
+              <strong>{gpu.vram ? `${gpu.vram} GB` : "—"}</strong>
+            </div>
+            <div className="stat-cell">
+              <small>System RAM</small>
+              <strong>32 GB</strong>
+            </div>
+            <div className="stat-cell">
+              <small>Match</small>
+              <strong>Existing data</strong>
+            </div>
+          </div>
+          <p className="bench-note">
+            <ShieldCheck size={14} /> Recommendations come from Metis&rsquo;s model-on-hardware dataset. Nothing runs on your machine until you ask it to.
+          </p>
+        </section>
+
+        <section className="bench-panel rec-panel">
+          <header className="bench-panel-head">
+            <span><Sparkles size={15} /> Recommended setup</span>
+            <em className="auto-tag">Auto-picked</em>
+          </header>
+          <div className="rec-chain">
+            <RecSlot role="Router" model={router} />
+            <ArrowRight className="rec-arrow" size={16} />
+            <RecSlot role="Workhorse" model={workhorse} />
+            <ArrowRight className="rec-arrow" size={16} />
+            <RecSlot role="Fallback" cloud="Sonnet 4.6" provider="claude" />
+          </div>
+          <p className="bench-summary">Matched to your {gpu.label}. Local models handle fast / private work; hard prompts escalate to a cloud fallback.</p>
+          <div className="bench-actions">
+            <button className="primary-action" type="button" onClick={applySetup}>
+              {locked ? "Use this setup" : "Update setup"} <ArrowRight size={16} />
+            </button>
+            {!locked ? (
+              <button className="ghost-action" type="button" onClick={onComplete}>
+                Open Orchestration
+              </button>
+            ) : null}
+          </div>
+        </section>
+      </div>
+
+      <section className="bench-panel">
+        <header className="bench-panel-head">
+          <span><HardDrive size={15} /> Local models for {gpu.label}</span>
+          <em className="bench-count">{scored.filter((model) => model.fit !== "over").length} run here</em>
+        </header>
+        <div className="model-table">
+          {scored.map((model) => (
+            <div key={model.name} className={`model-row ${model.fit}`}>
+              <span className="model-id">
+                <span className="model-logo">{model.provider ? <img alt="" src={PROVIDERS[model.provider].logo} /> : <Cpu size={16} />}</span>
+                <span className="model-name">
+                  <strong>{model.name}</strong>
+                  <small>{model.role}</small>
+                </span>
+              </span>
+              <span className="model-spec">
+                <small>Params</small>
+                {model.params}
+              </span>
+              <span className="model-spec">
+                <small>VRAM</small>
+                {model.vram} GB
+              </span>
+              <span className="model-spec">
+                <small>Quant</small>
+                {model.quant}
+              </span>
+              <span className="model-spec">
+                <small>Speed</small>~{model.tps} tok/s
+              </span>
+              <span className={`fit-badge ${model.fit}`}>{fitLabel(model.fit)}</span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="bench-panel advanced">
+        <header className="bench-panel-head">
+          <span><Play size={15} /> Run a full benchmark</span>
+          <em className="optional-tag">optional</em>
+        </header>
+        <p className="bench-note">For leaderboard-grade numbers or after installing a new model. The recommendation above is enough to start.</p>
+        {running ? (
+          <>
+            <div className="progress-shell">
+              <span style={{ width: `${wizard.progress}%` }} />
+            </div>
+            <div className="run-log">
+              {runChecks.map((check) => (
+                <div key={check} className={wizard.completedChecks.includes(check) ? "complete" : ""}>
+                  {wizard.completedChecks.includes(check) ? <CheckCircle2 size={15} /> : <Loader2 size={15} />}
+                  <span>{check}</span>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="bench-actions">
+            <button className="ghost-action" type="button" onClick={startRun}>
+              <Play size={15} /> Run benchmark (simulated)
+            </button>
+            <a className="repo-link" href="https://github.com/lachydotmcg/metis" rel="noreferrer" target="_blank">
+              <GitBranch size={15} /> github.com/lachydotmcg/metis
+            </a>
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function RecSlot({ role, model, cloud, provider }: { role: string; model?: ScoredModel; cloud?: string; provider?: ProviderId }): JSX.Element {
+  const logoProvider = model?.provider ?? provider;
+  return (
+    <span className="rec-slot">
+      <small>{role}</small>
+      <span className="rec-slot-main">
+        <span className="model-logo">{logoProvider ? <img alt="" src={PROVIDERS[logoProvider].logo} /> : <Cpu size={15} />}</span>
+        <strong>{model ? model.name : cloud}</strong>
+      </span>
+    </span>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="metric-card">
+      <small>{label}</small>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; onBoardsChange: (next: GalleryBoard[] | ((current: GalleryBoard[]) => GalleryBoard[])) => void }): JSX.Element {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const selectedBoard = boards.find((board) => board.id === selectedId) ?? null;
+
+  function updateBoard(id: string, patch: Partial<GalleryBoard>): void {
+    onBoardsChange((current) => current.map((board) => (board.id === id ? { ...board, ...patch } : board)));
+  }
+
+  function addBoard(): void {
+    const id = `board-${Date.now()}`;
+    const image = makeGalleryThumb("New Board", "#111827", "#64748b");
+    onBoardsChange((current) => [
+      ...current,
+      { id, title: "Untitled board", description: "Drop references here and turn them into a route-aware skill.", coverImage: image, images: [], tags: ["new"], linkedSkill: false }
+    ]);
+    setSelectedId(id);
+  }
+
+  function addSyntheticImage(board: GalleryBoard): void {
+    const nextImage: GalleryImage = {
+      id: `image-${Date.now()}`,
+      src: makeGalleryThumb("Reference", "#171923", "#8b5cf6"),
+      title: "New design reference",
+      tags: ["reference", "analysis pending"],
+      analysis: "Queued for visual analysis. This placeholder will become model-generated design notes."
+    };
+    updateBoard(board.id, { images: [...board.images, nextImage], coverImage: board.coverImage || nextImage.src });
+  }
+
+  function importFiles(files: FileList | File[], board: GalleryBoard): void {
+    const imageFiles = Array.from(files).filter((file) => file.type.startsWith("image/"));
+    if (!imageFiles.length) return;
+    void Promise.all(
+      imageFiles.map(
+        (file) =>
+          new Promise<GalleryImage>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              resolve({
+                id: `image-${Date.now()}-${file.name}`,
+                src: String(reader.result),
+                title: file.name.replace(/\.[^.]+$/, ""),
+                tags: ["imported", "needs analysis"],
+                analysis: "Imported from your machine. Analysis can later describe layout, palette, typography, and routing use."
+              });
+            };
+            reader.readAsDataURL(file);
+          })
+      )
+    ).then((images) => {
+      onBoardsChange((current) =>
+        current.map((item) => (item.id === board.id ? { ...item, coverImage: item.coverImage || images[0].src, images: [...item.images, ...images] } : item))
+      );
+    });
+  }
+
+  if (selectedBoard) {
+    return (
+      <main className="product-workspace gallery-workspace" aria-label="Gallery board">
+        <section className="gallery-board-head">
+          <button type="button" onClick={() => setSelectedId(null)}>
+            <ChevronLeft size={16} /> Boards
+          </button>
+          <span className="hero-icon"><GalleryHorizontalEnd size={19} /></span>
+          <label>
+            <small>Board title</small>
+            <input value={selectedBoard.title} onChange={(event) => updateBoard(selectedBoard.id, { title: event.target.value })} />
+          </label>
+          <button className={`link-board ${selectedBoard.linkedSkill ? "active" : ""}`} type="button" onClick={() => updateBoard(selectedBoard.id, { linkedSkill: !selectedBoard.linkedSkill })}>
+            <Link2 size={15} />
+            {selectedBoard.linkedSkill ? "Linked to Orchestration" : "Link as skill"}
+          </button>
+        </section>
+
+        <section className="gallery-detail-grid">
+          <aside className="gallery-board-meta">
+            <img alt="" src={selectedBoard.coverImage} />
+            <textarea value={selectedBoard.description} onChange={(event) => updateBoard(selectedBoard.id, { description: event.target.value })} />
+            <div className="tag-row">
+              {selectedBoard.tags.map((tag) => <span key={tag}>{tag}</span>)}
+            </div>
+            <button type="button" disabled><Wand2 size={15} /> Analyse board soon</button>
+            <button type="button" disabled><Cable size={15} /> Sync Pinterest board soon</button>
+          </aside>
+
+          <div className="gallery-image-area">
+            <div
+              className="drop-zone"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                importFiles(event.dataTransfer.files, selectedBoard);
+              }}
+            >
+              <ImagePlus size={20} />
+              <span>Drop images here, or add a reference</span>
+              <button type="button" onClick={() => fileInputRef.current?.click()}>Choose images</button>
+              <button type="button" onClick={() => addSyntheticImage(selectedBoard)}>Add sample reference</button>
+              <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={(event) => event.target.files && importFiles(event.target.files, selectedBoard)} />
+            </div>
+            <div className="image-masonry">
+              {selectedBoard.images.map((image) => (
+                <article key={image.id} className="image-card">
+                  <img alt={image.title} src={image.src} />
+                  <strong>{image.title}</strong>
+                  <p>{image.analysis}</p>
+                  <div className="tag-row">
+                    {image.tags.map((tag) => <span key={tag}>{tag}</span>)}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="product-workspace gallery-workspace" aria-label="Gallery">
+      <section className="product-hero">
+        <span className="hero-icon"><GalleryHorizontalEnd size={20} /></span>
+        <div>
+          <small>Reference Gallery</small>
+          <h1>Boards for visual memory</h1>
+          <p>Collect references, title them, analyse them, and link the board into orchestration as a frontend-design skill.</p>
+        </div>
+        <div className="hero-actions">
+          <button className="ghost-action" type="button" disabled><Cable size={15} /> Sync Pinterest soon</button>
+          <button className="primary-action" type="button" onClick={addBoard}><Plus size={16} /> New board</button>
+        </div>
+      </section>
+
+      <section className="board-grid">
+        {boards.map((board) => (
+          <button key={board.id} className="board-card" type="button" onClick={() => setSelectedId(board.id)}>
+            <span className="board-collage">
+              {[board.coverImage, ...board.images.slice(0, 3).map((image) => image.src)].slice(0, 4).map((src, index) => <img alt="" key={`${src}-${index}`} src={src} />)}
+            </span>
+            <span className="board-card-copy">
+              <strong>{board.title}</strong>
+              <small>{board.images.length} references</small>
+              <em>{board.linkedSkill ? "Linked skill" : "Not linked"}</em>
+            </span>
+            <span className="tag-row">
+              {board.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
+            </span>
+          </button>
+        ))}
+      </section>
+    </main>
+  );
+}
+
+function marketplaceCategoryIcon(category: RegistryPackageKind | "all", size = 18): JSX.Element {
+  if (category === "mcp") return <Plug size={size} />;
+  if (category === "skill") return <ClipboardList size={size} />;
+  if (category === "preset") return <Star size={size} />;
+  if (category === "pipeline") return <GitBranch size={size} />;
+  if (category === "template") return <Layers size={size} />;
+  return <Sparkles size={size} />;
+}
+
+const MARKETPLACE_GROUP_LABEL: Record<RegistryPackageKind, string> = {
+  skill: "Skills",
+  mcp: "MCP Connections",
+  preset: "Presets",
+  pipeline: "Pipelines",
+  template: "Templates"
+};
+
+function MarketplaceWorkspace(): JSX.Element {
+  const [state, setState] = useAppStoreState("marketplaceState", DEFAULT_MARKETPLACE_STATE);
+  const [packages, setPackages] = useState<RegistryPackage[]>(FALLBACK_MARKETPLACE_PACKAGES);
+  const [installedPackages, setInstalledPackages] = useState<RegistryPackage[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
+  const installedIds = useMemo(() => new Set(installedPackages.map((item) => item.id)), [installedPackages]);
+
+  const refreshPackages = useCallback(async () => {
+    if (!window.metisRegistry) {
+      setPackages(FALLBACK_MARKETPLACE_PACKAGES);
+      return;
+    }
+    setLoading(true);
+    try {
+      const [nextRegistry, nextInstalled] = await Promise.all([window.metisRegistry.list(), window.metisRegistry.listInstalled()]);
+      setPackages(nextRegistry.packages);
+      setInstalledPackages(nextInstalled);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshPackages();
+  }, [refreshPackages]);
+
+  async function handleRefreshButton(): Promise<void> {
+    if (!window.metisRegistry) {
+      await refreshPackages();
+      return;
+    }
+    setLoading(true);
+    try {
+      const next = await window.metisRegistry.refresh();
+      setPackages(next.packages);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function toggleInstall(item: RegistryPackage): Promise<void> {
+    if (!window.metisRegistry) return;
+    const installed = installedIds.has(item.id);
+    setBusy(item.id);
+    setCardErrors((current) => {
+      const { [item.id]: _drop, ...rest } = current;
+      return rest;
+    });
+    try {
+      const next = installed ? await window.metisRegistry.uninstall(item.id) : await window.metisRegistry.install(item.id);
+      setInstalledPackages(next);
+    } catch (error) {
+      setCardErrors((current) => ({ ...current, [item.id]: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const filtered = useMemo(() => {
+    const query = state.query.toLowerCase();
+    return packages.filter((item) => {
+      if (state.category !== "all" && item.kind !== state.category) return false;
+      if (!query) return true;
+      const haystack = `${item.name} ${item.description} ${item.publisher} ${item.tags.join(" ")}`.toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [packages, state.category, state.query]);
+
+  const groups = useMemo(() => {
+    return filtered.reduce<Partial<Record<RegistryPackageKind, RegistryPackage[]>>>((acc, item) => {
+      acc[item.kind] = [...(acc[item.kind] ?? []), item];
+      return acc;
+    }, {});
+  }, [filtered]);
+
+  function updateMarketplace(patch: Partial<MarketplaceState>): void {
+    setState((current) => ({ ...current, ...patch }));
+  }
+
+  return (
+    <main className="product-workspace marketplace-workspace" aria-label="Marketplace">
+      <section className="marketplace-hero">
+        <div>
+          <small>Marketplace</small>
+          <h1>Find skills, MCPs, and presets</h1>
+        </div>
+        <div className="hero-actions">
+          <button type="button" className="ghost-action" onClick={() => void handleRefreshButton()} disabled={loading}>
+            {loading ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
+            Refresh
+          </button>
+        </div>
+      </section>
+      <section className="marketplace-hero marketplace-hero-search">
+        <label className="marketplace-search">
+          <Search size={18} />
+          <input value={state.query} placeholder="Search frontend, security, browser, local-first..." onChange={(event) => updateMarketplace({ query: event.target.value })} />
+        </label>
+        <div className="marketplace-tabs" role="tablist">
+          {MARKETPLACE_CATEGORIES.map((category) => (
+            <button key={category.key} className={state.category === category.key ? "active" : ""} type="button" onClick={() => updateMarketplace({ category: category.key })}>
+              <span className="marketplace-tab-icon">{category.icon}</span>
+              <span>
+                <strong>{category.label}</strong>
+                <small>{category.detail}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section className="marketplace-feed">
+        {filtered.length === 0 ? <p className="marketplace-empty">No packages match this search.</p> : null}
+        {(Object.entries(groups) as Array<[RegistryPackageKind, RegistryPackage[]]>).map(([kind, items]) => (
+          <div key={kind} className="marketplace-group">
+            <header>
+              <h2>{MARKETPLACE_GROUP_LABEL[kind]}</h2>
+              <span>{items.length} item{items.length === 1 ? "" : "s"}</span>
+            </header>
+            <div className="marketplace-grid">
+              {items.map((item) => {
+                const installed = installedIds.has(item.id);
+                const error = cardErrors[item.id];
+                const isBusy = busy === item.id;
+                return (
+                  <article key={item.id} className="marketplace-card">
+                    {item.ascii_art?.length ? (
+                      <pre className="marketplace-card-ascii" aria-hidden="true">{item.ascii_art.join("\n")}</pre>
+                    ) : item.images?.length ? (
+                      <img className="marketplace-card-image" alt="" src={item.images[0]} />
+                    ) : (
+                      <div className="marketplace-card-placeholder" aria-hidden="true">{marketplaceCategoryIcon(item.kind, 26)}</div>
+                    )}
+                    <span className="marketplace-card-head">
+                      <span className="marketplace-icon">{marketplaceCategoryIcon(item.kind)}</span>
+                      <small>{item.kind}</small>
+                    </span>
+                    <strong>{item.name}</strong>
+                    <small className="marketplace-card-publisher">{item.publisher} · v{item.version}</small>
+                    <p>{item.description}</p>
+                    {item.tags.length ? (
+                      <span className="marketplace-card-tags">
+                        {item.tags.map((tag) => (
+                          <em key={tag}>{tag}</em>
+                        ))}
+                      </span>
+                    ) : null}
+                    {item.permissions_requested.length ? (
+                      <small className="marketplace-card-permissions">
+                        <Shield size={11} /> {item.permissions_requested.join(", ")}
+                      </small>
+                    ) : null}
+                    {error ? <small className="marketplace-card-error">{error}</small> : null}
+                    <button type="button" onClick={() => void toggleInstall(item)} disabled={isBusy || !window.metisRegistry}>
+                      {isBusy ? <Loader2 size={14} className="spin" /> : null}
+                      {installed ? "Installed · Uninstall" : "Install"}
+                    </button>
+                  </article>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </section>
+    </main>
+  );
+}
+
+type TodoPriority = "high" | "medium" | "idea" | "none";
+type TodoCard = { id: string; title: string; priority: TodoPriority; done: boolean };
+type TodoColumn = { id: string; title: string; cards: TodoCard[] };
+type TodoBoard = { columns: TodoColumn[] };
+
+const TODO_PRIORITY_CYCLE: TodoPriority[] = ["none", "high", "medium", "idea"];
+const TODO_PRIORITY_LABEL: Record<TodoPriority, string> = {
+  high: "High priority",
+  medium: "Medium priority",
+  idea: "Idea",
+  none: "No priority"
+};
+
+function todoId(): string {
+  return Math.random().toString(36).slice(2, 10);
+}
+
+const DEFAULT_TODO_BOARD: TodoBoard = {
+  columns: [
+    {
+      id: "backlog",
+      title: "Backlog",
+      cards: [
+        { id: todoId(), title: "Design the Manager window", priority: "high", done: false },
+        { id: todoId(), title: "Newspaper / Home feed", priority: "idea", done: false },
+        { id: todoId(), title: "Routines / Schedules surface", priority: "medium", done: false }
+      ]
+    },
+    {
+      id: "todo",
+      title: "To do",
+      cards: [{ id: todoId(), title: "Connect tasks to project conversations", priority: "medium", done: false }]
+    },
+    {
+      id: "doing",
+      title: "In progress",
+      cards: [{ id: todoId(), title: "Metis-style task board", priority: "high", done: false }]
+    },
+    {
+      id: "done",
+      title: "Done",
+      cards: [
+        { id: todoId(), title: "DeepSeek API key entry", priority: "none", done: true },
+        { id: todoId(), title: "Visualise route test as a packet", priority: "none", done: true }
+      ]
+    }
+  ]
+};
+
+function TodoWorkspace(): JSX.Element {
+  const [board, setBoard] = useAppStoreState("todoBoard", DEFAULT_TODO_BOARD);
+  const drag = useRef<{ colId: string; cardId: string } | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null);
+  const [addingCol, setAddingCol] = useState<string | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+
+  function mutate(fn: (cols: TodoColumn[]) => TodoColumn[]): void {
+    setBoard((current) => ({ columns: fn(current.columns) }));
+  }
+
+  function moveCard(toColId: string, beforeCardId?: string): void {
+    const payload = drag.current;
+    if (!payload) return;
+    mutate((cols) => {
+      let moved: TodoCard | undefined;
+      const stripped = cols.map((col) =>
+        col.id !== payload.colId
+          ? col
+          : {
+              ...col,
+              cards: col.cards.filter((card) => {
+                if (card.id === payload.cardId) {
+                  moved = card;
+                  return false;
+                }
+                return true;
+              })
+            }
+      );
+      if (!moved) return cols;
+      return stripped.map((col) => {
+        if (col.id !== toColId) return col;
+        const cards = [...col.cards];
+        const idx = beforeCardId ? cards.findIndex((card) => card.id === beforeCardId) : -1;
+        if (idx >= 0) cards.splice(idx, 0, moved!);
+        else cards.push(moved!);
+        return { ...col, cards };
+      });
+    });
+    drag.current = null;
+    setDragOverCol(null);
+  }
+
+  function addCard(colId: string): void {
+    const title = draftTitle.trim();
+    if (!title) {
+      setAddingCol(null);
+      return;
+    }
+    mutate((cols) => cols.map((col) => (col.id === colId ? { ...col, cards: [...col.cards, { id: todoId(), title, priority: "none", done: false }] } : col)));
+    setDraftTitle("");
+  }
+
+  function updateCard(colId: string, cardId: string, patch: Partial<TodoCard>): void {
+    mutate((cols) => cols.map((col) => (col.id === colId ? { ...col, cards: col.cards.map((card) => (card.id === cardId ? { ...card, ...patch } : card)) } : col)));
+  }
+
+  function deleteCard(colId: string, cardId: string): void {
+    mutate((cols) => cols.map((col) => (col.id === colId ? { ...col, cards: col.cards.filter((card) => card.id !== cardId) } : col)));
+  }
+
+  function cyclePriority(colId: string, card: TodoCard): void {
+    const next = TODO_PRIORITY_CYCLE[(TODO_PRIORITY_CYCLE.indexOf(card.priority) + 1) % TODO_PRIORITY_CYCLE.length];
+    updateCard(colId, card.id, { priority: next });
+  }
+
+  return (
+    <main className="product-workspace todo-board-page" aria-label="To Do List">
+      <header className="todo-head">
+        <div>
+          <small>Shared with the Manager</small>
+          <h1>To Do List</h1>
+        </div>
+        <button type="button" className="todo-add-col" onClick={() => mutate((cols) => [...cols, { id: todoId(), title: "New list", cards: [] }])}>
+          <Plus size={15} /> Add list
+        </button>
+      </header>
+
+      <div className="todo-board">
+        {board.columns.map((col) => (
+          <section
+            key={col.id}
+            className={`todo-column ${dragOverCol === col.id ? "drag-over" : ""}`}
+            onDragOver={(event) => {
+              event.preventDefault();
+              if (dragOverCol !== col.id) setDragOverCol(col.id);
+            }}
+            onDragLeave={(event) => {
+              if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverCol((current) => (current === col.id ? null : current));
+            }}
+            onDrop={() => moveCard(col.id)}
+          >
+            <header className="todo-col-head">
+              <input value={col.title} aria-label="List title" onChange={(event) => mutate((cols) => cols.map((c) => (c.id === col.id ? { ...c, title: event.target.value } : c)))} />
+              <span className="todo-count">{col.cards.length}</span>
+              <button type="button" className="todo-col-del" aria-label="Delete list" onClick={() => mutate((cols) => cols.filter((c) => c.id !== col.id))}>
+                <Trash2 size={13} />
+              </button>
+            </header>
+
+            <div className="todo-col-body">
+              {col.cards.map((card) => (
+                <article
+                  key={card.id}
+                  className={`todo-card p-${card.priority} ${card.done ? "done" : ""} ${draggingId === card.id ? "dragging" : ""}`}
+                  draggable
+                  onDragStart={() => {
+                    drag.current = { colId: col.id, cardId: card.id };
+                    setDraggingId(card.id);
+                  }}
+                  onDragEnd={() => {
+                    setDraggingId(null);
+                    drag.current = null;
+                  }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                  }}
+                  onDrop={(event) => {
+                    event.stopPropagation();
+                    moveCard(col.id, card.id);
+                  }}
+                >
+                  <button type="button" className="todo-check" aria-label={card.done ? "Mark not done" : "Mark done"} onClick={() => updateCard(col.id, card.id, { done: !card.done })}>
+                    {card.done ? <CheckCircle2 size={15} /> : <Circle size={15} />}
+                  </button>
+                  <span className="todo-card-title">{card.title}</span>
+                  <button type="button" className="todo-prio" aria-label={TODO_PRIORITY_LABEL[card.priority]} title={`${TODO_PRIORITY_LABEL[card.priority]} (click to change)`} onClick={() => cyclePriority(col.id, card)} />
+                  <button type="button" className="todo-card-del" aria-label="Delete task" onClick={() => deleteCard(col.id, card.id)}>
+                    <X size={13} />
+                  </button>
+                </article>
+              ))}
+
+              {addingCol === col.id ? (
+                <div className="todo-add-card">
+                  <textarea
+                    autoFocus
+                    rows={2}
+                    value={draftTitle}
+                    placeholder="Task title"
+                    onChange={(event) => setDraftTitle(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" && !event.shiftKey) {
+                        event.preventDefault();
+                        addCard(col.id);
+                      }
+                      if (event.key === "Escape") {
+                        setAddingCol(null);
+                        setDraftTitle("");
+                      }
+                    }}
+                  />
+                  <div className="todo-add-actions">
+                    <button type="button" onClick={() => addCard(col.id)}>Add</button>
+                    <button type="button" className="ghost" onClick={() => { setAddingCol(null); setDraftTitle(""); }}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <button type="button" className="todo-add-trigger" onClick={() => { setAddingCol(col.id); setDraftTitle(""); }}>
+                  <Plus size={14} /> Add task
+                </button>
+              )}
+            </div>
+          </section>
+        ))}
+      </div>
+    </main>
+  );
+}
+
+const ROUTINE_WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const ROUTINE_INTERVAL_PRESETS = [
+  { label: "15m", minutes: 15 },
+  { label: "30m", minutes: 30 },
+  { label: "1h", minutes: 60 },
+  { label: "6h", minutes: 360 },
+  { label: "24h", minutes: 1440 }
+];
+
+const DEMO_ROUTINES: Routine[] = [
+  {
+    id: "demo-1",
+    name: "Daily project digest",
+    prompt: "Summarise new conversations, changed files, and open tasks since yesterday.",
+    schedule: { kind: "daily", hour: 7, minute: 30 },
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    lastRunStatus: "ok",
+    lastRunAt: new Date(Date.now() - 86_400_000).toISOString(),
+    nextRunAt: new Date(Date.now() + 3_600_000 * 8).toISOString()
+  },
+  {
+    id: "demo-2",
+    name: "Benchmark drift check",
+    prompt: "Re-run quick Metis probes and flag any regression against the last baseline.",
+    schedule: { kind: "weekly", weekday: 1, hour: 9, minute: 0 },
+    enabled: false,
+    createdAt: new Date().toISOString(),
+    lastRunStatus: "error",
+    lastRunError: "Provider timed out after 30s.",
+    lastRunAt: new Date(Date.now() - 3 * 86_400_000).toISOString()
+  }
+];
+
+function formatRoutineTime(hour: number, minute: number): string {
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+function describeRoutineSchedule(schedule: Routine["schedule"]): { big: string; small: string } {
+  if (schedule.kind === "interval") {
+    const preset = ROUTINE_INTERVAL_PRESETS.find((item) => item.minutes === schedule.everyMinutes);
+    const label = preset ? preset.label : schedule.everyMinutes >= 60 ? `${(schedule.everyMinutes / 60).toFixed(schedule.everyMinutes % 60 === 0 ? 0 : 1)}h` : `${schedule.everyMinutes}m`;
+    return { big: `every ${label}`, small: "interval" };
+  }
+  if (schedule.kind === "daily") {
+    return { big: formatRoutineTime(schedule.hour, schedule.minute), small: "daily" };
+  }
+  return { big: formatRoutineTime(schedule.hour, schedule.minute), small: ROUTINE_WEEKDAY_LABELS[schedule.weekday] ?? "weekly" };
+}
+
+function computeNextRunAt(schedule: Routine["schedule"], from: Date = new Date()): string {
+  if (schedule.kind === "interval") {
+    return new Date(from.getTime() + schedule.everyMinutes * 60_000).toISOString();
+  }
+  const next = new Date(from);
+  next.setSeconds(0, 0);
+  next.setHours(schedule.hour, schedule.minute, 0, 0);
+  if (schedule.kind === "daily") {
+    if (next <= from) next.setDate(next.getDate() + 1);
+    return next.toISOString();
+  }
+  const targetWeekday = schedule.weekday;
+  while (next.getDay() !== targetWeekday || next <= from) {
+    next.setDate(next.getDate() + 1);
+  }
+  return next.toISOString();
+}
+
+function formatCountdown(targetIso: string | undefined, now: number): string {
+  if (!targetIso) return "—";
+  const diffMs = new Date(targetIso).getTime() - now;
+  if (diffMs <= 0) return "due now";
+  const totalMinutes = Math.round(diffMs / 60_000);
+  const days = Math.floor(totalMinutes / 1440);
+  const hours = Math.floor((totalMinutes % 1440) / 60);
+  const minutes = totalMinutes % 60;
+  if (days > 0) return `in ${days}d ${hours}h`;
+  if (hours > 0) return `in ${hours}h ${minutes}m`;
+  return `in ${minutes}m`;
+}
+
+type RoutineDraft = {
+  id?: string;
+  name: string;
+  prompt: string;
+  kind: "interval" | "daily" | "weekly";
+  everyMinutes: number;
+  hour: number;
+  minute: number;
+  meridiem: "AM" | "PM";
+  weekday: number;
+  useCurrentProject: boolean;
+  projectPath?: string;
+  runOnLaunchIfMissed: boolean;
+};
+
+function draftFromRoutine(routine?: Routine, currentProjectPath?: string): RoutineDraft {
+  const schedule = routine?.schedule;
+  const hour24 = schedule && schedule.kind !== "interval" ? schedule.hour : 9;
+  return {
+    id: routine?.id,
+    name: routine?.name ?? "",
+    prompt: routine?.prompt ?? "",
+    kind: schedule?.kind ?? "daily",
+    everyMinutes: schedule?.kind === "interval" ? schedule.everyMinutes : 30,
+    hour: hour24 % 12 === 0 ? 12 : hour24 % 12,
+    minute: schedule && schedule.kind !== "interval" ? schedule.minute : 0,
+    meridiem: hour24 >= 12 ? "PM" : "AM",
+    weekday: schedule?.kind === "weekly" ? schedule.weekday : 1,
+    useCurrentProject: Boolean(routine?.projectPath && routine.projectPath === currentProjectPath),
+    projectPath: routine?.projectPath ?? (routine ? undefined : currentProjectPath),
+    runOnLaunchIfMissed: routine?.runOnLaunchIfMissed ?? false
+  };
+}
+
+function draftToHour24(draft: RoutineDraft): number {
+  const base = draft.hour % 12;
+  return draft.meridiem === "PM" ? base + 12 : base;
+}
+
+function draftToRoutine(draft: RoutineDraft): Routine {
+  const hour = draftToHour24(draft);
+  const schedule: Routine["schedule"] =
+    draft.kind === "interval"
+      ? { kind: "interval", everyMinutes: draft.everyMinutes }
+      : draft.kind === "daily"
+        ? { kind: "daily", hour, minute: draft.minute }
+        : { kind: "weekly", weekday: draft.weekday, hour, minute: draft.minute };
+  return {
+    id: draft.id ?? `routine-${Date.now()}`,
+    name: draft.name.trim() || "Untitled routine",
+    prompt: draft.prompt,
+    schedule,
+    projectPath: draft.useCurrentProject ? draft.projectPath : undefined,
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    runOnLaunchIfMissed: draft.runOnLaunchIfMissed
+  };
+}
+
+function HourDial({ hour, minute, meridiem, onChange }: { hour: number; minute: number; meridiem: "AM" | "PM"; onChange: (hour: number, minute: number) => void }): JSX.Element {
+  const size = 140;
+  const center = size / 2;
+  const faceRadius = center - 14;
+  const handleRadius = center - 26;
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragging = useRef(false);
+
+  const angleForHour = ((hour % 12) / 12) * 360 - 90;
+  const handleX = center + handleRadius * Math.cos((angleForHour * Math.PI) / 180);
+  const handleY = center + handleRadius * Math.sin((angleForHour * Math.PI) / 180);
+
+  function angleToHour(clientX: number, clientY: number): number {
+    const svg = svgRef.current;
+    if (!svg) return hour;
+    const rect = svg.getBoundingClientRect();
+    const x = clientX - rect.left - center;
+    const y = clientY - rect.top - center;
+    let deg = (Math.atan2(y, x) * 180) / Math.PI + 90;
+    if (deg < 0) deg += 360;
+    let h = Math.round(deg / 30) % 12;
+    if (h === 0) h = 12;
+    return h;
+  }
+
+  function handlePointer(event: ReactPointerEvent<SVGSVGElement>): void {
+    if (!dragging.current) return;
+    onChange(angleToHour(event.clientX, event.clientY), minute);
+  }
+
+  const ticks = Array.from({ length: 12 }, (_, index) => {
+    const deg = (index / 12) * 360 - 90;
+    const rad = (deg * Math.PI) / 180;
+    const x1 = center + (faceRadius - 6) * Math.cos(rad);
+    const y1 = center + (faceRadius - 6) * Math.sin(rad);
+    const x2 = center + faceRadius * Math.cos(rad);
+    const y2 = center + faceRadius * Math.sin(rad);
+    const labelX = center + (faceRadius - 18) * Math.cos(rad);
+    const labelY = center + (faceRadius - 18) * Math.sin(rad);
+    const label = index === 0 ? 12 : index;
+    return (
+      <g key={index}>
+        <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="var(--line)" strokeWidth={label % 3 === 0 ? 2 : 1} />
+        <text x={labelX} y={labelY + 3} textAnchor="middle" fontSize="9" fill="var(--muted)">
+          {label}
+        </text>
+      </g>
+    );
+  });
+
+  return (
+    <svg
+      ref={svgRef}
+      className="hour-dial"
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      onPointerDown={(event) => {
+        dragging.current = true;
+        (event.target as Element).setPointerCapture?.(event.pointerId);
+        onChange(angleToHour(event.clientX, event.clientY), minute);
+      }}
+      onPointerMove={handlePointer}
+      onPointerUp={(event) => {
+        dragging.current = false;
+        (event.target as Element).releasePointerCapture?.(event.pointerId);
+      }}
+    >
+      <circle cx={center} cy={center} r={faceRadius} fill="var(--node)" stroke="var(--line)" />
+      {ticks}
+      <line x1={center} y1={center} x2={handleX} y2={handleY} stroke="var(--accent)" strokeWidth={3} strokeLinecap="round" />
+      <circle cx={center} cy={center} r={3} fill="var(--accent)" />
+      <circle cx={handleX} cy={handleY} r={7} fill="var(--accent)" />
+      <text x={center} y={center + faceRadius + 12} textAnchor="middle" fontSize="10" fill="var(--faint)">
+        {meridiem}
+      </text>
+    </svg>
+  );
+}
+
+function RoutineEditor({
+  draft,
+  currentProjectPath,
+  onChange,
+  onCancel,
+  onSave
+}: {
+  draft: RoutineDraft;
+  currentProjectPath?: string;
+  onChange: (next: RoutineDraft) => void;
+  onCancel: () => void;
+  onSave: () => void;
+}): JSX.Element {
+  function set<K extends keyof RoutineDraft>(key: K, value: RoutineDraft[K]): void {
+    onChange({ ...draft, [key]: value });
+  }
+
+  return (
+    <div className="routine-editor">
+      <div className="routine-editor-field">
+        <label>Name</label>
+        <input
+          type="text"
+          value={draft.name}
+          placeholder="Morning digest"
+          onChange={(event: ChangeEvent<HTMLInputElement>) => set("name", event.target.value)}
+        />
+      </div>
+      <div className="routine-editor-field">
+        <label>Prompt</label>
+        <textarea
+          rows={3}
+          value={draft.prompt}
+          placeholder="What should this routine ask the agent to do?"
+          onChange={(event: ChangeEvent<HTMLTextAreaElement>) => set("prompt", event.target.value)}
+        />
+      </div>
+      <div className="routine-editor-field">
+        <label>Schedule</label>
+        <div className="segmented-control">
+          {(["interval", "daily", "weekly"] as const).map((kind) => (
+            <button key={kind} type="button" className={draft.kind === kind ? "active" : ""} onClick={() => set("kind", kind)}>
+              {kind === "interval" ? "Interval" : kind === "daily" ? "Daily" : "Weekly"}
             </button>
           ))}
         </div>
       </div>
 
-      <aside className="graph-detail">
-        <div className="section-heading">
-          <PanelLeft size={18} />
-          <div>
-            <h2>{active.label}</h2>
-            <p>Branch override preview</p>
+      {draft.kind === "interval" ? (
+        <div className="routine-editor-field">
+          <label>Every</label>
+          <div className="chip-row">
+            {ROUTINE_INTERVAL_PRESETS.map((preset) => (
+              <button
+                key={preset.minutes}
+                type="button"
+                className={`preset-chip ${draft.everyMinutes === preset.minutes ? "active" : ""}`}
+                onClick={() => set("everyMinutes", preset.minutes)}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+          <div className="routine-stepper">
+            <button type="button" onClick={() => set("everyMinutes", Math.max(5, draft.everyMinutes - 5))}>
+              -
+            </button>
+            <span>{draft.everyMinutes}m</span>
+            <button type="button" onClick={() => set("everyMinutes", draft.everyMinutes + 5)}>
+              +
+            </button>
           </div>
         </div>
-        <label className="field-label">
-          Preferred route
-          <select value={active.route} onChange={() => undefined}>
-            <option>{active.route}</option>
-            <option>qwen3:8b</option>
-            <option>Ornith local</option>
-            <option>Claude Sonnet 4.6</option>
-            <option>OpenRouter frontier</option>
-          </select>
+      ) : null}
+
+      {draft.kind === "weekly" ? (
+        <div className="routine-editor-field">
+          <label>Weekday</label>
+          <div className="chip-row">
+            {ROUTINE_WEEKDAY_LABELS.map((label, index) => (
+              <button
+                key={label}
+                type="button"
+                className={`preset-chip ${draft.weekday === index ? "active" : ""}`}
+                onClick={() => set("weekday", index)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {draft.kind !== "interval" ? (
+        <div className="routine-editor-field">
+          <label>Time</label>
+          <div className="routine-time-picker">
+            <HourDial
+              hour={draft.hour}
+              minute={draft.minute}
+              meridiem={draft.meridiem}
+              onChange={(hour, minute) => onChange({ ...draft, hour, minute })}
+            />
+            <div className="routine-time-numeric">
+              <input
+                type="number"
+                min={1}
+                max={12}
+                value={draft.hour}
+                onChange={(event: ChangeEvent<HTMLInputElement>) => set("hour", Math.min(12, Math.max(1, Number(event.target.value) || 1)))}
+              />
+              <span>:</span>
+              <input
+                type="number"
+                min={0}
+                max={59}
+                value={draft.minute}
+                onChange={(event: ChangeEvent<HTMLInputElement>) => set("minute", Math.min(59, Math.max(0, Number(event.target.value) || 0)))}
+              />
+              <div className="segmented-control small">
+                {(["AM", "PM"] as const).map((meridiem) => (
+                  <button key={meridiem} type="button" className={draft.meridiem === meridiem ? "active" : ""} onClick={() => set("meridiem", meridiem)}>
+                    {meridiem}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="routine-editor-field">
+        <label className="routine-checkbox-row">
+          <input
+            type="checkbox"
+            checked={draft.useCurrentProject}
+            disabled={!currentProjectPath}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => set("useCurrentProject", event.target.checked)}
+          />
+          <span>
+            Use current project{currentProjectPath ? ` (${currentProjectPath})` : " (none selected)"}
+          </span>
         </label>
-        <div className="policy-note">
-          <Lock size={17} />
-          <p>Edits are visual only in this scaffold. Persistence should land as user overrides in Metis Policy.</p>
+        <label className="routine-checkbox-row">
+          <input
+            type="checkbox"
+            checked={draft.runOnLaunchIfMissed}
+            onChange={(event: ChangeEvent<HTMLInputElement>) => set("runOnLaunchIfMissed", event.target.checked)}
+          />
+          <span>Run on launch if a run was missed while closed</span>
+        </label>
+      </div>
+
+      <div className="routine-editor-actions">
+        <button type="button" className="ghost" onClick={onCancel}>
+          Cancel
+        </button>
+        <button type="button" className="primary" onClick={onSave} disabled={!draft.name.trim() && !draft.prompt.trim()}>
+          Save routine
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RoutineCard({
+  routine,
+  now,
+  onToggle,
+  onRunNow,
+  onEdit,
+  onDelete,
+  onOpenConversation,
+  readOnly
+}: {
+  routine: Routine;
+  now: number;
+  onToggle: () => void;
+  onRunNow: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  onOpenConversation: () => void;
+  readOnly?: boolean;
+}): JSX.Element {
+  const { big, small } = describeRoutineSchedule(routine.schedule);
+  const nextRun = routine.nextRunAt ?? computeNextRunAt(routine.schedule);
+  const statusClass = routine.lastRunStatus === "ok" ? "ok" : routine.lastRunStatus === "error" ? "error" : "never";
+  const statusTitle = routine.lastRunStatus === "error" ? routine.lastRunError ?? "Last run failed" : routine.lastRunStatus === "ok" ? "Last run succeeded" : "Never run";
+
+  return (
+    <article className={`routine-card2 ${routine.enabled ? "" : "disabled"}`}>
+      <div className="routine-card2-time">
+        <strong>{big}</strong>
+        <small>{small}</small>
+      </div>
+      <div className="routine-card2-body">
+        <div className="routine-card2-heading">
+          <span className={`routine-status-dot ${statusClass}`} title={statusTitle} />
+          <strong>{routine.name}</strong>
         </div>
-        <div className="graph-summary">
-          <div><Zap size={18} /><span>Local when measured strong enough</span></div>
-          <div><BrainCircuit size={18} /><span>Cloud when frontier judgement is needed</span></div>
-          <div><ShieldCheck size={18} /><span>Private prompts stay local by default</span></div>
+        <p className="routine-card2-prompt" title={routine.prompt}>
+          {routine.prompt}
+        </p>
+        <span className="routine-card2-countdown">{formatCountdown(nextRun, now)}</span>
+      </div>
+      <div className="routine-card2-actions">
+        {!readOnly ? (
+          <button type="button" onClick={onRunNow} title="Run now">
+            <Play size={14} />
+          </button>
+        ) : null}
+        {!readOnly ? (
+          <button type="button" onClick={onEdit} title="Edit">
+            <Pencil size={14} />
+          </button>
+        ) : null}
+        {!readOnly && routine.conversationId ? (
+          <button type="button" onClick={onOpenConversation} title="Open conversation">
+            <ExternalLink size={14} />
+          </button>
+        ) : null}
+        {!readOnly ? (
+          <button type="button" className="danger" onClick={onDelete} title="Delete">
+            <Trash2 size={14} />
+          </button>
+        ) : null}
+      </div>
+      <label className="routine-toggle" title={routine.enabled ? "Enabled" : "Disabled"}>
+        <input type="checkbox" checked={routine.enabled} disabled={readOnly} onChange={onToggle} />
+        <span className="routine-toggle-track">
+          <span className="routine-toggle-thumb" />
+        </span>
+      </label>
+    </article>
+  );
+}
+
+function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: string) => void }): JSX.Element {
+  const hasBridge = typeof window !== "undefined" && Boolean(window.metisRoutines);
+  const [routines, setRoutines] = useState<Routine[]>(hasBridge ? [] : DEMO_ROUTINES);
+  const [currentProjectPath, setCurrentProjectPath] = useState<string | undefined>(undefined);
+  const [editingDraft, setEditingDraft] = useState<RoutineDraft | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    void window.metisRoutines?.list().then(setRoutines);
+    if (window.metisProject) {
+      void window.metisProject.getWorkspace().then((workspace) => setCurrentProjectPath(workspace?.path));
+    }
+  }, [hasBridge]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  async function refresh(): Promise<void> {
+    if (!window.metisRoutines) return;
+    setRoutines(await window.metisRoutines.list());
+  }
+
+  async function toggleRoutine(routine: Routine): Promise<void> {
+    if (!window.metisRoutines) return;
+    await window.metisRoutines.save({ ...routine, enabled: !routine.enabled });
+    await refresh();
+  }
+
+  async function runNow(id: string): Promise<void> {
+    if (!window.metisRoutines) return;
+    await window.metisRoutines.runNow(id);
+    await refresh();
+  }
+
+  async function deleteRoutine(id: string): Promise<void> {
+    if (!window.metisRoutines) return;
+    const confirmed = window.confirm("Delete this routine? This does not delete its conversation history.");
+    if (!confirmed) return;
+    const next = await window.metisRoutines.delete(id);
+    setRoutines(next);
+  }
+
+  async function saveDraft(): Promise<void> {
+    if (!editingDraft || !window.metisRoutines) return;
+    await window.metisRoutines.save(draftToRoutine(editingDraft));
+    setEditingDraft(null);
+    await refresh();
+  }
+
+  return (
+    <main className="product-workspace routines-workspace" aria-label="Routines and schedules">
+      <section className="routines-shell">
+        <header className="routines-header">
+          <div>
+            <small>Recurring prompts, one dedicated conversation per routine</small>
+            <h1>Routines / Schedules</h1>
+          </div>
+          {!editingDraft ? (
+            <button
+              type="button"
+              className="primary"
+              disabled={!hasBridge}
+              onClick={() => setEditingDraft(draftFromRoutine(undefined, currentProjectPath))}
+            >
+              <Plus size={14} /> New routine
+            </button>
+          ) : null}
+        </header>
+
+        {!hasBridge ? (
+          <p className="routines-demo-note">Preview mode — showing demo routines (read-only). Run inside the desktop app to create and manage real routines.</p>
+        ) : null}
+
+        {editingDraft ? (
+          <RoutineEditor
+            draft={editingDraft}
+            currentProjectPath={currentProjectPath}
+            onChange={setEditingDraft}
+            onCancel={() => setEditingDraft(null)}
+            onSave={saveDraft}
+          />
+        ) : null}
+
+        {routines.length === 0 && !editingDraft ? (
+          <div className="routines-empty">
+            <p>No routines yet. Set one up to have Metis run a prompt automatically on a schedule.</p>
+            <button type="button" className="primary" disabled={!hasBridge} onClick={() => setEditingDraft(draftFromRoutine(undefined, currentProjectPath))}>
+              <Plus size={14} /> New routine
+            </button>
+          </div>
+        ) : (
+          <div className="routines-list">
+            {routines.map((routine) => (
+              <RoutineCard
+                key={routine.id}
+                routine={routine}
+                now={now}
+                readOnly={!hasBridge}
+                onToggle={() => void toggleRoutine(routine)}
+                onRunNow={() => void runNow(routine.id)}
+                onEdit={() => setEditingDraft(draftFromRoutine(routine, currentProjectPath))}
+                onDelete={() => void deleteRoutine(routine.id)}
+                onOpenConversation={() => {
+                  if (routine.conversationId && onConversationOpen) onConversationOpen(routine.conversationId);
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function ManagerWorkspace(): JSX.Element {
+  const lanes = [
+    { title: "Project manager", detail: "Maintains project context, conversations, todos, and handoffs across selected folders.", status: "designing" },
+    { title: "Subagent supervisor", detail: "Delegates to frontend, testing, research, local, cloud, or fallback routes when a prompt needs them.", status: "planned" },
+    { title: "Fallback model policy", detail: "Chooses a backup model when the preferred provider is unavailable, rate-limited, or too expensive.", status: "planned" }
+  ];
+  return (
+    <main className="product-workspace todo-workspace" aria-label="Manager agent">
+      <section className="todo-shell">
+        <header>
+          <small>Built-in assistant layer</small>
+          <h1>Manager</h1>
+          <p>A project-aware assistant that can manage subagents, update orchestration, watch routines, and keep memory linked through Graph View.</p>
+        </header>
+        <div className="todo-columns">
+          {lanes.map((lane) => (
+            <article className="todo-column" key={lane.title}>
+              <h2>{lane.title}</h2>
+              <div className="todo-card manager-card">
+                <strong>{lane.title}</strong>
+                <span>{lane.detail}</span>
+                <em>{lane.status}</em>
+              </div>
+            </article>
+          ))}
         </div>
+      </section>
+    </main>
+  );
+}
+
+function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
+  const [settings, setSettings] = useAppStoreState("settings", DEFAULT_SETTINGS);
+  const [policyStatus, setPolicyStatus] = useState<PolicyStatus>(FALLBACK_POLICY_STATUS);
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [secrets, setSecrets] = useState<SecretStatus[]>([]);
+  const [permissions, setPermissions] = useState<PermissionGrant[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [registry, setRegistry] = useState<RegistryState>(FALLBACK_REGISTRY);
+  const [installedPackages, setInstalledPackages] = useState<RegistryPackage[]>([]);
+  const [secretDrafts, setSecretDrafts] = useState<Partial<Record<ProviderKey, string>>>({});
+  const [registryUrl, setRegistryUrl] = useState("");
+  const [testPrompt, setTestPrompt] = useState("Summarise these notes into five bullets.");
+  const [policyDecision, setPolicyDecision] = useState<PolicyDecisionResult | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const secretMap = useMemo(() => new Map(secrets.map((secret) => [secret.provider, secret])), [secrets]);
+  const installedIds = useMemo(() => new Set(installedPackages.map((item) => item.id)), [installedPackages]);
+
+  const refreshRuntime = useCallback(async () => {
+    const [nextPolicy, nextProviders, nextSecrets, nextPermissions, nextAudit, nextRegistry, nextInstalled] = await Promise.all([
+      window.metisPolicy?.getStatus() ?? Promise.resolve(FALLBACK_POLICY_STATUS),
+      window.metisProviders?.list() ?? Promise.resolve<ProviderStatus[]>([]),
+      window.metisSecrets?.list() ?? Promise.resolve<SecretStatus[]>([]),
+      window.metisPermissions?.list() ?? Promise.resolve<PermissionGrant[]>([]),
+      window.metisAudit?.list(30) ?? Promise.resolve<AuditEvent[]>([]),
+      window.metisRegistry?.list() ?? Promise.resolve(FALLBACK_REGISTRY),
+      window.metisRegistry?.listInstalled() ?? Promise.resolve<RegistryPackage[]>([])
+    ]);
+    setPolicyStatus(nextPolicy);
+    setProviders(nextProviders);
+    setSecrets(nextSecrets);
+    setPermissions(nextPermissions);
+    setAuditEvents(nextAudit);
+    setRegistry(nextRegistry);
+    setInstalledPackages(nextInstalled);
+    setRegistryUrl(nextRegistry.sourceUrl.startsWith("http") ? nextRegistry.sourceUrl : "");
+  }, []);
+
+  useEffect(() => {
+    void refreshRuntime();
+  }, [refreshRuntime]);
+
+  async function runBusy(label: string, work: () => Promise<void>): Promise<void> {
+    setBusy(label);
+    try {
+      await work();
+      await refreshRuntime();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  function updateSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): void {
+    setSettings((current) => ({ ...current, [key]: value }));
+  }
+
+  async function saveSecret(provider: ProviderKey): Promise<void> {
+    const value = secretDrafts[provider]?.trim();
+    if (!value || !window.metisSecrets) return;
+    await runBusy(`secret-${provider}`, async () => {
+      await window.metisSecrets?.set(provider, value);
+      setSecretDrafts((current) => ({ ...current, [provider]: "" }));
+    });
+  }
+
+  async function clearSecret(provider: ProviderKey): Promise<void> {
+    if (!window.metisSecrets) return;
+    await runBusy(`secret-${provider}`, async () => {
+      await window.metisSecrets?.delete(provider);
+    });
+  }
+
+  async function healthCheck(provider: ProviderKey): Promise<void> {
+    if (!window.metisProviders) return;
+    await runBusy(`health-${provider}`, async () => {
+      const next = await window.metisProviders?.healthCheck(provider);
+      if (!next) return;
+      setProviders((current) => current.map((item) => (item.provider === provider ? next : item)));
+    });
+  }
+
+  async function grantPermission(scope: PermissionScope, target: string, note: string): Promise<void> {
+    if (!window.metisPermissions) return;
+    await runBusy(`grant-${scope}`, async () => {
+      await window.metisPermissions?.request({ scope, target, note });
+    });
+  }
+
+  async function revokePermission(id: string): Promise<void> {
+    if (!window.metisPermissions) return;
+    await runBusy(`revoke-${id}`, async () => {
+      await window.metisPermissions?.revoke(id);
+    });
+  }
+
+  async function refreshRegistry(): Promise<void> {
+    if (!window.metisRegistry) return;
+    await runBusy("registry-refresh", async () => {
+      const next = await window.metisRegistry?.refresh(registryUrl.trim() || undefined);
+      if (next) setRegistry(next);
+    });
+  }
+
+  async function installRegistryPackage(id: string): Promise<void> {
+    if (!window.metisRegistry) return;
+    await runBusy(`install-${id}`, async () => {
+      await window.metisRegistry?.install(id);
+    });
+  }
+
+  async function uninstallRegistryPackage(id: string): Promise<void> {
+    if (!window.metisRegistry) return;
+    await runBusy(`uninstall-${id}`, async () => {
+      await window.metisRegistry?.uninstall(id);
+    });
+  }
+
+  async function runPolicyTest(): Promise<void> {
+    if (!window.metisPolicy || !testPrompt.trim()) return;
+    await runBusy("policy-test", async () => {
+      const result = await window.metisPolicy?.decide({
+        prompt: testPrompt,
+        preset: settings.defaultPreset
+      });
+      if (result) setPolicyDecision(result);
+    });
+  }
+
+  return (
+    <main className="product-workspace settings-workspace" aria-label="Settings">
+      <aside className="settings-left">
+        <button className="settings-back" type="button" onClick={onBack}>
+          <ChevronLeft size={15} />
+          <span>Back to app</span>
+        </button>
+        <label className="settings-search">
+          <Search size={14} />
+          <input placeholder="Search settings..." />
+        </label>
+        <SettingsNavGroup
+          title="Personal"
+          items={[
+            { label: "General", icon: <ShieldCheck size={15} />, active: true },
+            { label: "Profile", icon: <Bot size={15} /> },
+            { label: "Appearance", icon: <Sparkles size={15} /> },
+            { label: "Configuration", icon: <Wand2 size={15} /> },
+            { label: "Personalization", icon: <Star size={15} /> }
+          ]}
+        />
+        <SettingsNavGroup
+          title="Integrations"
+          items={[
+            { label: "MCP servers", icon: <Plug size={15} /> },
+            { label: "Browser", icon: <Monitor size={15} /> },
+            { label: "Computer use", icon: <Cpu size={15} /> }
+          ]}
+        />
+        <SettingsNavGroup
+          title="Coding"
+          items={[
+            { label: "Hooks", icon: <GitBranch size={15} /> },
+            { label: "Connections", icon: <Cable size={15} /> },
+            { label: "Git", icon: <GitBranch size={15} /> },
+            { label: "Worktrees", icon: <Folder size={15} /> }
+          ]}
+        />
       </aside>
+
+      <section className="settings-content">
+        <header className="settings-title">
+          <h1>General</h1>
+          <p>Runtime defaults, provider keys, permissions, policy bridge, marketplace registry, and audit trail.</p>
+        </header>
+
+      <section className="settings-grid">
+        <article className="settings-panel policy-panel">
+          <header>
+            <span>
+              <small>Policy bridge</small>
+              <h2>{policyStatus.available ? "Ready" : "Needs setup"}</h2>
+            </span>
+            <span className={`status-pill ${policyStatus.available ? "ok" : "warn"}`}>{policyStatus.available ? "connected" : "fallback"}</span>
+          </header>
+          <p>{policyStatus.detail}</p>
+          {policyStatus.cliPath ? <code>{policyStatus.cliPath}</code> : null}
+          {policyStatus.profilePath ? <code>{policyStatus.profilePath}</code> : null}
+          <label className="settings-field wide">
+            <span>Test prompt</span>
+            <textarea value={testPrompt} onChange={(event) => setTestPrompt(event.target.value)} />
+          </label>
+          <div className="settings-actions">
+            <button type="button" onClick={runPolicyTest} disabled={busy === "policy-test"}>
+              <Play size={15} />
+              Test route
+            </button>
+            <button type="button" onClick={() => void refreshRuntime()}>
+              <RotateCcw size={15} />
+              Refresh
+            </button>
+          </div>
+          {policyDecision ? (
+            <div className="decision-strip">
+              <strong>{policyDecision.decision.selected_route.kind} route</strong>
+              <span>{policyDecision.decision.selected_route.provider ?? policyDecision.decision.selected_route.runtime ?? "manual"} / {policyDecision.decision.selected_route.model ?? "none"}</span>
+              <small>{policyDecision.source === "sample" ? policyDecision.warnings[0] ?? "Sample fallback used." : policyDecision.decision.reason}</small>
+            </div>
+          ) : null}
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Defaults</small>
+              <h2>Routing preferences</h2>
+            </span>
+          </header>
+          <div className="settings-two">
+            <label className="settings-field">
+              <span>Router preset</span>
+              <CustomSelect
+                ariaLabel="Router preset"
+                value={settings.defaultPreset}
+                onChange={(value) => updateSetting("defaultPreset", value as AppSettings["defaultPreset"])}
+                options={[
+                  { value: "balanced", label: "Balanced", hint: "Speed and quality mix" },
+                  { value: "local_first", label: "Local first", hint: "Prefer on-device models" },
+                  { value: "best_quality", label: "Best quality", hint: "Escalate to strongest model" },
+                  { value: "cheapest", label: "Cheapest", hint: "Lowest cost route" },
+                  { value: "private", label: "Private", hint: "Keep prompts on-device" }
+                ]}
+              />
+            </label>
+            <label className="settings-field">
+              <span>Prompt storage</span>
+              <CustomSelect
+                ariaLabel="Prompt storage"
+                value={settings.rawPromptStorage}
+                onChange={(value) => updateSetting("rawPromptStorage", value as AppSettings["rawPromptStorage"])}
+                options={[
+                  { value: "local-only", label: "Local raw prompts", hint: "Stored only on this machine" },
+                  { value: "hash-only", label: "Hash only", hint: "Keep a fingerprint, drop the text" }
+                ]}
+              />
+            </label>
+            <label className="settings-field">
+              <span>API access</span>
+              <CustomSelect
+                ariaLabel="API access"
+                value={settings.subscriptionMode}
+                onChange={(value) => updateSetting("subscriptionMode", value as AppSettings["subscriptionMode"])}
+                options={[
+                  { value: "bring-your-own-key", label: "Bring your own keys", hint: "Use your own provider keys" },
+                  { value: "metis-subscription", label: "Metis subscription", hint: "Route through a Metis plan" }
+                ]}
+              />
+            </label>
+            <label className="settings-field">
+              <span>Language</span>
+              <input value={settings.language} onChange={(event) => updateSetting("language", event.target.value)} />
+            </label>
+          </div>
+          <label className="settings-field wide">
+            <span>Global instructions</span>
+            <textarea value={settings.globalInstructions} placeholder="Optional instructions every route should know." onChange={(event) => updateSetting("globalInstructions", event.target.value)} />
+          </label>
+        </article>
+
+        <article className="settings-panel providers-panel">
+          <header>
+            <span>
+              <small>Providers</small>
+              <h2>Provider-level keys</h2>
+            </span>
+            <span className="status-pill">{providers.filter((provider) => provider.configured).length}/{PROVIDER_KEYS.length}</span>
+          </header>
+          <div className="provider-list">
+            {PROVIDER_KEYS.map((provider) => {
+              const status = providers.find((item) => item.provider === provider);
+              const secret = secretMap.get(provider);
+              return (
+                <div className="provider-row" key={provider}>
+                  <span>
+                    <strong>{status?.label ?? PROVIDER_LABELS[provider]}</strong>
+                    <small>{status?.detail ?? "Waiting for Electron runtime."}</small>
+                  </span>
+                  {provider !== "ollama" ? (
+                    <input
+                      type="password"
+                      value={secretDrafts[provider] ?? ""}
+                      placeholder={secret?.hasSecret ? "Key saved" : "Paste API key"}
+                      onChange={(event) => setSecretDrafts((current) => ({ ...current, [provider]: event.target.value }))}
+                    />
+                  ) : null}
+                  <div className="provider-actions">
+                    <button type="button" onClick={() => void healthCheck(provider)} disabled={busy === `health-${provider}`}>Check</button>
+                    {provider !== "ollama" ? (
+                      <>
+                        <button type="button" onClick={() => void saveSecret(provider)} disabled={!secretDrafts[provider]?.trim() || busy === `secret-${provider}`}>Save</button>
+                        <button type="button" onClick={() => void clearSecret(provider)} disabled={!secret?.hasSecret || busy === `secret-${provider}`}>Clear</button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </article>
+
+        <article className="settings-panel permissions-panel">
+          <header>
+            <span>
+              <small>Permissions</small>
+              <h2>Scoped grants</h2>
+            </span>
+            <span className="status-pill">{permissions.length} active</span>
+          </header>
+          <div className="permission-presets">
+            {PERMISSION_PRESETS.map((preset) => (
+              <button key={`${preset.scope}-${preset.target}`} type="button" onClick={() => void grantPermission(preset.scope, preset.target, preset.note)}>
+                <Shield size={15} />
+                <span>
+                  <strong>{preset.scope}</strong>
+                  <small>{preset.note}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="grant-list">
+            {permissions.length === 0 ? <p>No scoped grants yet.</p> : null}
+            {permissions.map((grant) => (
+              <div className="grant-row" key={grant.id}>
+                <span>
+                  <strong>{grant.scope}</strong>
+                  <small>{grant.target} · {new Date(grant.grantedAt).toLocaleString()}</small>
+                </span>
+                <button type="button" aria-label={`Revoke ${grant.scope}`} onClick={() => void revokePermission(grant.id)}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="settings-panel registry-panel">
+          <header>
+            <span>
+              <small>Marketplace registry</small>
+              <h2>{registry.status}</h2>
+            </span>
+            <span className="status-pill">{registry.packages.length} packages</span>
+          </header>
+          <label className="settings-field wide">
+            <span>Static manifest URL</span>
+            <input value={registryUrl} placeholder="https://.../metis-registry.json" onChange={(event) => setRegistryUrl(event.target.value)} />
+          </label>
+          <div className="settings-actions">
+            <button type="button" onClick={refreshRegistry} disabled={busy === "registry-refresh"}>
+              <Download size={15} />
+              Refresh registry
+            </button>
+          </div>
+          {registry.error ? <p className="settings-warning">{registry.error}</p> : null}
+          <div className="registry-list">
+            {registry.packages.map((item) => {
+              const installed = installedIds.has(item.id);
+              return (
+                <div className="registry-row registry-row-detailed" key={item.id}>
+                  {item.ascii_art?.length ? (
+                    <pre className="registry-ascii" aria-hidden="true">{item.ascii_art.join("\n")}</pre>
+                  ) : null}
+                  <span>
+                    <strong>{item.name}</strong>
+                    <small>{item.kind} · {item.publisher} · v{item.version}</small>
+                    {item.description ? <p className="registry-description">{item.description}</p> : null}
+                    {item.tags.length ? (
+                      <span className="registry-tags">
+                        {item.tags.map((tag) => (
+                          <em key={tag}>{tag}</em>
+                        ))}
+                      </span>
+                    ) : null}
+                    {item.permissions_requested.length ? (
+                      <small className="registry-permissions">
+                        Requests: {item.permissions_requested.join(", ")}
+                      </small>
+                    ) : null}
+                  </span>
+                  <button type="button" onClick={() => void (installed ? uninstallRegistryPackage(item.id) : installRegistryPackage(item.id))} disabled={busy === `install-${item.id}` || busy === `uninstall-${item.id}`}>
+                    {installed ? "Remove" : "Install"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </article>
+
+        <article className="settings-panel audit-panel">
+          <header>
+            <span>
+              <small>Audit trail</small>
+              <h2>Recent events</h2>
+            </span>
+            <span className="status-pill">{auditEvents.length}</span>
+          </header>
+          <div className="audit-list">
+            {auditEvents.length === 0 ? <p>No audit events recorded yet.</p> : null}
+            {auditEvents.map((event) => (
+              <div className={`audit-row ${event.level}`} key={event.id}>
+                <span>
+                  <strong>{event.kind}</strong>
+                  <small>{event.summary}</small>
+                </span>
+                <em>{new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</em>
+              </div>
+            ))}
+          </div>
+        </article>
+      </section>
+      </section>
+    </main>
+  );
+}
+
+function SettingsNavGroup({
+  items,
+  title
+}: {
+  items: Array<{ active?: boolean; icon: JSX.Element; label: string }>;
+  title: string;
+}): JSX.Element {
+  return (
+    <section className="settings-nav-group">
+      <span>{title}</span>
+      {items.map((item) => (
+        <button className={item.active ? "active" : ""} key={item.label} type="button">
+          {item.icon}
+          <strong>{item.label}</strong>
+        </button>
+      ))}
     </section>
   );
+}
+
+function RoutinesPanel(): JSX.Element {
+  return (
+    <aside className="palette utility-panel" aria-label="Routines">
+      <header className="panel-head">
+        <span>
+          <small>Schedules</small>
+          <h2>Routines</h2>
+        </span>
+        <CalendarClock size={18} />
+      </header>
+      <div className="library-panel">
+        <PanelRow icon={<CalendarClock size={16} />} title="Daily benchmark refresh" detail="Re-check local models after driver, Ollama, or model updates." />
+        <PanelRow icon={<Search size={16} />} title="Reference sync" detail="Pull new design references and update their graph descriptions." />
+        <PanelRow icon={<GitBranch size={16} />} title="Policy audit" detail="Compare actual routes against the policy and flag expensive or low-quality decisions." />
+      </div>
+      <footer className="palette-foot">Routines are scheduled orchestration jobs, not a separate chat mode.</footer>
+    </aside>
+  );
+}
+
+function PanelRow({ detail, icon, meta, title }: { detail: string; icon: JSX.Element; meta?: string; title: string }): JSX.Element {
+  return (
+    <button className="panel-row" type="button">
+      <span className="panel-row-icon">{icon}</span>
+      <span className="panel-row-copy">
+        <strong>{title}</strong>
+        <small>{detail}</small>
+      </span>
+      {meta ? <em>{meta}</em> : null}
+    </button>
+  );
+}
+
+function NodeInspector({
+  node,
+  nodes,
+  onClose,
+  onUpdate,
+  onDelete,
+  onDetachSkill,
+  connectionStates,
+  routeTest,
+  onTest
+}: {
+  node: GraphNode;
+  nodes: GraphNode[];
+  onClose: () => void;
+  onUpdate: (id: string, patch: Partial<GraphNode>) => void;
+  onDelete: (id: string) => void;
+  onDetachSkill: (id: string) => void;
+  connectionStates: Partial<Record<ProviderKey, ProviderConnectionState>>;
+  routeTest: RouteTestState | null;
+  onTest: (agentId: string) => void;
+}): JSX.Element {
+  const provider = node.provider ? PROVIDERS[node.provider] : null;
+  const connectionStatus = node.provider ? providerConnectionStatus(node.provider, connectionStates) : "unknown";
+  const needsApiKey = node.kind !== "skill" && connectionStatus !== "local" && connectionStatus !== "connected";
+  const fallbacks = node.fallbacks ?? [];
+  const skillNodes = (node.skills ?? []).map((id) => nodes.find((n) => n.id === id)).filter((n): n is GraphNode => Boolean(n));
+
+  function setPrimary(event: ChangeEvent<HTMLSelectElement>): void {
+    const [providerId, ...rest] = event.target.value.split("|");
+    onUpdate(node.id, { provider: providerId as ProviderId, model: rest.join("|") });
+  }
+
+  function addFallbackModel(ref: ModelRef): void {
+    if (fallbacks.some((f) => f.provider === ref.provider && f.model === ref.model)) return;
+    onUpdate(node.id, { fallbacks: [...fallbacks, ref] });
+  }
+
+  function removeFallback(index: number): void {
+    onUpdate(node.id, { fallbacks: fallbacks.filter((_, i) => i !== index) });
+  }
+
+  function promoteFallback(index: number): void {
+    const ref = fallbacks[index];
+    const demoted: ModelRef | null = provider && node.model ? { provider: node.provider as ProviderId, model: node.model } : null;
+    const nextFallbacks = fallbacks.filter((_, i) => i !== index);
+    onUpdate(node.id, { provider: ref.provider, model: ref.model, fallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks });
+  }
+
+  return (
+    <aside className="palette inspector" aria-label={`${node.label} settings`}>
+      <header className="inspector-head">
+        <button type="button" className="inspector-back" onClick={onClose}>
+          <ChevronLeft size={15} /> Library
+        </button>
+      </header>
+
+      <div className="inspector-title">
+        <span className={node.kind === "skill" ? "node-icon skill compact" : "node-icon logo compact"}>
+          {node.kind === "skill" ? <ClipboardList size={20} strokeWidth={1.8} /> : <img alt="" src={provider?.logo ?? PROVIDERS.qwen.logo} />}
+        </span>
+        <input className="inspector-name" value={node.label} onChange={(event) => onUpdate(node.id, { label: event.target.value })} aria-label="Name" />
+      </div>
+
+      <div className="inspector-body">
+        {node.kind === "agent" ? (
+          <label className="field">
+            <span>Route intent</span>
+            <input value={node.intent ?? ""} placeholder="e.g. frontend design" onChange={(event) => onUpdate(node.id, { intent: event.target.value })} />
+          </label>
+        ) : null}
+
+        {node.kind !== "skill" ? (
+          <>
+            <label className="field">
+              <span>Primary model</span>
+              <select value={node.provider ? `${node.provider}|${node.model}` : ""} onChange={setPrimary}>
+                {!node.provider ? <option value="">Unassigned</option> : null}
+                {node.provider && !MODEL_LIBRARY.some((ref) => ref.provider === node.provider && ref.model === node.model) ? (
+                  <option value={`${node.provider}|${node.model}`}>
+                    {PROVIDERS[node.provider].label} · {node.model}
+                  </option>
+                ) : null}
+                {MODEL_LIBRARY.map((ref) => (
+                  <option key={`${ref.provider}|${ref.model}`} value={`${ref.provider}|${ref.model}`}>
+                    {PROVIDERS[ref.provider].label} · {ref.model}
+                    {PROVIDERS[ref.provider].tier === "local" ? " (local)" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            {needsApiKey ? (
+              <div className="node-api-warning">
+                <Shield size={14} />
+                <span>Connect this provider in Settings before running tests.</span>
+              </div>
+            ) : null}
+
+            <label className="field">
+              <span>Temperature · {(node.temperature ?? 0.4).toFixed(2)}</span>
+              <input type="range" min={0} max={1} step={0.05} value={node.temperature ?? 0.4} onChange={(event) => onUpdate(node.id, { temperature: Number(event.target.value) })} />
+            </label>
+
+            <div className="field">
+              <span>
+                Fallback chain {node.kind === "router" ? "· tries these if the route model is busy" : "· cheaper / smaller backups"}
+              </span>
+              <ol className="fallback-list">
+                {fallbacks.length === 0 ? <li className="fallback-empty">No fallbacks yet</li> : null}
+                {fallbacks.map((ref, index) => (
+                  <li className="fallback-row" key={`${ref.provider}-${ref.model}-${index}`}>
+                    <span className="fallback-rank">{index + 1}</span>
+                    <span className="palette-icon logo small">
+                      <img alt="" src={PROVIDERS[ref.provider].logo} />
+                    </span>
+                    <span className="fallback-name">
+                      {PROVIDERS[ref.provider].label} · {ref.model}
+                    </span>
+                    <button type="button" aria-label="Promote to primary" title="Make primary" onClick={() => promoteFallback(index)}>
+                      <ChevronUp size={14} />
+                    </button>
+                    <button type="button" aria-label="Remove fallback" title="Remove" onClick={() => removeFallback(index)}>
+                      <X size={14} />
+                    </button>
+                  </li>
+                ))}
+              </ol>
+              <div className="fallback-picker" aria-label="Add fallback model">
+                {MODEL_LIBRARY.map((ref) => {
+                  const exists = fallbacks.some((fallback) => fallback.provider === ref.provider && fallback.model === ref.model);
+                  return (
+                    <button key={`${ref.provider}|${ref.model}`} type="button" className={`fallback-option ${exists ? "active" : ""}`} disabled={exists} onClick={() => addFallbackModel(ref)}>
+                      <span className="palette-icon logo small">
+                        <img alt="" src={PROVIDERS[ref.provider].logo} />
+                      </span>
+                      <span>
+                        <strong>{PROVIDERS[ref.provider].label}</strong>
+                        <small>{ref.model}</small>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        ) : null}
+
+        {node.kind === "agent" ? (
+          <div className="field">
+            <span>Skills loaded first</span>
+            {skillNodes.length === 0 ? <p className="field-hint">Drag skills from the Library onto this agent.</p> : null}
+            <ul className="skill-chips">
+              {skillNodes.map((skill) => (
+                <li key={skill.id} className="skill-chip">
+                  <ClipboardList size={13} strokeWidth={1.9} />
+                  <span>{skill.label}</span>
+                  <button type="button" aria-label={`Detach ${skill.label}`} onClick={() => onDetachSkill(skill.id)}>
+                    <X size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
+        {node.kind === "agent" && routeTest ? (
+          <div className={`node-test-result ${routeTest.status}`}>
+            <header>
+              <small>Route test</small>
+              <strong>{routeTest.status === "running" ? "Processing request" : routeTest.status === "error" ? "Route blocked" : "Route completed"}</strong>
+            </header>
+            <ol>
+              <li className="complete">
+                <span />
+                Router received prompt
+              </li>
+              <li className={routeTest.status === "running" ? "active" : routeTest.status === "error" ? "" : "complete"}>
+                <span />
+                {node.intent ? `Matched ${node.intent}` : "Matched selected agent"}
+              </li>
+              <li className={routeTest.status === "complete" ? "complete" : ""}>
+                <span />
+                {node.provider ? `${PROVIDERS[node.provider].label} / ${node.model ?? "auto"}` : "No model assigned"}
+              </li>
+            </ol>
+            <p>
+              {routeTest.status === "error"
+                ? routeTest.message
+                : routeTest.status === "complete"
+                  ? `Route reached ${node.provider ? PROVIDERS[node.provider].label : "the agent"} and came back clear.`
+                  : "Sending a packet along the selected route…"}
+            </p>
+          </div>
+        ) : null}
+
+        {node.kind === "skill" ? <p className="field-hint">Drag this onto an agent to load it on that route, or delete it below.</p> : null}
+      </div>
+
+      <footer className="inspector-foot">
+        {node.kind === "agent" ? (
+          <button type="button" className="inspector-test" onClick={() => onTest(node.id)}>
+            <Play size={14} /> Run test
+          </button>
+        ) : null}
+        {node.kind !== "router" ? (
+          <button type="button" className="inspector-delete" onClick={() => onDelete(node.id)}>
+            <Trash2 size={14} /> Delete
+          </button>
+        ) : null}
+      </footer>
+    </aside>
+  );
+}
+
+function routeSegments(routerPos: Vec, agent: GraphNode, skillIds: string[], resolve: (id: string) => Vec): RouteSegment[] {
+  const skillPositions = skillIds.map(resolve);
+  if (skillPositions.length === 0) return [{ from: routerPos, to: agent.pos }];
+  if (skillPositions.length === 1) return [{ from: routerPos, to: skillPositions[0] }, { from: skillPositions[0], to: agent.pos }];
+
+  const center = average(skillPositions);
+  const split = lerp(routerPos, center, 0.55);
+  const merge = lerp(agent.pos, center, 0.55);
+  return [
+    { from: routerPos, to: split },
+    ...skillPositions.map((pos) => ({ from: split, to: pos })),
+    ...skillPositions.map((pos) => ({ from: pos, to: merge })),
+    { from: merge, to: agent.pos }
+  ];
+}
+
+function average(points: Vec[]): Vec {
+  const total = points.reduce((acc, point) => ({ x: acc.x + point.x, y: acc.y + point.y }), { x: 0, y: 0 });
+  return { x: total.x / points.length, y: total.y / points.length };
+}
+
+function distancePointToSegment(point: Vec, from: Vec, to: Vec): number {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (dx === 0 && dy === 0) return Math.hypot(point.x - from.x, point.y - from.y);
+  const t = Math.max(0, Math.min(1, ((point.x - from.x) * dx + (point.y - from.y) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(point.x - (from.x + dx * t), point.y - (from.y + dy * t));
+}
+
+function normalizeMemoryLabel(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function lerp(a: Vec, b: Vec, t: number): Vec {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+}
+
+function curve(a: Vec, b: Vec): string {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return `M ${a.x} ${a.y} C ${a.x + dx * 0.5} ${a.y} ${b.x - dx * 0.5} ${b.y} ${b.x} ${b.y}`;
+  }
+  return `M ${a.x} ${a.y} C ${a.x} ${a.y + dy * 0.5} ${b.x} ${b.y - dy * 0.5} ${b.x} ${b.y}`;
 }
