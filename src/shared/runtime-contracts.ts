@@ -478,6 +478,10 @@ export interface OrchestrationStage {
   /** Red "falling back…" notes recorded while trying primary -> fallback -> local. */
   fallbackNotes: string[];
   failed: boolean;
+  /** Number of "is this done?" self-verification passes the critic loop ran
+   *  against this stage before accepting the output (docs/FABLE_PLANS.md §22).
+   *  Undefined/0 means the critic either wasn't enabled or passed first try. */
+  criticPasses?: number;
 }
 
 export interface LabExperimentStep {

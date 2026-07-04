@@ -8099,6 +8099,9 @@ function ManagerWorkspace(): JSX.Element {
 
 function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
   const [settings, setSettings] = useAppStoreState("settings", DEFAULT_SETTINGS);
+  // "Is this done?" critic loop (docs/FABLE_PLANS.md §22) — a top-level store
+  // key (not nested in AppSettings) since main.ts reads it directly by name.
+  const [selfVerify, setSelfVerify] = useAppStoreState<"off" | "local" | "all">("selfVerify", "local");
   const [policyStatus, setPolicyStatus] = useState<PolicyStatus>(FALLBACK_POLICY_STATUS);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
@@ -8355,6 +8358,19 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
             <label className="settings-field">
               <span>Language</span>
               <input value={settings.language} onChange={(event) => updateSetting("language", event.target.value)} />
+            </label>
+            <label className="settings-field">
+              <span>Self-verification</span>
+              <CustomSelect
+                ariaLabel="Self-verification"
+                value={selfVerify}
+                onChange={(value) => setSelfVerify(value as "off" | "local" | "all")}
+                options={[
+                  { value: "off", label: "Off", hint: "Never critique stage output" },
+                  { value: "local", label: "Local models", hint: "Local tokens are free — critique those stages" },
+                  { value: "all", label: "All models", hint: "Also critique cloud model stages" }
+                ]}
+              />
             </label>
           </div>
           <label className="settings-field wide">

@@ -3265,6 +3265,105 @@ async function callStageWithFallback(chain: StageModelRef[], prompt: string): Pr
   return { ref: chain[chain.length - 1], output: "", notes: [...notes, "All models for this stage failed."], failed: true };
 }
 
+// --- "Is this done?" critic loop (docs/FABLE_PLANS.md §22) ---
+// Local tokens are effectively free, so after a stage completes we can afford
+// to auto-prompt a local critic model asking whether the output actually
+// finished the task, and push the stage model to keep going when it didn't.
+// This is what catches "the local model gave up halfway through the file".
+const CRITIC_PASS_LIMIT = 4;
+
+type CriticVerdict = { done: boolean; missing: string[] };
+
+/** Calls the local model with a tight completeness-judging template and
+ *  parses its verdict defensively. Never throws: any failure to reach the
+ *  model or to parse its reply returns null, which callers treat as "skip
+ *  critique" — the critic must never be able to turn a working stage into a
+ *  failed one. */
+async function critiqueStageOutput(stageLabel: string, stagePrompt: string, output: string): Promise<CriticVerdict | null> {
+  try {
+    const taskSummary = stagePrompt.slice(0, 1500);
+    const cappedOutput = output.slice(0, 6000);
+    const criticPrompt = `You are a strict completeness critic for a build pipeline stage called "${stageLabel}".
+
+TASK GIVEN TO THE MODEL:
+${taskSummary}
+
+OUTPUT PRODUCED:
+${cappedOutput}
+
+Judge ONLY whether the output fully completes the task above. For stages that produce files: are the files complete (not truncated, no "rest of code here" / "// ... continued" / "..." placeholders, no missing closing tags/braces)? Do not judge style or taste, only completeness.
+
+Answer with ONLY JSON, nothing else, in this exact shape:
+{ "done": true or false, "missing": ["short description of what's missing", ...] }
+
+If it is complete, "missing" should be an empty array.`;
+    const ref = localStageRef();
+    const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt: criticPrompt });
+    if (result.source === "placeholder" || !result.output.trim()) return null;
+    const cleaned = stripThinkBlocks(result.output);
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) return null;
+    const parsed = JSON.parse(match[0]) as { done?: unknown; missing?: unknown };
+    if (typeof parsed.done !== "boolean") return null;
+    const missing = Array.isArray(parsed.missing) ? parsed.missing.filter((item): item is string => typeof item === "string") : [];
+    return { done: parsed.done, missing };
+  } catch {
+    return null;
+  }
+}
+
+/** Self-verify policy: local-provider stages always get critiqued (local
+ *  tokens are free); cloud-provider stages only get critiqued when the user
+ *  opted into "all". */
+async function shouldSelfVerifyStage(ref: StageModelRef): Promise<boolean> {
+  if (ref.provider === "ollama") return true;
+  const selfVerify = await readStoreValue<"off" | "local" | "all">("selfVerify", "local");
+  return selfVerify === "all";
+}
+
+/** Runs the critic loop against an already-completed stage attempt, re-calling
+ *  the stage model chain with the missing-items list appended when the critic
+ *  says the output isn't done yet. Returns the (possibly revised) output and
+ *  how many critic passes actually ran. Fails soft at every step — a critic or
+ *  re-call error just stops the loop and keeps the last good output. */
+async function runCriticLoop(args: {
+  stageLabel: string;
+  stagePrompt: string;
+  chain: StageModelRef[];
+  ref: StageModelRef;
+  output: string;
+  stream?: SessionStreamController;
+}): Promise<{ output: string; criticPasses: number }> {
+  const isLocalStage = args.ref.provider === "ollama";
+  if (!(await shouldSelfVerifyStage(args.ref))) return { output: args.output, criticPasses: 0 };
+  if (!args.output.trim()) return { output: args.output, criticPasses: 0 };
+
+  const passLimit = isLocalStage ? CRITIC_PASS_LIMIT : 1;
+  let currentOutput = args.output;
+  let passes = 0;
+
+  for (let i = 0; i < passLimit; i++) {
+    const verdict = await critiqueStageOutput(args.stageLabel, args.stagePrompt, currentOutput);
+    if (verdict === null) break; // Unparseable/unreachable critic — skip, never block.
+    if (verdict.done) break; // Silence when it passes first try — no timeline noise.
+
+    passes++;
+    const firstMissing = (verdict.missing[0] ?? "the rest of the task").trim();
+    const trimmedMissing = firstMissing.length > 100 ? `${firstMissing.slice(0, 97)}...` : firstMissing;
+    emitTimeline(args.stream, timelineText(`Self-check ${passes}: still missing ${trimmedMissing} — continuing.`));
+
+    const missingList = verdict.missing.length > 0 ? verdict.missing.map((item) => `- ${item}`).join("\n") : "- (no specifics given, but the task is not finished)";
+    const continuationPrompt = `${args.stagePrompt}\n\nYour previous output was incomplete. You MUST complete: \n${missingList}\n\nContinue and return the COMPLETE result (full files, not diffs).\n\nYour previous output:\n${currentOutput.slice(0, 8000)}`;
+
+    const attempt = await callStageWithFallback(args.chain, continuationPrompt);
+    if (!attempt.failed && attempt.output.trim()) {
+      currentOutput = stripThinkBlocks(attempt.output);
+    }
+  }
+
+  return { output: currentOutput, criticPasses: passes };
+}
+
 // --- Design seeds (creativity as infrastructure; docs/FABLE_PLANS.md §1) ---
 
 /** Simple deterministic string hash (djb2). Good enough for picking an index
@@ -3458,7 +3557,22 @@ async function runOrchestratedStages(prompt: string, stream?: SessionStreamContr
     // separately so the renderer can surface it later.
     const rawOutput = attempt.output;
     const stageThoughts = splitThinkTaggedOutput(rawOutput).thoughts;
-    const cleanOutput = stripThinkBlocks(rawOutput);
+    let cleanOutput = stripThinkBlocks(rawOutput);
+    // "Is this done?" critic loop (docs/FABLE_PLANS.md §22): only worth
+    // running when the stage actually produced something to judge.
+    let criticPasses = 0;
+    if (!attempt.failed && cleanOutput.trim()) {
+      const criticResult = await runCriticLoop({
+        stageLabel: stage.label,
+        stagePrompt,
+        chain: stage.chain,
+        ref: attempt.ref,
+        output: cleanOutput,
+        stream
+      });
+      cleanOutput = criticResult.output;
+      criticPasses = criticResult.criticPasses;
+    }
     const completedStage: OrchestrationStage = {
       id: stage.id,
       label: stage.label,
@@ -3467,7 +3581,8 @@ async function runOrchestratedStages(prompt: string, stream?: SessionStreamContr
       output: cleanOutput,
       thoughts: stageThoughts || undefined,
       fallbackNotes: attempt.notes,
-      failed: attempt.failed
+      failed: attempt.failed,
+      criticPasses: criticPasses > 0 ? criticPasses : undefined
     };
     results.push(completedStage);
     emitStream(stream, { kind: "stage", stage: completedStage });
@@ -3620,7 +3735,24 @@ async function runExtractionRecovery(args: {
     const recoveryPrompt = `${metisFilePromptBlock(args.metisFile ?? null)}Your previous output described the project but did not include complete writable files. Output ALL project files NOW, complete file contents (not diffs, not descriptions). Before each fenced code block put the file path in backticks on its own line (e.g. \`index.html\`). Plan and prior output follow:\n${planOutput}\n${frontendOutput.slice(0, 8000)}`;
     const attempt = await callStageWithFallback(chain, recoveryPrompt);
     const thoughts = splitThinkTaggedOutput(attempt.output).thoughts;
-    const cleanOutput = stripThinkBlocks(attempt.output);
+    let cleanOutput = stripThinkBlocks(attempt.output);
+    // One cheap critique pass here too (docs/FABLE_PLANS.md §22) — skipped
+    // entirely if the critic is unreachable/unparseable or self-verify is off.
+    let criticPasses = 0;
+    if (!attempt.failed && cleanOutput.trim() && (await shouldSelfVerifyStage(attempt.ref))) {
+      const verdict = await critiqueStageOutput(`File recovery ${attemptNumber}`, recoveryPrompt, cleanOutput);
+      if (verdict && !verdict.done) {
+        criticPasses = 1;
+        const firstMissing = (verdict.missing[0] ?? "the rest of the files").trim();
+        emitTimeline(args.stream, timelineText(`Self-check: still missing ${firstMissing.length > 100 ? `${firstMissing.slice(0, 97)}...` : firstMissing} — continuing.`));
+        const missingList = verdict.missing.length > 0 ? verdict.missing.map((item) => `- ${item}`).join("\n") : "- (no specifics given, but the task is not finished)";
+        const continuationPrompt = `${recoveryPrompt}\n\nYour previous output was incomplete. You MUST complete: \n${missingList}\n\nContinue and return the COMPLETE result (full files, not diffs).\n\nYour previous output:\n${cleanOutput.slice(0, 8000)}`;
+        const retryAttempt = await callStageWithFallback(chain, continuationPrompt);
+        if (!retryAttempt.failed && retryAttempt.output.trim()) {
+          cleanOutput = stripThinkBlocks(retryAttempt.output);
+        }
+      }
+    }
     const recoveryStage: OrchestrationStage = {
       id: `extract-recovery-${attemptNumber}`,
       label: `File recovery ${attemptNumber}`,
@@ -3629,7 +3761,8 @@ async function runExtractionRecovery(args: {
       output: cleanOutput,
       thoughts: thoughts || undefined,
       fallbackNotes: attempt.notes,
-      failed: attempt.failed
+      failed: attempt.failed,
+      criticPasses: criticPasses > 0 ? criticPasses : undefined
     };
     args.stages.push(recoveryStage);
     emitStream(args.stream, { kind: "stage", stage: recoveryStage });
