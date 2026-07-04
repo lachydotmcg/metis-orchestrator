@@ -154,6 +154,14 @@ type GraphNode = {
   intent?: string;
   skills?: string[];
   temperature?: number;
+  /** "Access via" override (docs/FABLE_PLANS.md section 21): pins this node's
+   *  primary model to a specific route provider instead of Auto resolution.
+   *  Persisted with the rest of the graph node state (see the GraphWorkspace
+   *  localStorage effect). NOTE: the orchestration graph is still UI-only —
+   *  the real pipeline runs defaultAgenticStages in main.ts, not graph state —
+   *  so this override is stored + displayed now and will be consumed once
+   *  graph-driven stage execution lands; it does not affect any run today. */
+  accessVia?: ProviderId;
 };
 
 type DragPayload =
@@ -2530,6 +2538,7 @@ function NewSessionWorkspace({
   const [draftModelProvider, setDraftModelProvider] = useState<ProviderId>("claude");
   const [customModels, setCustomModels] = useAppStoreState("customModels", [] as ModelRef[]);
   const [remoteModelCatalog, setRemoteModelCatalog] = useState<CatalogModel[]>([]);
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
 
   // Live model catalog (docs/FABLE_PLANS.md section 14) — fetched on mount from
   // the registry's catalog/models.json (cached by main process for offline use).
@@ -2542,10 +2551,51 @@ function NewSessionWorkspace({
       .catch(() => undefined);
   }, []);
 
+  // Provider configured/cooling status (docs/FABLE_PLANS.md section 21) — used
+  // only for the picker's lightweight "via <Provider>" route-suffix approximation
+  // below; a fresh health check isn't needed here, list() already reflects
+  // configured + cooling state. Guarded for browser preview.
+  useEffect(() => {
+    if (!window.metisProviders) return;
+    window.metisProviders
+      .list()
+      .then(setProviderStatuses)
+      .catch(() => undefined);
+  }, []);
+
   // Remote catalog entries mapped onto the picker's ModelRef shape and brand ids.
   const remoteModelRefs = useMemo(
     () => remoteModelCatalog.map((entry): ModelRef => ({ provider: CATALOG_PROVIDER_TO_BRAND[entry.provider], model: entry.name })),
     [remoteModelCatalog]
+  );
+
+  // "via <Provider>" route suffix (docs/FABLE_PLANS.md section 21) — a
+  // lightweight, pure-renderer approximation of route resolution: for a model
+  // with multiple known access routes, find the first route whose provider is
+  // configured and not cooling (falling back to the first configured route),
+  // and show its brand label as a suffix when it's NOT the model's own default
+  // provider (i.e. the interesting "reached through a different API" case).
+  // configured ≈ status !== "not_configured"; cooling shows up as status
+  // "unavailable" with a cooldown detail string (see healthCheckProvider/
+  // listProviders in main.ts) — approximate but fine for a picker hint.
+  const resolveRouteSuffix = useCallback(
+    (ref: ModelRef): string | null => {
+      const entry = remoteModelCatalog.find((candidate) => candidate.name.toLowerCase() === ref.model.toLowerCase());
+      const access = entry?.access;
+      if (!entry || !access || access.length < 2) return null;
+
+      const statusFor = (key: ProviderKey) => providerStatuses.find((status) => status.provider === key);
+      const configuredNotCooling = access.find((route) => {
+        const status = statusFor(route.provider);
+        return status && status.status !== "not_configured" && status.status !== "unavailable";
+      });
+      const bestRoute = configuredNotCooling ?? access.find((route) => statusFor(route.provider)?.status !== "not_configured") ?? access[0];
+      if (bestRoute.provider === entry.provider) return null;
+
+      const brand = CATALOG_PROVIDER_TO_BRAND[bestRoute.provider];
+      return brand ? PROVIDERS[brand].label : null;
+    },
+    [remoteModelCatalog, providerStatuses]
   );
 
   // Cloud/Local -> brand -> models, filtered. Remote catalog models extend
@@ -3180,6 +3230,7 @@ function NewSessionWorkspace({
           draftModelProvider={draftModelProvider}
           setDraftModelProvider={setDraftModelProvider}
           addCustomModel={addCustomModel}
+          resolveRouteSuffix={resolveRouteSuffix}
         />
       </div>
     </div>
@@ -3225,7 +3276,8 @@ function SessionComposer({
   setDraftModelName,
   draftModelProvider,
   setDraftModelProvider,
-  addCustomModel
+  addCustomModel,
+  resolveRouteSuffix
 }: {
   sessionBusy: boolean;
   projectWorkspace: ProjectWorkspace | null;
@@ -3250,6 +3302,10 @@ function SessionComposer({
   draftModelProvider: ProviderId;
   setDraftModelProvider: (provider: ProviderId) => void;
   addCustomModel: () => void;
+  /** "via <Provider>" route-suffix approximation (docs/FABLE_PLANS.md section
+   *  21) — null when the model has one route or resolves through its own
+   *  default provider (the non-interesting case). */
+  resolveRouteSuffix: (ref: ModelRef) => string | null;
 }): JSX.Element {
   const [prompt, setPrompt] = useState("");
   const [permOpen, setPermOpen] = useState(false);
@@ -3400,6 +3456,7 @@ function SessionComposer({
             <button className={`router-pill ${routerOpen ? "active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={routerOpen} onClick={() => setRouterOpen((open) => !open)}>
               <img src={selectedModel ? PROVIDERS[selectedModel.provider].logo : AUTOROUTER_LOGO} alt="" />
               {selectedModel ? selectedModel.model : "Auto router"}
+              {selectedModel && resolveRouteSuffix(selectedModel) ? <small className="router-route-suffix">via {resolveRouteSuffix(selectedModel)}</small> : null}
               <ChevronUp className={`router-caret ${routerOpen ? "open" : ""}`} size={14} />
             </button>
             {routerOpen ? (
@@ -3429,9 +3486,13 @@ function SessionComposer({
                             </div>
                             {brand.models.map((ref) => {
                               const active = selectedModel?.provider === ref.provider && selectedModel?.model === ref.model;
+                              const routeSuffix = resolveRouteSuffix(ref);
                               return (
                                 <button key={`${ref.provider}-${ref.model}`} type="button" role="option" aria-selected={active} className={`router-option ${active ? "active" : ""}`} onClick={() => { setSelectedModel(ref); setRouterOpen(false); }}>
-                                  <span className="router-option-name">{ref.model}</span>
+                                  <span className="router-option-name">
+                                    {ref.model}
+                                    {routeSuffix ? <small className="router-route-suffix">via {routeSuffix}</small> : null}
+                                  </span>
                                   {active ? <Check size={14} /> : null}
                                 </button>
                               );
@@ -8615,6 +8676,39 @@ function NodeInspector({
   const fallbacks = node.fallbacks ?? [];
   const skillNodes = (node.skills ?? []).map((id) => nodes.find((n) => n.id === id)).filter((n): n is GraphNode => Boolean(n));
 
+  // "Access via" override (docs/FABLE_PLANS.md section 21) — the model catalog
+  // knows every route (provider) a given model is reachable through; fetched
+  // here so the inspector can offer only the routes that actually apply to
+  // this node's selected model. Guarded for browser preview / no catalog yet.
+  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([]);
+  useEffect(() => {
+    if (!window.metisCatalog) return;
+    let alive = true;
+    window.metisCatalog
+      .models()
+      .then((state) => {
+        if (alive) setCatalogModels(state.models);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Distinct route providers for the node's current model: look up the
+  // catalog entry whose name matches this node's model text, and map its
+  // access routes' ProviderKeys onto the renderer's brand ids. When the model
+  // isn't in the catalog (custom/hand-typed model), fall back to just the
+  // node's own provider — there's no known alternate route to offer.
+  const accessViaOptions = useMemo((): ProviderId[] => {
+    const catalogEntry = node.model ? catalogModels.find((entry) => entry.name.toLowerCase() === node.model!.toLowerCase()) : undefined;
+    const routes = catalogEntry?.access ?? [];
+    const brands = routes.map((route) => CATALOG_PROVIDER_TO_BRAND[route.provider]).filter((brand): brand is ProviderId => Boolean(brand));
+    const distinct = Array.from(new Set(brands));
+    if (distinct.length > 0) return distinct;
+    return node.provider ? [node.provider] : [];
+  }, [catalogModels, node.model, node.provider]);
+
   function setPrimary(event: ChangeEvent<HTMLSelectElement>): void {
     const [providerId, ...rest] = event.target.value.split("|");
     onUpdate(node.id, { provider: providerId as ProviderId, model: rest.join("|") });
@@ -8678,6 +8772,21 @@ function NodeInspector({
                 ))}
               </select>
             </label>
+
+            {node.provider ? (
+              <label className="field">
+                <span>Access via</span>
+                <CustomSelect
+                  ariaLabel="Access via"
+                  value={node.accessVia ?? ""}
+                  onChange={(value) => onUpdate(node.id, { accessVia: value ? (value as ProviderId) : undefined })}
+                  options={[
+                    { value: "", label: "Auto", hint: "Best available route" },
+                    ...accessViaOptions.map((brand) => ({ value: brand, label: PROVIDERS[brand].label }))
+                  ]}
+                />
+              </label>
+            ) : null}
 
             {needsApiKey ? (
               <div className="node-api-warning">

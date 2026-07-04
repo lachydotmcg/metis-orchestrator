@@ -1,5 +1,19 @@
 # Fable Plans — feature designs for Metis Orchestrator
 
+> ## ▶ POST-COMPACT / NEW-SESSION HANDOFF (updated 2026-07-04 evening)
+> Read this first, then the numbered sections as needed. Working arrangement: **Fable diagnoses/
+> plans/verifies; Sonnet subagents implement.** Every subagent brief MUST include: "do the work
+> yourself — Agent tool forbidden" and "never git stash/checkout/restore/reset/commit". Coordinator
+> commits + pushes after EVERY verified round (quote-free commit messages — PS 5.1 mangles quotes).
+> Build check: `npm run build`. Repo pushes to github.com/lachydotmcg/metis-orchestrator; registry
+> clone lives in the session scratchpad (re-clone github.com/lachydotmcg/metis-registry if absent).
+> Memory file `metis-orchestrator.md` has the full history; this doc has the designs.
+> **Open work, in order:** (1) §23b gallery tweaks below; (2) §24 permission modes + in-run
+> prompts + AskUserQuestion; (3) verify §21 models×routes landed (agent was in flight at handoff —
+> check git log for a models×routes commit; if absent, re-dispatch per §21); (4) push registry
+> catalog v2 with access[] arrays if not done; (5) parallel sessions live test (code present,
+> untested); (6) §16 knowledge banks; (7) onboarding tutorial; (8) §19 phase 2 key pools.
+
 Written 2026-07-02 by Claude Fable 5. Division of labour: this doc is the thinking; Opus/Sonnet
 sessions action individual sections. Each section is self-contained enough to hand to a cold agent.
 Companion doc: AGENTIC_ROADMAP.md (agentic core). This one covers product/experience features.
@@ -412,6 +426,51 @@ is "is this DONE?" instead of "is this factual" (though factuality checks fit th
   edits persist to the style card (and user edits should outrank model captions in retrieval).
 - **Remove the "Linked to orchestration" button** — gallery is always part of orchestration.
 - **Remove "Add sample reference" and ALL seeded sample references** — real images only.
+
+## 23b. Gallery tweaks round 2 (Lachy, 2026-07-04 evening)
+
+- Move the "drop images here / add a reference" affordance UP: a compact control to the RIGHT of
+  the board title at the top of the board detail view (not a big zone in the body).
+- Clicking an image: add a **Delete image** option (removes from board + its style card).
+- RELOCATE per-image title/description editing: instead of the inline panel on the image card,
+  selecting an image surfaces its title/description for editing in the HEADER area (same
+  interaction language as editing the board title — click the text to edit in place).
+- **BUG: sample references still present** — §23 only stopped seeding for fresh installs; Lachy's
+  persisted store still has them. Add a one-time migration on load: strip known sample images
+  (the seeded `data:image/svg+xml` entries / their known ids) from stored boards, and remove
+  now-empty sample boards.
+
+## 24. Permission modes + in-run prompts + AskUserQuestion (Lachy, 2026-07-04 — priority)
+
+Lachy wants the permission system revamped around FIVE MODES (Claude Code-style), selectable from
+the composer's permission control (replacing restricted/standard/trusted):
+
+1. **Ask Permissions** — every file write, command, and new network scope pauses the run and asks.
+2. **Accept Edits** — file writes auto-approved; commands + new scopes still ask.
+3. **Plan Mode** — read-only: the pipeline runs planning/analysis only and reports what it WOULD
+   do (no writes, no commands); ends with a "switch to Auto and go?" affordance.
+4. **Auto Mode** — current trusted behavior: proceeds, asks only for destructive or never-granted
+   scopes (default).
+5. **Bypass Permissions** — no prompts at all (scary-red styling, persisted per project).
+
+**In-run permission prompts (the mechanism):** main pauses mid-run awaiting an answer —
+- new stream event `{ kind: "permission_request", request: { id, scope, target, detail } }`;
+- main awaits a promise registered in a `pendingPermissionPrompts: Map<id, resolver>`;
+- renderer shows an in-chat approval card (slim, accent-bordered: detail + Allow once / Always
+  allow / Deny buttons) and replies via IPC `metis-permissions:respond (id, verdict)`;
+- Deny → the step is skipped with a visible "denied" line (run continues where sensible);
+- timeout (~5 min) → treated as Deny; "Always allow" writes a PermissionGrant (existing system).
+- `SessionRunInput.permissionLevel` becomes `permissionMode: "ask"|"edits"|"plan"|"auto"|"bypass"`
+  (keep the old field parsing for back-compat).
+
+**AskUserQuestion (models asking the user):** same pause mechanism, different payload —
+- stage prompts tell models they MAY emit `<ask_user>{"question":"...","options":["..",".."]}
+  </ask_user>` when a genuinely blocking decision arises (and to otherwise decide themselves —
+  don't let this become "what would you like to build" regression; cap 1 question per stage);
+- orchestrator intercepts the tag mid-stage, emits `{ kind: "user_question", ... }`, pauses;
+- chat renders the question with option chips + free-text; the answer is appended to the stage
+  prompt and the stage re-runs/continues; timeout → orchestrator answers itself with the most
+  sensible default and says so.
 
 ## 20. Loop-transcript chat polish (Lachy, 2026-07-04)
 

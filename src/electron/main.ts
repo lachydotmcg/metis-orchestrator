@@ -37,6 +37,7 @@ import type {
   ProjectWorkspaceResource,
   ProjectWorkspaceSelectionResult,
   CatalogModel,
+  ModelAccessRoute,
   ModelCatalogState,
   PulseFeed,
   RegistryPackage,
@@ -162,6 +163,48 @@ function formatCooldownDuration(untilMs: number): string {
   const minutes = Math.round(remainingMs / 60000);
   if (minutes <= 0) return "under a minute";
   return `${minutes}m`;
+}
+
+/** Shared "does this provider have a usable credential" check — the same test
+ *  the health system (listProviders/healthCheckProvider) uses, reused here so
+ *  route resolution (docs/FABLE_PLANS.md section 21) and the health UI never
+ *  disagree about what "configured" means. Ollama is always configured (it's
+ *  a local runtime, not a key). */
+async function isProviderConfigured(provider: ProviderKey): Promise<boolean> {
+  if (provider === "ollama") return true;
+  const secrets = await readSecrets();
+  if (secrets[provider]) return true;
+  const statuses = await listSecrets();
+  return Boolean(statuses.find((status) => status.provider === provider)?.hasSecret);
+}
+
+/** Resolves the best access route for a catalog model (docs/FABLE_PLANS.md
+ *  section 21 — "models × routes"): a model and the API it's reached through
+ *  are separate axes, so a model with several routes (e.g. DeepSeek V3.1 via
+ *  its own API, NVIDIA NIM, or OpenRouter) should fall back across ROUTES
+ *  before ever falling back to a different MODEL.
+ *
+ *  Resolution order:
+ *   1. The explicit pinned provider, if it appears in `access` AND is configured.
+ *   2. The first route whose provider is configured AND not cooling.
+ *   3. The first configured route even if it's cooling (a cooling route beats none).
+ *   4. null — no route in `access` has a configured credential at all.
+ */
+async function resolveModelRoute(access: ModelAccessRoute[], pinned?: ProviderKey): Promise<ModelAccessRoute | null> {
+  if (pinned) {
+    const pinnedRoute = access.find((route) => route.provider === pinned);
+    if (pinnedRoute && (await isProviderConfigured(pinnedRoute.provider))) return pinnedRoute;
+  }
+
+  const configuredFlags = await Promise.all(access.map((route) => isProviderConfigured(route.provider)));
+  const configuredRoutes = access.filter((_, index) => configuredFlags[index]);
+
+  const healthyRoute = configuredRoutes.find((route) => !isProviderCooling(route.provider));
+  if (healthyRoute) return healthyRoute;
+
+  if (configuredRoutes.length > 0) return configuredRoutes[0];
+
+  return null;
 }
 
 /** The live community registry (docs/FABLE_PLANS.md sections 5, 8, 14). Raw GitHub
@@ -1498,13 +1541,35 @@ function modelCatalogDefaultState(): ModelCatalogState {
   return { sourceUrl: METIS_REGISTRY_BASE_URL, status: "idle", models: [] };
 }
 
+/** Validates one raw access-route entry from the wire (schema v2, docs/FABLE_PLANS.md
+ *  section 21) — {provider, id} only, both required. */
+function isValidAccessRoute(item: unknown): item is ModelAccessRoute {
+  if (!item || typeof item !== "object") return false;
+  const candidate = item as Partial<ModelAccessRoute>;
+  return Boolean(candidate.provider && typeof candidate.provider === "string" && candidate.id && typeof candidate.id === "string");
+}
+
+/** Upgrades a v1 catalog entry (bare provider+id, no `access`) to schema v2 by
+ *  synthesizing a one-route access list from its own provider/id. v2 entries
+ *  that already carry a valid non-empty `access` array pass through unchanged
+ *  (docs/FABLE_PLANS.md section 21 — "the registry's models.json evolves
+ *  without breaking v1 readers"). */
+function upgradeCatalogModelToV2(candidate: CatalogModel): CatalogModel {
+  if (Array.isArray(candidate.access) && candidate.access.length > 0 && candidate.access.every(isValidAccessRoute)) {
+    return candidate;
+  }
+  return { ...candidate, access: [{ provider: candidate.provider, id: candidate.id }] };
+}
+
 async function listModelCatalog(): Promise<ModelCatalogState> {
-  return readStoreValue<ModelCatalogState>("remoteModelCatalog", modelCatalogDefaultState());
+  const state = await readStoreValue<ModelCatalogState>("remoteModelCatalog", modelCatalogDefaultState());
+  return { ...state, models: state.models.map(upgradeCatalogModelToV2) };
 }
 
 /** Fetches `catalog/models.json` from the live registry on launch and on
  *  registry refresh, caching the result so the model picker keeps its last
- *  known list offline (docs/FABLE_PLANS.md section 14). */
+ *  known list offline (docs/FABLE_PLANS.md section 14). Accepts both v1 (bare
+ *  provider+id) and v2 (`access[]`) entries — see upgradeCatalogModelToV2. */
 async function refreshModelCatalog(sourceUrl?: string): Promise<ModelCatalogState> {
   const base = (sourceUrl?.trim() || METIS_REGISTRY_BASE_URL).replace(/\/$/, "");
   try {
@@ -1512,11 +1577,16 @@ async function refreshModelCatalog(sourceUrl?: string): Promise<ModelCatalogStat
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const payload = (await response.json()) as { models?: unknown };
     const models = Array.isArray(payload.models)
-      ? payload.models.filter((item): item is CatalogModel => {
-          if (!item || typeof item !== "object") return false;
-          const candidate = item as Partial<CatalogModel>;
-          return Boolean(candidate.provider && candidate.id && candidate.name && (candidate.tier === "cloud" || candidate.tier === "local"));
-        })
+      ? payload.models
+          .filter((item): item is CatalogModel => {
+            if (!item || typeof item !== "object") return false;
+            const candidate = item as Partial<CatalogModel>;
+            if (!candidate.provider || !candidate.id || !candidate.name || (candidate.tier !== "cloud" && candidate.tier !== "local")) return false;
+            // access[] is optional on the wire; when present, every entry must be a valid route.
+            if (candidate.access !== undefined && !(Array.isArray(candidate.access) && candidate.access.every(isValidAccessRoute))) return false;
+            return true;
+          })
+          .map(upgradeCatalogModelToV2)
       : [];
     const state: ModelCatalogState = { sourceUrl: base, refreshedAt: new Date().toISOString(), status: "ok", models };
     await writeStoreValue("remoteModelCatalog", state);
@@ -3223,8 +3293,63 @@ async function writeProjectFiles(files: GeneratedFile[], workspace: ProjectWorks
   return buildProjectToolResult(root, workspace, prepared.files, workspace ? `Project: ${workspace.name}` : "Generated project", prepared.notes);
 }
 
-async function callStageWithFallback(chain: StageModelRef[], prompt: string): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
+/** Route-before-model fallback (docs/FABLE_PLANS.md section 21): given one
+ *  {provider, model} stage entry, looks it up in the cached model catalog and,
+ *  if the catalog knows this exact provider+model as one of a model's access
+ *  routes, returns ALL of that model's routes as StageModelRefs — ordered per
+ *  resolveModelRoute's preference (pinned n/a here; just configured-and-not-
+ *  cooling first, then configured-but-cooling, then the rest as a last resort)
+ *  — so a rate-limited NVIDIA route falls through to the deepseek API route of
+ *  the SAME model before the chain ever moves on to a different model. When
+ *  the ref isn't found in the catalog (or the catalog is empty), returns the
+ *  ref unchanged as a single-entry array — callers always get at least one
+ *  StageModelRef back. */
+async function expandStageRef(ref: StageModelRef): Promise<StageModelRef[]> {
+  const catalog = await listModelCatalog();
+  const model = catalog.models.find((entry) => (entry.access ?? []).some((route) => route.provider === ref.provider && route.id === ref.model));
+  if (!model || !model.access || model.access.length === 0) return [ref];
+
+  const configuredFlags = await Promise.all(model.access.map((route) => isProviderConfigured(route.provider)));
+  const withStatus = model.access.map((route, index) => ({ route, configured: configuredFlags[index], cooling: isProviderCooling(route.provider) }));
+
+  const healthy = withStatus.filter((entry) => entry.configured && !entry.cooling);
+  const configuredButCooling = withStatus.filter((entry) => entry.configured && entry.cooling);
+  const unconfigured = withStatus.filter((entry) => !entry.configured);
+  const ordered = [...healthy, ...configuredButCooling, ...unconfigured];
+
+  return ordered.map((entry) => ({ provider: entry.route.provider, model: entry.route.id }));
+}
+
+/** Expands every entry of a stage chain through expandStageRef and dedupes the
+ *  result by provider+model, preserving first-seen order — so a chain of
+ *  MODELS (e.g. [nvidia/deepseek-v3.1, anthropic/claude]) becomes a chain of
+ *  ROUTES that tries every access route of the first model before moving on to
+ *  the second model's routes (docs/FABLE_PLANS.md section 21). */
+async function expandChainByRoutes(chain: StageModelRef[]): Promise<StageModelRef[]> {
+  const expandedGroups = await Promise.all(chain.map((ref) => expandStageRef(ref)));
+  const seen = new Set<string>();
+  const result: StageModelRef[] = [];
+  for (const group of expandedGroups) {
+    for (const ref of group) {
+      const key = `${ref.provider}|${ref.model}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(ref);
+    }
+  }
+  return result;
+}
+
+async function callStageWithFallback(rawChain: StageModelRef[], prompt: string): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
   const notes: string[] = [];
+  // Route-before-model fallback (docs/FABLE_PLANS.md §21): expand each chain
+  // entry to every access route of its catalog model (if known) before the
+  // existing "Never Run Dry" cooldown-skip logic below runs — so a cooling
+  // route rotates to a sibling route of the SAME model first, and only moves
+  // to the next model once every route of the current one is exhausted.
+  // Rotation/cooldown notes below are unaffected: they're keyed by provider,
+  // same as before expansion.
+  const chain = await expandChainByRoutes(rawChain);
   // "Never Run Dry" quota rotation (docs/FABLE_PLANS.md §19): a provider still
   // cooling from a recent 429/quota failure is skipped outright rather than
   // burning another call against it. `next` for the rotation note looks ahead

@@ -187,14 +187,35 @@ export interface RegistryState {
   packages: RegistryPackage[];
 }
 
+/** One route to a catalog model — a (provider, id) pair the model is reachable
+ *  through (docs/FABLE_PLANS.md section 21). A single model, e.g. DeepSeek V3.1,
+ *  can be reached via its own API, NVIDIA NIM, OpenRouter, etc; `access` lists
+ *  every known route, ordered by preference (most-preferred first). */
+export interface ModelAccessRoute {
+  provider: ProviderKey;
+  id: string;
+}
+
 /** `catalog/models.json` entry from the live community registry
- *  (docs/FABLE_PLANS.md section 14). `provider` uses the ProviderKey naming
- *  used by the registry, which the renderer maps to its own brand ids. */
+ *  (docs/FABLE_PLANS.md section 14). `provider`/`id` are the model's PRIMARY
+ *  (default/legacy) route and use the ProviderKey naming used by the registry,
+ *  which the renderer maps to its own brand ids.
+ *
+ *  Schema v2 (docs/FABLE_PLANS.md section 21): a model and the API route it's
+ *  reached through are separate axes — the same model may be reachable via
+ *  several providers. `access` lists every known route, ordered by preference;
+ *  when present it supersedes provider/id for route-resolution purposes. v1
+ *  catalog entries (no `access`) are auto-upgraded at load time in main.ts to
+ *  a one-route access list of just `{ provider, id }`. */
 export interface CatalogModel {
   provider: ProviderKey;
   id: string;
   name: string;
   tier: "cloud" | "local";
+  /** Ordered list of routes this model is reachable through. Optional on the
+   *  wire (v1 registry payloads omit it); always populated after main.ts's
+   *  load-time upgrade, so in-app consumers can rely on it being present. */
+  access?: ModelAccessRoute[];
 }
 
 export interface ModelCatalogState {

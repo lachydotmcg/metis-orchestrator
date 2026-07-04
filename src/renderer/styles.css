@@ -6063,9 +6063,24 @@ details.artifact-row[open] summary {
 }
 
 .router-option-name {
+  display: flex;
   flex: 1;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
   font-size: 12.5px;
+}
+
+/* "via <Provider>" route suffix (docs/FABLE_PLANS.md section 21) — muted hint
+   shown when a model resolves through a non-default access route, in both the
+   composer's selected router-pill and its option rows. */
+.router-route-suffix {
+  overflow: hidden;
+  color: var(--faint);
+  font-weight: 400;
+  font-size: 10.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .router-brand .router-option {
