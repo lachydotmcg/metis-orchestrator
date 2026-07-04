@@ -24,6 +24,7 @@ import remarkGfm from "remark-gfm";
 import {
   Archive,
   ArchiveRestore,
+  ArrowLeft,
   ArrowRight,
   ArrowUp,
   Bot,
@@ -45,6 +46,7 @@ import {
   Folder,
   GalleryHorizontalEnd,
   GitBranch,
+  GitFork,
   Github,
   Globe,
   HardDrive,
@@ -155,6 +157,15 @@ type DragPayload =
   | { kind: "model"; provider: ProviderId; model: string };
 
 type RouteSegment = { from: Vec; to: Vec };
+
+/** A user-authored local skill (text-based for now; file-based can follow later).
+ *  Persisted under the `customSkills` app-store key (docs/FABLE_PLANS.md section 18). */
+type CustomSkill = { id: string; name: string; description?: string };
+// Stable empty-array fallbacks for useAppStoreState: an inline `[] as T[]` literal is a fresh
+// reference every render, which re-fires the store's load effect and can stomp a just-written
+// update before it's ever persisted. Module-level constants keep the reference stable.
+const EMPTY_CUSTOM_SKILLS: CustomSkill[] = [];
+const EMPTY_STARRED_PACKAGES: string[] = [];
 
 type GhostDrag = { payload: DragPayload };
 type RouteTestState = { agentId: string; status: "running" | "complete" | "error"; startedAt: number; completedAt?: number; message?: string };
@@ -267,6 +278,13 @@ type GalleryBoard = {
 
 type MarketplaceCategory = "all" | "mcp" | "skill" | "preset" | "pipeline" | "template";
 type MarketplaceState = { category: MarketplaceCategory; query: string };
+
+/** Parsed `owner/repo` GitHub coordinates for a package's `source_url`, when it points at
+ *  raw.githubusercontent.com or github.com (docs/FABLE_PLANS.md section 18, "Marketplace trust + detail"). */
+type GithubRepoRef = { owner: string; repo: string };
+
+/** Subset of the GitHub `GET /repos/{owner}/{repo}` response the detail view renders. */
+type GithubRepoStats = { stars: number; forks: number; pushedAt: string; htmlUrl: string };
 
 type AppSettings = {
   globalInstructions: string;
@@ -4482,6 +4500,8 @@ function loadNodes(): GraphNode[] {
 
 function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; gallerySkills: string[] }): JSX.Element {
   const [nodes, setNodes] = useState<GraphNode[]>(loadNodes);
+  const [installedSkills, setInstalledSkills] = useState<RegistryPackage[]>([]);
+  const [customSkills, setCustomSkills] = useAppStoreState("customSkills", EMPTY_CUSTOM_SKILLS);
   const [pan, setPan] = useState<Vec>({ x: 0, y: 0 });
   const [zoom, setZoom] = useState(1);
   const [interaction, setInteraction] = useState<Interaction>(null);
@@ -4537,6 +4557,18 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
       /* storage may be unavailable */
     }
   }, [nodes]);
+
+  // Marketplace-installed skill packages, merged into the Skills palette (docs/FABLE_PLANS.md
+  // section 18): "Installed skills -> Library". The graph itself only ever stores skill node
+  // labels (see the `payload.kind === "skill"` branch below), so surfacing these here is enough
+  // for them to be attachable exactly like the built-ins — no further plumbing needed this pass.
+  useEffect(() => {
+    if (!window.metisRegistry) return;
+    void window.metisRegistry
+      .listInstalled()
+      .then((packages) => setInstalledSkills(packages.filter((pkg) => pkg.kind === "skill")))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -5034,8 +5066,11 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
     <RoutinesPanel />
   ) : (
     <Palette
+      customSkills={customSkills}
       gallerySkills={gallerySkills}
       hasSavedPreset={hasSavedPreset}
+      installedSkills={installedSkills}
+      onAddCustomSkill={(skill) => setCustomSkills((current) => [...current, skill])}
       onLoadPreset={loadPreset}
       onPick={startGhostDrag}
       onPreset={applyPreset}
@@ -5261,16 +5296,27 @@ function NodeCard({
   );
 }
 
+/** One entry in the merged Skills palette: built-ins (SKILL_LIBRARY + gallery), Marketplace-installed
+ *  packages (kind "skill"), and user-authored custom skills all render the same way, distinguished
+ *  only by a small chip (docs/FABLE_PLANS.md section 18, "Installed skills -> Library"). */
+type PaletteSkill = { name: string; source: "builtin" | "installed" | "custom"; description?: string };
+
 function Palette({
+  customSkills,
   gallerySkills,
   hasSavedPreset,
+  installedSkills,
+  onAddCustomSkill,
   onLoadPreset,
   onPick,
   onPreset,
   onSavePreset
 }: {
+  customSkills: CustomSkill[];
   gallerySkills: string[];
   hasSavedPreset: boolean;
+  installedSkills: RegistryPackage[];
+  onAddCustomSkill: (skill: CustomSkill) => void;
   onLoadPreset: () => void;
   onPick: (clientX: number, clientY: number, payload: DragPayload) => void;
   onPreset: (key: PresetKey) => void;
@@ -5278,8 +5324,23 @@ function Palette({
 }): JSX.Element {
   const [tab, setTab] = useState<"skills" | "models" | "presets">("skills");
   const [query, setQuery] = useState("");
+  const [addingSkill, setAddingSkill] = useState(false);
+  const [newSkillName, setNewSkillName] = useState("");
+  const [newSkillDescription, setNewSkillDescription] = useState("");
 
-  const skills = useMemo(() => [...new Set([...SKILL_LIBRARY, ...gallerySkills])].filter((name) => name.toLowerCase().includes(query.toLowerCase())), [gallerySkills, query]);
+  const skills = useMemo<PaletteSkill[]>(() => {
+    const builtins = [...new Set([...SKILL_LIBRARY, ...gallerySkills])].map((name) => ({ name, source: "builtin" as const }));
+    const installed = installedSkills.map((pkg) => ({ name: pkg.name, source: "installed" as const, description: pkg.description }));
+    const custom = customSkills.map((skill) => ({ name: skill.name, source: "custom" as const, description: skill.description }));
+    const seen = new Set<string>();
+    const merged: PaletteSkill[] = [];
+    for (const entry of [...installed, ...custom, ...builtins]) {
+      if (seen.has(entry.name)) continue;
+      seen.add(entry.name);
+      merged.push(entry);
+    }
+    return merged.filter((entry) => entry.name.toLowerCase().includes(query.toLowerCase()));
+  }, [customSkills, gallerySkills, installedSkills, query]);
   const models = useMemo(() => MODEL_LIBRARY.filter((entry) => `${PROVIDERS[entry.provider].label} ${entry.model}`.toLowerCase().includes(query.toLowerCase())), [query]);
   const showSearch = tab === "skills" || tab === "models";
 
@@ -5287,6 +5348,15 @@ function Palette({
     if (event.button !== 0) return;
     event.preventDefault();
     onPick(event.clientX, event.clientY, payload);
+  }
+
+  function submitCustomSkill(): void {
+    const name = newSkillName.trim();
+    if (!name) return;
+    onAddCustomSkill({ id: `custom-skill-${Date.now().toString(36)}`, name, description: newSkillDescription.trim() || undefined });
+    setNewSkillName("");
+    setNewSkillDescription("");
+    setAddingSkill(false);
   }
 
   return (
@@ -5317,12 +5387,14 @@ function Palette({
 
       <div className="palette-list">
         {tab === "skills"
-          ? skills.map((name) => (
-              <div key={name} className="palette-item skill" onPointerDown={(event) => pick(event, { kind: "skill", name })}>
+          ? skills.map((entry) => (
+              <div key={entry.name} className="palette-item skill" title={entry.description} onPointerDown={(event) => pick(event, { kind: "skill", name: entry.name })}>
                 <span className="palette-icon skill">
                   <ClipboardList size={16} strokeWidth={1.9} />
                 </span>
-                <span className="palette-label">{name}</span>
+                <span className="palette-label">{entry.name}</span>
+                {entry.source === "installed" ? <span className="palette-chip palette-chip-installed">installed</span> : null}
+                {entry.source === "custom" ? <span className="palette-chip palette-chip-custom">custom</span> : null}
               </div>
             ))
           : tab === "models"
@@ -5341,6 +5413,43 @@ function Palette({
               </div>
             ))
           : null}
+        {tab === "skills" ? (
+          <div className="palette-add-skill">
+            {addingSkill ? (
+              <div className="palette-add-skill-form">
+                <input
+                  type="text"
+                  placeholder="Skill name"
+                  value={newSkillName}
+                  autoFocus
+                  onChange={(event) => setNewSkillName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") submitCustomSkill();
+                    if (event.key === "Escape") setAddingSkill(false);
+                  }}
+                />
+                <textarea
+                  placeholder="Optional description or notes"
+                  value={newSkillDescription}
+                  onChange={(event) => setNewSkillDescription(event.target.value)}
+                  rows={2}
+                />
+                <div className="panel-actions">
+                  <button type="button" onClick={submitCustomSkill} disabled={!newSkillName.trim()}>
+                    Save skill
+                  </button>
+                  <button type="button" onClick={() => setAddingSkill(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button type="button" className="palette-add-skill-trigger" onClick={() => setAddingSkill(true)}>
+                <Plus size={14} /> Add skill
+              </button>
+            )}
+          </div>
+        ) : null}
         {tab === "presets" ? (
           <div className="preset-library">
             {PRESETS.map((preset) => (
@@ -6476,6 +6585,40 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   );
 }
 
+/** Parses a package `source_url` into `{owner, repo}` when it points at a GitHub source —
+ *  either `github.com/<owner>/<repo>` or `raw.githubusercontent.com/<owner>/<repo>/...`.
+ *  Returns null for anything else so the caller can just hide the GitHub stats row. */
+function parseGithubRepoRef(sourceUrl: string): GithubRepoRef | null {
+  try {
+    const url = new URL(sourceUrl);
+    const segments = url.pathname.split("/").filter(Boolean);
+    if ((url.hostname === "github.com" || url.hostname === "raw.githubusercontent.com") && segments.length >= 2) {
+      return { owner: segments[0], repo: segments[1].replace(/\.git$/, "") };
+    }
+  } catch {
+    /* not a valid URL */
+  }
+  return null;
+}
+
+/** Fetches live stats for a GitHub-hosted package via the public REST API. Guards network errors
+ *  and rate-limiting (403/404) by returning null — the detail view simply hides the stats row. */
+async function fetchGithubRepoStats(ref: GithubRepoRef): Promise<GithubRepoStats | null> {
+  try {
+    const response = await fetch(`https://api.github.com/repos/${ref.owner}/${ref.repo}`);
+    if (!response.ok) return null;
+    const data = (await response.json()) as { stargazers_count?: number; forks_count?: number; pushed_at?: string; html_url?: string };
+    return {
+      stars: data.stargazers_count ?? 0,
+      forks: data.forks_count ?? 0,
+      pushedAt: data.pushed_at ?? "",
+      htmlUrl: data.html_url ?? `https://github.com/${ref.owner}/${ref.repo}`
+    };
+  } catch {
+    return null;
+  }
+}
+
 function marketplaceCategoryIcon(category: RegistryPackageKind | "all", size = 18): JSX.Element {
   if (category === "mcp") return <Plug size={size} />;
   if (category === "skill") return <ClipboardList size={size} />;
@@ -6500,7 +6643,15 @@ function MarketplaceWorkspace(): JSX.Element {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
+  // In-app starring (docs/FABLE_PLANS.md section 18, "Marketplace trust + detail"): purely local
+  // for now, sorts a package to the front of its group's grid. Community-wide star counts need a
+  // backend aggregating everyone's toggles — TODO, see §18 in FABLE_PLANS for the sketch.
+  const [starredPackages, setStarredPackages] = useAppStoreState("starredPackages", EMPTY_STARRED_PACKAGES);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [githubStats, setGithubStats] = useState<Record<string, GithubRepoStats | null>>({});
+  const [readmeCache, setReadmeCache] = useState<Record<string, string | null>>({});
   const installedIds = useMemo(() => new Set(installedPackages.map((item) => item.id)), [installedPackages]);
+  const starredSet = useMemo(() => new Set(starredPackages), [starredPackages]);
 
   const refreshPackages = useCallback(async () => {
     if (!window.metisRegistry) {
@@ -6570,8 +6721,67 @@ function MarketplaceWorkspace(): JSX.Element {
     }, {});
   }, [filtered]);
 
+  // Starred packages sort first within each group (owner feedback: stars are "a show of what's
+  // trustable", so they should surface at the top rather than just carry a badge).
+  const sortedGroups = useMemo(() => {
+    const next: Partial<Record<RegistryPackageKind, RegistryPackage[]>> = {};
+    for (const [kind, items] of Object.entries(groups) as Array<[RegistryPackageKind, RegistryPackage[]]>) {
+      next[kind] = [...items].sort((a, b) => Number(starredSet.has(b.id)) - Number(starredSet.has(a.id)));
+    }
+    return next;
+  }, [groups, starredSet]);
+
   function updateMarketplace(patch: Partial<MarketplaceState>): void {
     setState((current) => ({ ...current, ...patch }));
+  }
+
+  function toggleStar(id: string): void {
+    setStarredPackages((current) => (current.includes(id) ? current.filter((entry) => entry !== id) : [...current, id]));
+  }
+
+  const selectedPackage = selectedId ? packages.find((item) => item.id === selectedId) ?? null : null;
+
+  // Fetches GitHub stats + the package's raw source text on demand (detail open only, per the
+  // owner's scope note), caching per package id so re-opening a detail view is instant.
+  useEffect(() => {
+    if (!selectedPackage) return;
+    const id = selectedPackage.id;
+    if (!(id in githubStats)) {
+      const ref = parseGithubRepoRef(selectedPackage.source_url);
+      if (ref) {
+        void fetchGithubRepoStats(ref).then((stats) => setGithubStats((current) => ({ ...current, [id]: stats })));
+      } else {
+        setGithubStats((current) => ({ ...current, [id]: null }));
+      }
+    }
+    if (!(id in readmeCache)) {
+      if (selectedPackage.source_url) {
+        fetch(selectedPackage.source_url)
+          .then((response) => (response.ok ? response.text() : null))
+          .then((text) => setReadmeCache((current) => ({ ...current, [id]: text })))
+          .catch(() => setReadmeCache((current) => ({ ...current, [id]: null })));
+      } else {
+        setReadmeCache((current) => ({ ...current, [id]: null }));
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedPackage]);
+
+  if (selectedPackage) {
+    return (
+      <MarketplaceDetailView
+        item={selectedPackage}
+        installed={installedIds.has(selectedPackage.id)}
+        busy={busy === selectedPackage.id}
+        error={cardErrors[selectedPackage.id]}
+        starred={starredSet.has(selectedPackage.id)}
+        githubStats={githubStats[selectedPackage.id] ?? null}
+        readme={readmeCache[selectedPackage.id] ?? null}
+        onBack={() => setSelectedId(null)}
+        onToggleInstall={() => void toggleInstall(selectedPackage)}
+        onToggleStar={() => toggleStar(selectedPackage.id)}
+      />
+    );
   }
 
   return (
@@ -6608,7 +6818,7 @@ function MarketplaceWorkspace(): JSX.Element {
 
       <section className="marketplace-feed">
         {filtered.length === 0 ? <p className="marketplace-empty">No packages match this search.</p> : null}
-        {(Object.entries(groups) as Array<[RegistryPackageKind, RegistryPackage[]]>).map(([kind, items]) => (
+        {(Object.entries(sortedGroups) as Array<[RegistryPackageKind, RegistryPackage[]]>).map(([kind, items]) => (
           <div key={kind} className="marketplace-group">
             <header>
               <h2>{MARKETPLACE_GROUP_LABEL[kind]}</h2>
@@ -6619,8 +6829,19 @@ function MarketplaceWorkspace(): JSX.Element {
                 const installed = installedIds.has(item.id);
                 const error = cardErrors[item.id];
                 const isBusy = busy === item.id;
+                const isStarred = starredSet.has(item.id);
+                const cachedStars = githubStats[item.id]?.stars;
                 return (
-                  <article key={item.id} className="marketplace-card">
+                  <article
+                    key={item.id}
+                    className="marketplace-card"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setSelectedId(item.id)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") setSelectedId(item.id);
+                    }}
+                  >
                     {item.ascii_art?.length ? (
                       <pre className="marketplace-card-ascii" aria-hidden="true">{item.ascii_art.join("\n")}</pre>
                     ) : item.images?.length ? (
@@ -6631,6 +6852,11 @@ function MarketplaceWorkspace(): JSX.Element {
                     <span className="marketplace-card-head">
                       <span className="marketplace-icon">{marketplaceCategoryIcon(item.kind)}</span>
                       <small>{item.kind}</small>
+                      {isStarred || cachedStars !== undefined ? (
+                        <small className="marketplace-card-star-count">
+                          <Star size={11} fill={isStarred ? "currentColor" : "none"} /> {cachedStars ?? ""}
+                        </small>
+                      ) : null}
                     </span>
                     <strong>{item.name}</strong>
                     <small className="marketplace-card-publisher">{item.publisher} · v{item.version}</small>
@@ -6648,7 +6874,14 @@ function MarketplaceWorkspace(): JSX.Element {
                       </small>
                     ) : null}
                     {error ? <small className="marketplace-card-error">{error}</small> : null}
-                    <button type="button" onClick={() => void toggleInstall(item)} disabled={isBusy || !window.metisRegistry}>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void toggleInstall(item);
+                      }}
+                      disabled={isBusy || !window.metisRegistry}
+                    >
                       {isBusy ? <Loader2 size={14} className="spin" /> : null}
                       {installed ? "Installed · Uninstall" : "Install"}
                     </button>
@@ -6659,6 +6892,103 @@ function MarketplaceWorkspace(): JSX.Element {
           </div>
         ))}
       </section>
+    </main>
+  );
+}
+
+/** GitHub-repo-style detail view for a marketplace package (docs/FABLE_PLANS.md section 18):
+ *  replaces the grid within the marketplace area (not a modal), with a back button, big header,
+ *  banner (ascii art or image), GitHub stats when the source resolves to a repo, and the raw
+ *  package payload rendered through the shared Markdown component so a skill reads like a README. */
+function MarketplaceDetailView({
+  busy,
+  error,
+  githubStats,
+  installed,
+  item,
+  onBack,
+  onToggleInstall,
+  onToggleStar,
+  readme,
+  starred
+}: {
+  busy: boolean;
+  error?: string;
+  githubStats: GithubRepoStats | null;
+  installed: boolean;
+  item: RegistryPackage;
+  onBack: () => void;
+  onToggleInstall: () => void;
+  onToggleStar: () => void;
+  readme: string | null;
+  starred: boolean;
+}): JSX.Element {
+  return (
+    <main className="product-workspace marketplace-workspace marketplace-detail" aria-label={`${item.name} details`}>
+      <button type="button" className="marketplace-detail-back" onClick={onBack}>
+        <ArrowLeft size={15} /> Back to marketplace
+      </button>
+
+      {item.ascii_art?.length ? (
+        <pre className="marketplace-detail-banner marketplace-detail-banner-ascii" aria-hidden="true">{item.ascii_art.join("\n")}</pre>
+      ) : item.images?.length ? (
+        <img className="marketplace-detail-banner" alt="" src={item.images[0]} />
+      ) : null}
+
+      <header className="marketplace-detail-head">
+        <span className="marketplace-icon">{marketplaceCategoryIcon(item.kind, 22)}</span>
+        <div>
+          <h1>{item.name}</h1>
+          <small>
+            {item.publisher} · v{item.version}
+          </small>
+        </div>
+        <span className="marketplace-detail-kind-chip">{item.kind}</span>
+        <div className="marketplace-detail-actions">
+          <button type="button" className={`marketplace-star-toggle ${starred ? "active" : ""}`} onClick={onToggleStar} aria-pressed={starred}>
+            <Star size={15} fill={starred ? "currentColor" : "none"} /> {starred ? "Starred" : "Star"}
+          </button>
+          <button type="button" onClick={onToggleInstall} disabled={busy || !window.metisRegistry}>
+            {busy ? <Loader2 size={14} className="spin" /> : null}
+            {installed ? "Installed · Uninstall" : "Install"}
+          </button>
+        </div>
+      </header>
+
+      {error ? <small className="marketplace-card-error">{error}</small> : null}
+
+      {githubStats ? (
+        <div className="marketplace-detail-github">
+          <span>
+            <Star size={13} /> {githubStats.stars} stars
+          </span>
+          <span>
+            <GitFork size={13} /> {githubStats.forks} forks
+          </span>
+          <span>Last push {githubStats.pushedAt ? new Date(githubStats.pushedAt).toLocaleDateString() : "unknown"}</span>
+          <button type="button" className="ghost-action" onClick={() => openExternal(githubStats.htmlUrl)}>
+            <Github size={13} /> View on GitHub
+          </button>
+        </div>
+      ) : null}
+
+      <p className="marketplace-detail-description">{item.description}</p>
+
+      {item.tags.length ? (
+        <span className="marketplace-card-tags marketplace-detail-tags">
+          {item.tags.map((tag) => (
+            <em key={tag}>{tag}</em>
+          ))}
+        </span>
+      ) : null}
+
+      {item.permissions_requested.length ? (
+        <small className="marketplace-card-permissions">
+          <Shield size={11} /> {item.permissions_requested.join(", ")}
+        </small>
+      ) : null}
+
+      <section className="marketplace-detail-readme">{readme ? <Markdown>{readme}</Markdown> : <p className="marketplace-empty">No README available for this package.</p>}</section>
     </main>
   );
 }
