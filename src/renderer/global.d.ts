@@ -4,6 +4,7 @@ import type {
   CatalogModel,
   ConversationRecord,
   LabExperimentResult,
+  MetisFileReadResult,
   ModelCatalogState,
   PermissionGrant,
   PermissionRequest,
@@ -80,6 +81,9 @@ declare global {
       addFiles: () => Promise<ProjectWorkspaceResource[]>;
       addFolder: () => Promise<ProjectWorkspaceResource[]>;
       removeResource: (id: string) => Promise<ProjectWorkspaceResource[]>;
+    };
+    metisFiles?: {
+      read: (path: string) => Promise<MetisFileReadResult>;
     };
     metisSecrets?: {
       list: () => Promise<SecretStatus[]>;

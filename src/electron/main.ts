@@ -28,6 +28,7 @@ import type {
   ProviderKey,
   ProviderStatus,
   DesignSeed,
+  MetisFileReadResult,
   ProjectArtifact,
   ProjectSnapshot,
   ProjectSnapshotFile,
@@ -953,6 +954,68 @@ async function resolveWritableProjectWorkspace(requestedPath?: string): Promise<
       sameResolvedPath(grant.projectPath ?? "", workspace.path)
   );
   return allowed ? workspace : null;
+}
+
+function isPathInside(child: string, parent: string): boolean {
+  const parentResolved = resolve(parent);
+  const childResolved = resolve(child);
+  if (sameResolvedPath(childResolved, parentResolved)) return true;
+  const parentWithSep = parentResolved.endsWith("\\") || parentResolved.endsWith("/") ? parentResolved : `${parentResolved}\\`;
+  return childResolved.toLowerCase().startsWith(parentWithSep.toLowerCase()) || childResolved.toLowerCase().startsWith(`${parentResolved.toLowerCase()}/`);
+}
+
+const METIS_FILE_READ_MAX_BYTES = 200_000;
+
+/** Reads a file for the Graph View document viewer (file-node click). SECURITY: only allows
+ *  paths inside the currently-granted project workspace (via resolveWritableProjectWorkspace)
+ *  or inside a granted project resource (filesystem.read grant from addProjectResource) —
+ *  anything else is rejected before touching disk. Caps content to keep IPC payloads small and
+ *  appends a truncation note rather than silently cutting content off. */
+async function readMetisFile(rawPath: string): Promise<MetisFileReadResult> {
+  if (!rawPath || typeof rawPath !== "string") throw new Error("A file path is required.");
+  const target = resolve(rawPath);
+
+  const workspace = await readProjectWorkspace();
+  const workspaceGrants = await listPermissions();
+  const workspaceAllowed =
+    Boolean(workspace) &&
+    workspaceGrants.some(
+      (grant) =>
+        grant.id === workspace!.permissionId &&
+        grant.scope === "filesystem.write" &&
+        grant.target === "project-tools" &&
+        Boolean(grant.projectPath) &&
+        sameResolvedPath(grant.projectPath ?? "", workspace!.path)
+    ) &&
+    isPathInside(target, workspace!.path);
+
+  let resourceAllowed = false;
+  if (!workspaceAllowed) {
+    const resources = await listProjectResources();
+    resourceAllowed = resources.some((resource) => {
+      if (!workspaceGrants.some((grant) => grant.id === resource.permissionId && grant.scope === "filesystem.read")) return false;
+      if (resource.kind === "file") return sameResolvedPath(resource.path, target);
+      return isPathInside(target, resource.path);
+    });
+  }
+
+  if (!workspaceAllowed && !resourceAllowed) {
+    throw new Error("This file is outside the permitted project workspace or resources.");
+  }
+
+  let fileStat;
+  try {
+    fileStat = await stat(target);
+  } catch {
+    throw new Error("File not found.");
+  }
+  if (!fileStat.isFile()) throw new Error("Not a file.");
+
+  const raw = await readFile(target, "utf8");
+  const truncated = raw.length > METIS_FILE_READ_MAX_BYTES;
+  const content = truncated ? `${raw.slice(0, METIS_FILE_READ_MAX_BYTES)}\n\n[truncated — file exceeds ${METIS_FILE_READ_MAX_BYTES.toLocaleString()} characters]` : raw;
+
+  return { path: target, name: basename(target), content };
 }
 
 const METIS_FILE_MAX_CHARS = 6000;
@@ -4490,6 +4553,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-project:add-files", () => addProjectResource("file"));
   ipcMain.handle("metis-project:add-folder", () => addProjectResource("folder"));
   ipcMain.handle("metis-project:remove-resource", (_event, id: string) => removeProjectResource(id));
+  ipcMain.handle("metis-files:read", (_event, path: string) => readMetisFile(path));
   ipcMain.on("metis-window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
   ipcMain.on("metis-window:toggle-maximize", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);

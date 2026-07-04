@@ -2013,6 +2013,90 @@ p {
   margin-top: 0;
 }
 
+/* ---- Graph View: file-node document viewer (owner: "view the documents when I click on a node")
+   Slim right-side panel, styled like .preview-rail — sits inside .memory-workspace next to the
+   canvas/tree so it doesn't cover the toolbar or file tree. ---- */
+
+.memory-doc-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  flex: 0 0 40%;
+  min-width: 320px;
+  max-width: 560px;
+  height: 100%;
+  background: var(--surface-2);
+  border-left: 1px solid var(--line);
+}
+
+.memory-doc-panel-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 42px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--line);
+}
+
+.memory-doc-panel-header svg:first-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.memory-doc-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.memory-doc-panel-close {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+}
+
+.memory-doc-panel-close:hover {
+  color: white;
+  background: var(--hover);
+}
+
+.memory-doc-panel-body {
+  min-height: 0;
+  padding: 14px 16px;
+  overflow-y: auto;
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.memory-doc-panel-body pre {
+  overflow-x: auto;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.memory-doc-panel-empty {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 /* ---- Graph View: canvas force-sim surface, settings popover, local-graph focus bar ---- */
 
 .memory-canvas-surface {
@@ -2612,21 +2696,24 @@ p {
 .overview-heat {
   display: flex;
   flex-direction: row;
+  justify-content: flex-start;
   gap: 3px;
   margin-top: 2px;
   overflow: hidden;
+  width: max-content;
+  max-width: 100%;
 }
 
 .heat-col {
   display: grid;
-  grid-template-rows: repeat(7, 1fr);
+  grid-template-rows: repeat(7, 13px);
   gap: 3px;
-  flex: 1 1 0;
+  flex: 0 0 auto;
 }
 
 .heat-cell {
-  aspect-ratio: 1;
-  min-width: 8px;
+  width: 13px;
+  height: 13px;
   border-radius: 3px;
   background: var(--line);
 }

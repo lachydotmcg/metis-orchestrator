@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConversationRecord,
+  MetisFileReadResult,
   PermissionRequest,
   PolicyDecisionInput,
   ProviderInvokeInput,
@@ -76,6 +77,10 @@ contextBridge.exposeInMainWorld("metisProject", {
   addFiles: () => ipcRenderer.invoke("metis-project:add-files"),
   addFolder: () => ipcRenderer.invoke("metis-project:add-folder"),
   removeResource: (id: string) => ipcRenderer.invoke("metis-project:remove-resource", id)
+});
+
+contextBridge.exposeInMainWorld("metisFiles", {
+  read: (path: string) => ipcRenderer.invoke("metis-files:read", path) as Promise<MetisFileReadResult>
 });
 
 contextBridge.exposeInMainWorld("metisSecrets", {

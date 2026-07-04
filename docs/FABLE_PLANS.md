@@ -328,6 +328,40 @@ with "grounded on N chunks" slim lines → ingestion UI (drop PDFs/links) → ag
   install counts; clicking a package opens a github-repo-style DETAIL VIEW (readme/skill content
   rendered, stats, publisher, versions) instead of just a card.
 
+## 19. The "Never Run Dry" router — free-tier pool + quota-aware rotation (Lachy, 2026-07-04)
+
+Lachy's insight: beyond routing for QUALITY, route for QUOTA. Users sign up for several free
+tiers (Groq, NVIDIA NIM — which serves DeepSeek models free with an API key, Gemini free tier,
+OpenRouter free models) and Metis rotates across them so you effectively never run out of free
+tokens.
+
+- **Provider pool:** allow MULTIPLE keys/accounts per provider slot (`ProviderAccount { provider,
+  keyRef, label, tier: "free"|"paid", cooldownUntil?, usedToday }`). Secrets storage already
+  exists; extend to lists.
+- **New providers:** NVIDIA NIM (`integrate.api.nvidia.com`, OpenAI-compatible chat endpoint —
+  serves DeepSeek/Llama/etc. free with an NVIDIA key) and Groq (`api.groq.com`, OpenAI-compatible,
+  generous free tier, very fast). Both are OpenAI-schema — reuse the existing OpenAI invoke branch
+  with different base URLs.
+- **Rotation policy:** on 429/quota/insufficient-balance errors, mark the account cooling
+  (parse retry-after when present, else exponential), fall through to the next pooled account,
+  then to the next provider in the chain — the existing `callStageWithFallback` cascade is the
+  natural place. Track real usage per account (usage capture already exists) so the router can
+  PREDICT exhaustion and pre-rotate.
+- **UI:** Settings providers section shows the pool per provider with per-account health/quota
+  bars; chat timeline notes rotations the same slim way fallbacks show today ("Groq free tier
+  cooling down — rotated to NVIDIA NIM.").
+- This is a headline differentiator for local-first users: quality routing + cost routing +
+  quota routing in one policy.
+
+## 20. Loop-transcript chat polish (Lachy, 2026-07-04)
+
+Lachy loves Claude Code's loop UX: every action ("Searched code", "Ran 2 agents, used 2 tools",
+"Read a file, edited a file") is a compact expandable chip in the transcript. Metis chat already
+has slim expandable operation lines; extend the same grammar to EVERYTHING the orchestrator does:
+retrieval ("Searched project — 3 snippets"), context loads, stage calls, agent fan-outs (future
+managed agents render as "Ran 2 agents" summary chips expanding to per-agent detail), and
+routine firings. One visual grammar: collapsed one-liner → expandable detail, never a wall.
+
 ---
 
 ## Suggested order for Opus/Sonnet sessions

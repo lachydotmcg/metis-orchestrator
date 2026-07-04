@@ -43,6 +43,7 @@ import {
   Download,
   ExternalLink,
   FilePlus,
+  FileText,
   Folder,
   GalleryHorizontalEnd,
   GitBranch,
@@ -107,6 +108,7 @@ import type {
   PolicyStatus,
   ProviderKey,
   ProviderStatus,
+  ProjectSnapshot,
   ProjectWorkspace,
   ProjectWorkspaceResource,
   AgentOperation,
@@ -276,7 +278,15 @@ type GalleryBoard = {
   linkedSkill: boolean;
 };
 
-type MarketplaceCategory = "all" | "mcp" | "skill" | "preset" | "pipeline" | "template";
+type MarketplaceCategory = "all" | "mcp" | "skill" | "preset";
+// Presentation-level normalization only (owner: "presets pipelines and templates ... just needs to
+// be presets"). The underlying RegistryPackageKind union and registry data keep "pipeline"/
+// "template" as real kinds; the UI just displays/groups/filters them as "preset".
+type DisplayKind = "mcp" | "skill" | "preset";
+function displayKind(kind: RegistryPackageKind): DisplayKind {
+  if (kind === "pipeline" || kind === "template") return "preset";
+  return kind;
+}
 type MarketplaceState = { category: MarketplaceCategory; query: string };
 
 /** Parsed `owner/repo` GitHub coordinates for a package's `source_url`, when it points at
@@ -607,9 +617,7 @@ const MARKETPLACE_CATEGORIES: Array<{ key: MarketplaceCategory; label: string; d
   { key: "all", label: "All", detail: "Everything", icon: <Sparkles size={20} /> },
   { key: "mcp", label: "MCP Connections", detail: "Tools", icon: <Plug size={20} /> },
   { key: "skill", label: "Skills", detail: "Prompt packs", icon: <ClipboardList size={20} /> },
-  { key: "preset", label: "Presets", detail: "Routers", icon: <Star size={20} /> },
-  { key: "pipeline", label: "Pipelines", detail: "Flows", icon: <GitBranch size={20} /> },
-  { key: "template", label: "Templates", detail: "Starters", icon: <Layers size={20} /> }
+  { key: "preset", label: "Presets", detail: "Routers, flows, starters", icon: <Star size={20} /> }
 ];
 
 /** Browser-preview fallback when `window.metisRegistry` is absent (no Electron bridge). */
@@ -5675,7 +5683,15 @@ function MemoryGraphWorkspace({
   const [runtimeConversations, setRuntimeConversations] = useState<ConversationRecord[]>([]);
   const [runtimeRuns, setRuntimeRuns] = useState<SessionRun[]>([]);
   const [installedPackages, setInstalledPackages] = useState<RegistryPackage[]>([]);
+  const [projectWorkspace, setProjectWorkspace] = useState<ProjectWorkspace | null>(null);
+  const [projectSnapshot, setProjectSnapshot] = useState<ProjectSnapshot | null>(null);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Document viewer (owner: "view the documents when I click on a node") — file-node click opens
+  // this instead of a conversation. Kept separate from `selected` so the detail card and doc panel
+  // can coexist without fighting over one piece of state.
+  const [openDoc, setOpenDoc] = useState<{ path: string; name: string; content: string } | null>(null);
+  const [docLoading, setDocLoading] = useState(false);
+  const [docError, setDocError] = useState<string | null>(null);
   const [physics, setPhysics, physicsLoaded] = useAppStoreState<GraphPhysicsSettings>("graphPhysics", DEFAULT_GRAPH_PHYSICS);
   const [colorByProject, setColorByProject] = useAppStoreState<boolean>("graphColorByProject", false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
@@ -5708,12 +5724,46 @@ function MemoryGraphWorkspace({
     [installedPackages]
   );
 
-  const allNodes = useMemo(() => [...MEMORY_GRAPH_NODES, ...runtimeGraph.nodes, ...packageNodes], [runtimeGraph.nodes, packageNodes]);
+  // Project file nodes (owner: "view the documents when I click on a node") — the focused project's
+  // snapshot files, capped ~40, restricted to doc-ish extensions so the graph doesn't fill up with
+  // every source file. Linked to the matching static project node when the workspace name matches
+  // one of MEMORY_GRAPH_NODES' project ids/labels, otherwise to "home" so they're never orphaned.
+  // Node id is prefixed `project-file-` (not `package-`) — that's how the click handler tells a real,
+  // openable-on-disk file apart from the `package-*` file-typed nodes above, whose `path` is just a kind string.
+  const DOC_FILE_EXTENSIONS = useMemo(() => new Set([".md", ".txt", ".json"]), []);
+  const projectFileNodes = useMemo<MemoryGraphNode[]>(() => {
+    if (!projectWorkspace || !projectSnapshot) return [];
+    const docFiles = projectSnapshot.files
+      .filter((file) => file.kind === "file" && DOC_FILE_EXTENSIONS.has(extnameLower(file.path)))
+      .slice(0, 40);
+    return docFiles.map((file, index) => ({
+      id: `project-file-${index}-${file.path}`,
+      label: file.path.split("/").pop() ?? file.path,
+      type: "file" as MemoryNodeType,
+      pos: { x: -900 + (index % 6) * 90, y: 400 + Math.floor(index / 6) * 70 },
+      size: 10,
+      detail: file.path,
+      path: `${projectWorkspace.path}/${file.path}`.replace(/\\/g, "/")
+    }));
+  }, [projectWorkspace, projectSnapshot, DOC_FILE_EXTENSIONS]);
+
+  const projectFileParentId = useMemo(() => {
+    if (!projectWorkspace) return "home";
+    const normalized = normalizeMemoryLabel(projectWorkspace.name);
+    const match = MEMORY_GRAPH_NODES.find((node) => node.type === "project" && (node.id === normalized || normalizeMemoryLabel(node.label) === normalized));
+    return match?.id ?? "home";
+  }, [projectWorkspace]);
+
+  const allNodes = useMemo(
+    () => [...MEMORY_GRAPH_NODES, ...runtimeGraph.nodes, ...packageNodes, ...projectFileNodes],
+    [runtimeGraph.nodes, packageNodes, projectFileNodes]
+  );
   const allLinks = useMemo(() => {
     const links = [...MEMORY_GRAPH_LINKS, ...runtimeGraph.links];
     for (const pkgNode of packageNodes) links.push({ from: "marketplace", to: pkgNode.id });
+    for (const fileNode of projectFileNodes) links.push({ from: projectFileParentId, to: fileNode.id });
     return links;
-  }, [runtimeGraph.links, packageNodes]);
+  }, [runtimeGraph.links, packageNodes, projectFileNodes, projectFileParentId]);
 
   // Welcome cluster: if there's truly no live data (no runtime conversations, no packages), the static
   // MEMORY_GRAPH_NODES/LINKS above already act as the seeded "welcome" cluster, so the view is never blank.
@@ -5773,6 +5823,19 @@ function MemoryGraphWorkspace({
     if (window.metisConversations) void window.metisConversations.list().then(setRuntimeConversations);
     if (window.metisSession) void window.metisSession.list().then(setRuntimeRuns);
     if (window.metisRegistry) void window.metisRegistry.listInstalled().then(setInstalledPackages).catch(() => undefined);
+    if (window.metisProject) {
+      void window.metisProject
+        .getWorkspace()
+        .then((workspace) => {
+          setProjectWorkspace(workspace);
+          if (!workspace) {
+            setProjectSnapshot(null);
+            return undefined;
+          }
+          return window.metisProject?.snapshot().then(setProjectSnapshot).catch(() => setProjectSnapshot(null));
+        })
+        .catch(() => undefined);
+    }
   }, []);
 
   useEffect(() => {
@@ -5969,6 +6032,32 @@ function MemoryGraphWorkspace({
     if (canvasRef.current?.hasPointerCapture(event.pointerId)) canvasRef.current.releasePointerCapture(event.pointerId);
   }
 
+  // Opens the document viewer for a project-file node (id prefix `project-file-`, real
+  // absolute path in `node.path`). Guards for the no-bridge browser-preview case per node
+  // click, not just at mount, since the bridge can't appear mid-session either way.
+  function openDocForNode(node: MemoryGraphNode): void {
+    setSelected(node.id);
+    setDocError(null);
+    if (!window.metisFiles) {
+      setOpenDoc(null);
+      setDocError("unavailable in preview");
+      return;
+    }
+    if (!node.path) return;
+    setDocLoading(true);
+    void window.metisFiles
+      .read(node.path)
+      .then((result) => {
+        setOpenDoc(result);
+        setDocError(null);
+      })
+      .catch((error) => {
+        setOpenDoc(null);
+        setDocError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setDocLoading(false));
+  }
+
   function onCanvasClick(event: ReactPointerEvent<HTMLElement>): void {
     if (dragging) return;
     const downAt = pointerDownAtRef.current;
@@ -5985,7 +6074,15 @@ function MemoryGraphWorkspace({
         onConversationOpen(node.conversationId);
         return;
       }
+      // Project file nodes (owner: "view the documents when I click on a node") open the
+      // in-app document viewer instead of just selecting. Package/kind "file" nodes from the
+      // marketplace (id prefix `package-`) keep the plain select/detail-panel behavior.
+      if (node && node.type === "file" && node.id.startsWith("project-file-")) {
+        openDocForNode(node);
+        return;
+      }
     }
+    setOpenDoc(null);
     setSelected(hitId);
   }
 
@@ -6093,6 +6190,11 @@ function MemoryGraphWorkspace({
                   Open conversation
                 </button>
               ) : null}
+              {selectedNode.type === "file" && selectedNode.id.startsWith("project-file-") ? (
+                <button type="button" onClick={() => openDocForNode(selectedNode)}>
+                  Open document
+                </button>
+              ) : null}
             </div>
             {selectedNode.path ? <code>{selectedNode.path}</code> : null}
           </aside>
@@ -6104,6 +6206,39 @@ function MemoryGraphWorkspace({
           </button>
         ) : null}
       </section>
+
+      {docLoading || openDoc || docError ? (
+        <aside className="memory-doc-panel" aria-label="Document viewer">
+          <header className="memory-doc-panel-header">
+            <FileText size={15} />
+            <span className="memory-doc-panel-title">{openDoc?.name ?? "Document"}</span>
+            <button
+              type="button"
+              className="memory-doc-panel-close"
+              aria-label="Close document viewer"
+              onClick={() => {
+                setOpenDoc(null);
+                setDocError(null);
+              }}
+            >
+              <X size={15} />
+            </button>
+          </header>
+          <div className="memory-doc-panel-body">
+            {docLoading ? (
+              <p className="memory-doc-panel-empty">Loading…</p>
+            ) : docError ? (
+              <p className="memory-doc-panel-empty">{docError}</p>
+            ) : openDoc ? (
+              extnameLower(openDoc.path) === ".md" ? (
+                <Markdown>{openDoc.content}</Markdown>
+              ) : (
+                <pre>{openDoc.content}</pre>
+              )
+            ) : null}
+          </div>
+        </aside>
+      ) : null}
 
       {!treeCollapsed ? (
         <aside className="memory-tree" aria-label="Note folders">
@@ -6622,18 +6757,14 @@ async function fetchGithubRepoStats(ref: GithubRepoRef): Promise<GithubRepoStats
 function marketplaceCategoryIcon(category: RegistryPackageKind | "all", size = 18): JSX.Element {
   if (category === "mcp") return <Plug size={size} />;
   if (category === "skill") return <ClipboardList size={size} />;
-  if (category === "preset") return <Star size={size} />;
-  if (category === "pipeline") return <GitBranch size={size} />;
-  if (category === "template") return <Layers size={size} />;
+  if (category === "preset" || category === "pipeline" || category === "template") return <Star size={size} />;
   return <Sparkles size={size} />;
 }
 
-const MARKETPLACE_GROUP_LABEL: Record<RegistryPackageKind, string> = {
+const MARKETPLACE_GROUP_LABEL: Record<DisplayKind, string> = {
   skill: "Skills",
   mcp: "MCP Connections",
-  preset: "Presets",
-  pipeline: "Pipelines",
-  template: "Templates"
+  preset: "Presets"
 };
 
 function MarketplaceWorkspace(): JSX.Element {
@@ -6707,7 +6838,7 @@ function MarketplaceWorkspace(): JSX.Element {
   const filtered = useMemo(() => {
     const query = state.query.toLowerCase();
     return packages.filter((item) => {
-      if (state.category !== "all" && item.kind !== state.category) return false;
+      if (state.category !== "all" && displayKind(item.kind) !== state.category) return false;
       if (!query) return true;
       const haystack = `${item.name} ${item.description} ${item.publisher} ${item.tags.join(" ")}`.toLowerCase();
       return haystack.includes(query);
@@ -6715,8 +6846,9 @@ function MarketplaceWorkspace(): JSX.Element {
   }, [packages, state.category, state.query]);
 
   const groups = useMemo(() => {
-    return filtered.reduce<Partial<Record<RegistryPackageKind, RegistryPackage[]>>>((acc, item) => {
-      acc[item.kind] = [...(acc[item.kind] ?? []), item];
+    return filtered.reduce<Partial<Record<DisplayKind, RegistryPackage[]>>>((acc, item) => {
+      const kind = displayKind(item.kind);
+      acc[kind] = [...(acc[kind] ?? []), item];
       return acc;
     }, {});
   }, [filtered]);
@@ -6724,8 +6856,8 @@ function MarketplaceWorkspace(): JSX.Element {
   // Starred packages sort first within each group (owner feedback: stars are "a show of what's
   // trustable", so they should surface at the top rather than just carry a badge).
   const sortedGroups = useMemo(() => {
-    const next: Partial<Record<RegistryPackageKind, RegistryPackage[]>> = {};
-    for (const [kind, items] of Object.entries(groups) as Array<[RegistryPackageKind, RegistryPackage[]]>) {
+    const next: Partial<Record<DisplayKind, RegistryPackage[]>> = {};
+    for (const [kind, items] of Object.entries(groups) as Array<[DisplayKind, RegistryPackage[]]>) {
       next[kind] = [...items].sort((a, b) => Number(starredSet.has(b.id)) - Number(starredSet.has(a.id)));
     }
     return next;
@@ -6818,7 +6950,7 @@ function MarketplaceWorkspace(): JSX.Element {
 
       <section className="marketplace-feed">
         {filtered.length === 0 ? <p className="marketplace-empty">No packages match this search.</p> : null}
-        {(Object.entries(sortedGroups) as Array<[RegistryPackageKind, RegistryPackage[]]>).map(([kind, items]) => (
+        {(Object.entries(sortedGroups) as Array<[DisplayKind, RegistryPackage[]]>).map(([kind, items]) => (
           <div key={kind} className="marketplace-group">
             <header>
               <h2>{MARKETPLACE_GROUP_LABEL[kind]}</h2>
@@ -6851,7 +6983,7 @@ function MarketplaceWorkspace(): JSX.Element {
                     )}
                     <span className="marketplace-card-head">
                       <span className="marketplace-icon">{marketplaceCategoryIcon(item.kind)}</span>
-                      <small>{item.kind}</small>
+                      <small>{displayKind(item.kind)}</small>
                       {isStarred || cachedStars !== undefined ? (
                         <small className="marketplace-card-star-count">
                           <Star size={11} fill={isStarred ? "currentColor" : "none"} /> {cachedStars ?? ""}
@@ -6943,7 +7075,7 @@ function MarketplaceDetailView({
             {item.publisher} · v{item.version}
           </small>
         </div>
-        <span className="marketplace-detail-kind-chip">{item.kind}</span>
+        <span className="marketplace-detail-kind-chip">{displayKind(item.kind)}</span>
         <div className="marketplace-detail-actions">
           <button type="button" className={`marketplace-star-toggle ${starred ? "active" : ""}`} onClick={onToggleStar} aria-pressed={starred}>
             <Star size={15} fill={starred ? "currentColor" : "none"} /> {starred ? "Starred" : "Star"}
@@ -8540,6 +8672,11 @@ function distancePointToSegment(point: Vec, from: Vec, to: Vec): number {
 
 function normalizeMemoryLabel(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+}
+
+function extnameLower(path: string): string {
+  const match = /\.[^./\\]+$/.exec(path);
+  return match ? match[0].toLowerCase() : "";
 }
 
 function lerp(a: Vec, b: Vec, t: number): Vec {

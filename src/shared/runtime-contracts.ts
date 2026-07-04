@@ -93,6 +93,15 @@ export interface ProjectSnapshot {
   warnings: string[];
 }
 
+/** Result of reading a single project/workspace-resource file for the in-app document viewer
+ *  (Graph View, file-node click). Content is capped and utf8-only — see `metis-files:read` in
+ *  main.ts for the path-permission check. */
+export interface MetisFileReadResult {
+  path: string;
+  name: string;
+  content: string;
+}
+
 export interface ProjectContextSnippet {
   sourcePath: string;
   title: string;
