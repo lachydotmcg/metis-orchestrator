@@ -122,7 +122,8 @@ import type {
   SessionPipelineStep,
   SessionStreamEvent,
   SessionTimelineEvent,
-  SecretStatus
+  SecretStatus,
+  StyleCard
 } from "../../shared/runtime-contracts";
 
 type NavKey = "session" | "orchestration" | "routines" | "marketplace" | "gallery" | "graph" | "benchmark" | "todo" | "manager" | "settings" | "pulse";
@@ -5169,7 +5170,7 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
           ))}
         </div>
 
-        <div className="graph-toolbar" role="toolbar" aria-label="Canvas controls">
+        <div className="graph-toolbar" role="toolbar" aria-label="Canvas controls" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" aria-label="Zoom out" onClick={() => zoomBy(1 / 1.2)}>
             <ZoomOut size={16} />
           </button>
@@ -6588,6 +6589,42 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedBoard = boards.find((board) => board.id === selectedId) ?? null;
+  // Style memory (docs/FABLE_PLANS.md section 4): cards come from window.metisGallery, keyed by
+  // imageId. Loaded once on mount (guarded for preview, where the bridge doesn't exist) and again
+  // after each "Analyze board" run so the palette strips/captions show up immediately.
+  const [cards, setCards] = useState<StyleCard[]>([]);
+  const [analyzingBoardId, setAnalyzingBoardId] = useState<string | null>(null);
+  const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
+
+  const refreshCards = useCallback(async () => {
+    if (!window.metisGallery) return;
+    try {
+      setCards(await window.metisGallery.cards());
+    } catch {
+      /* gallery bridge may be unavailable mid-session */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshCards();
+  }, [refreshCards]);
+
+  async function analyzeBoard(board: GalleryBoard): Promise<void> {
+    if (!window.metisGallery || analyzingBoardId) return;
+    setAnalyzingBoardId(board.id);
+    try {
+      await window.metisGallery.analyzeBoard(board.id);
+      await refreshCards();
+    } catch {
+      /* leave existing cards in place on failure */
+    } finally {
+      setAnalyzingBoardId(null);
+    }
+  }
+
+  function cardFor(boardId: string, imageId: string): StyleCard | undefined {
+    return cards.find((card) => card.boardId === boardId && card.imageId === imageId);
+  }
 
   function updateBoard(id: string, patch: Partial<GalleryBoard>): void {
     onBoardsChange((current) => current.map((board) => (board.id === id ? { ...board, ...patch } : board)));
@@ -6642,6 +6679,8 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   }
 
   if (selectedBoard) {
+    const boardCardCount = selectedBoard.images.filter((image) => cardFor(selectedBoard.id, image.id)).length;
+    const isAnalyzing = analyzingBoardId === selectedBoard.id;
     return (
       <main className="product-workspace gallery-workspace" aria-label="Gallery board">
         <section className="gallery-board-head">
@@ -6659,6 +6698,12 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
           </button>
         </section>
 
+        {boardCardCount > 0 ? (
+          <p className="gallery-style-memory-note">
+            Style memory: {boardCardCount} of {selectedBoard.images.length} images carded — used automatically as style references in builds.
+          </p>
+        ) : null}
+
         <section className="gallery-detail-grid">
           <aside className="gallery-board-meta">
             <img alt="" src={selectedBoard.coverImage} />
@@ -6666,7 +6711,15 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
             <div className="tag-row">
               {selectedBoard.tags.map((tag) => <span key={tag}>{tag}</span>)}
             </div>
-            <button type="button" disabled><Wand2 size={15} /> Analyse board soon</button>
+            <button
+              type="button"
+              disabled={!window.metisGallery || isAnalyzing || selectedBoard.images.length === 0}
+              title={!window.metisGallery ? "unavailable in preview" : undefined}
+              onClick={() => void analyzeBoard(selectedBoard)}
+            >
+              {isAnalyzing ? <Loader2 size={15} className="spin" /> : <Wand2 size={15} />}
+              {isAnalyzing ? "Analyzing…" : "Analyze board"}
+            </button>
             <button type="button" disabled><Cable size={15} /> Sync Pinterest board soon</button>
           </aside>
 
@@ -6686,16 +6739,43 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
               <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={(event) => event.target.files && importFiles(event.target.files, selectedBoard)} />
             </div>
             <div className="image-masonry">
-              {selectedBoard.images.map((image) => (
-                <article key={image.id} className="image-card">
-                  <img alt={image.title} src={image.src} />
-                  <strong>{image.title}</strong>
-                  <p>{image.analysis}</p>
-                  <div className="tag-row">
-                    {image.tags.map((tag) => <span key={tag}>{tag}</span>)}
-                  </div>
-                </article>
-              ))}
+              {selectedBoard.images.map((image) => {
+                const card = cardFor(selectedBoard.id, image.id);
+                const hovered = hoveredImageId === image.id;
+                return (
+                  <article
+                    key={image.id}
+                    className="image-card"
+                    onMouseEnter={() => setHoveredImageId(image.id)}
+                    onMouseLeave={() => setHoveredImageId((current) => (current === image.id ? null : current))}
+                  >
+                    <div className="image-card-media">
+                      <img alt={image.title} src={image.src} />
+                      {card && hovered ? (
+                        <div className="image-card-overlay">
+                          <span className="image-card-source-badge">{card.source === "vision-model" ? card.model ?? "vision model" : "palette"}</span>
+                          <p className="image-card-caption">{card.caption}</p>
+                          <div className="tag-row">
+                            {card.moodTags.map((tag) => <span key={tag}>{tag}</span>)}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                    {card ? (
+                      <div className="palette-strip" aria-label="Extracted palette">
+                        {card.palette.map((hex, index) => (
+                          <span key={`${hex}-${index}`} className="palette-swatch" style={{ background: hex }} title={hex} />
+                        ))}
+                      </div>
+                    ) : null}
+                    <strong>{image.title}</strong>
+                    <p>{image.analysis}</p>
+                    <div className="tag-row">
+                      {image.tags.map((tag) => <span key={tag}>{tag}</span>)}
+                    </div>
+                  </article>
+                );
+              })}
             </div>
           </div>
         </section>

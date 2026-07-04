@@ -353,6 +353,31 @@ tokens.
 - This is a headline differentiator for local-first users: quality routing + cost routing +
   quota routing in one policy.
 
+## 21. Provider-agnostic model access — models × routes (Lachy, 2026-07-04)
+
+Lachy's key insight refining §19: **a model and the API it's reached through are separate axes.**
+DeepSeek V4 is one model reachable via DeepSeek's own API, NVIDIA NIM, or OpenRouter; the same
+will be true of most open models. The user wants "near limitless flexibility": a shitload of
+models in the picker, and each orchestration node configurable to reach its model through a
+CHOSEN route — with key fallback across routes.
+
+- **Catalog schema v2:** model entries gain `access: [{ provider, id }]` — every known route to
+  the same model, ordered by preference. v1 entries (single provider+id) auto-upgrade to a
+  one-route access list. The registry's models.json evolves without breaking v1 readers.
+- **Picker UX:** pick the MODEL; the route is chosen automatically (first access route whose key
+  is configured and not cooling). A small "via NVIDIA NIM" suffix shows the resolved route; a
+  long-press/submenu lets power users pin a specific route.
+- **Node inspector:** each orchestration node gets an optional "Access via" override (Auto /
+  specific provider), stored in the graph state.
+- **Route fallback before model fallback:** when invoking, walk the model's access routes
+  (configured, not cooling) FIRST; only after all routes fail does the chain fall back to the
+  next MODEL. Cooldowns (§19) key by provider now, by account in pool phase 2.
+- **Resolution order:** node override > user route pin > first healthy configured route.
+- Catalog updated 2026-07-04 with Lachy's full model zoo (Claude 5 family, GPT-5.6 Sol/Terra/Luna,
+  Gemini 3.x, DeepSeek V4, Grok 4.3, GLM 5.2, Kimi K2.6, and the local fleet: Qwen3 family,
+  QwQ, Llama 4 Scout/Maverick, R1 distills, Gemma 3/4, gpt-oss). Ids are best-effort — the
+  registry PR flow is the correction mechanism.
+
 ## 20. Loop-transcript chat polish (Lachy, 2026-07-04)
 
 Lachy loves Claude Code's loop UX: every action ("Searched code", "Ran 2 agents, used 2 tools",

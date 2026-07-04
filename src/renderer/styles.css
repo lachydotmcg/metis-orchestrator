@@ -137,6 +137,11 @@ p {
 .run-test-anchor {
   position: relative;
   display: flex;
+  /* Without this, the absolutely-positioned .run-test-panel (which only sets
+     `bottom`, leaving `top: auto`) gets stretched by the flex container's default
+     align-items: stretch and is squeezed to the anchor's own content height
+     instead of sizing to its own content — clipping the results list. */
+  align-items: flex-start;
 }
 
 .run-test-backdrop {
@@ -145,7 +150,11 @@ p {
   z-index: 19;
 }
 
-.run-test-panel {
+/* Compound selector (not just .run-test-panel) so this beats .healthsweep-panel's
+   `top: calc(100% + 8px)` on specificity rather than relying on source order — this
+   panel opens upward from the toolbar, so it needs `top: auto` to actually stick and
+   let the panel size to its content instead of being squeezed between two insets. */
+.healthsweep-panel.run-test-panel {
   bottom: calc(100% + 8px);
   top: auto;
   width: 320px;
@@ -7399,6 +7408,71 @@ a:focus-visible,
 
 .image-card img {
   aspect-ratio: 4 / 3;
+}
+
+.image-card-media {
+  position: relative;
+}
+
+.image-card-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 10px;
+  background: linear-gradient(to top, rgb(0 0 0 / 0.88) 0%, rgb(0 0 0 / 0.55) 55%, rgb(0 0 0 / 0.05) 100%);
+}
+
+.image-card-source-badge {
+  align-self: flex-start;
+  padding: 2px 7px;
+  color: var(--soft);
+  background: rgb(24 24 24 / 0.9);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 750;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.image-card-caption {
+  margin: 0;
+  color: white;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.image-card-overlay .tag-row span {
+  color: white;
+  background: rgb(255 255 255 / 0.14);
+  border-color: rgb(255 255 255 / 0.22);
+}
+
+.palette-strip {
+  display: flex;
+  gap: 4px;
+  margin: 8px 11px 0;
+}
+
+.palette-swatch {
+  width: 18px;
+  height: 18px;
+  border: 1px solid rgb(255 255 255 / 0.14);
+  border-radius: 5px;
+}
+
+.gallery-style-memory-note {
+  max-width: 1200px;
+  margin: -4px auto 0;
+  padding: 8px 12px;
+  color: var(--muted);
+  background: rgb(24 24 24 / 0.6);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
 }
 
 .image-card strong,
