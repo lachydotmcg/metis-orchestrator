@@ -5417,55 +5417,80 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
    *  node's provider — replacing the titlebar "Check everything" sweep. Every bridge is guarded
    *  for browser preview, where the rows read "unavailable in preview". */
   async function runRealTest(): Promise<void> {
-    // Keep the existing visual pulse alive: prefer the selected agent, otherwise the first agent.
-    const pulseTarget = (selectedNode?.kind === "agent" ? selectedNode : agents[0]) ?? null;
-    if (pulseTarget) runTest(pulseTarget.id);
-
     setRunTestOpen(true);
     setRunTestLoading(true);
+    const currentAgents = nodesRef.current.filter((node) => node.kind === "agent");
+    // Seed the panel with pending rows so results fill in progressively.
+    const pendingRows: RunTestAgentRow[] = currentAgents.map((node) => ({
+      id: node.id,
+      name: node.label,
+      model: node.provider ? `${PROVIDERS[node.provider].label} / ${node.model ?? "auto"}` : "No model assigned",
+      status: "unavailable",
+      detail: "Testing…"
+    }));
+    setRunTestResult({
+      routeLabel: `Testing ${currentAgents.length} route${currentAgents.length === 1 ? "" : "s"}…`,
+      routeDetail: "Each node gets a policy decision for its route intent plus a provider health check.",
+      routeStatus: "ok",
+      agents: pendingRows
+    });
     try {
-      const [decisionResult, providerList] = await Promise.all([
-        window.metisPolicy
-          ? window.metisPolicy.decide({ prompt: "Route test: build a small landing page" }).catch(() => null)
-          : Promise.resolve(null),
-        window.metisProviders ? window.metisProviders.list().catch(() => []) : Promise.resolve<ProviderStatus[]>([])
-      ]);
-
-      const routeLabel = decisionResult
-        ? `${decisionResult.decision.task_type} -> ${decisionResult.decision.selected_route.model ?? decisionResult.decision.selected_route.provider ?? decisionResult.decision.selected_route.kind}`
-        : "Policy unavailable";
-      const routeDetail = decisionResult
-        ? decisionResult.explanation ?? decisionResult.decision.reason
-        : window.metisPolicy
-          ? "Could not reach the policy CLI."
-          : "unavailable in preview";
-      const routeStatus: HealthRowStatus = decisionResult ? "ok" : window.metisPolicy ? "error" : "unavailable";
-
-      const currentAgents = nodesRef.current.filter((node) => node.kind === "agent");
-      const agentRows: RunTestAgentRow[] = await Promise.all(
-        currentAgents.map(async (node): Promise<RunTestAgentRow> => {
-          const model = node.provider ? `${PROVIDERS[node.provider].label} / ${node.model ?? "auto"}` : "No model assigned";
-          if (!node.provider) return { id: node.id, name: node.label, model, status: "warn", detail: "No provider configured for this node." };
-          if (!window.metisProviders) return { id: node.id, name: node.label, model, status: "unavailable", detail: "unavailable in preview" };
+      const providerList = window.metisProviders ? await window.metisProviders.list().catch(() => []) : [];
+      let okCount = 0;
+      // Sequential on purpose: the packet pulse animates the node under test while
+      // its policy decision + health check run, so every route visibly gets tested.
+      for (const node of currentAgents) {
+        runTest(node.id);
+        let row: RunTestAgentRow;
+        const model = node.provider ? `${PROVIDERS[node.provider].label} / ${node.model ?? "auto"}` : "No model assigned";
+        if (!node.provider) {
+          row = { id: node.id, name: node.label, model, status: "warn", detail: "No provider configured for this node." };
+        } else if (!window.metisProviders) {
+          row = { id: node.id, name: node.label, model, status: "unavailable", detail: "unavailable in preview" };
+        } else {
           const key = PROVIDER_CONNECTIONS[node.provider];
           const known = providerList.find((p) => p.provider === key);
           try {
-            const health = known ? await window.metisProviders.healthCheck(key) : undefined;
+            const [decision, health] = await Promise.all([
+              window.metisPolicy
+                ? window.metisPolicy.decide({ prompt: `Route test: ${node.intent ?? node.label}` }).catch(() => null)
+                : Promise.resolve(null),
+              known ? window.metisProviders.healthCheck(key) : Promise.resolve(undefined)
+            ]);
             const status = health?.status ?? known?.status;
-            return {
+            const policyPick = decision
+              ? decision.decision.selected_route.model ?? decision.decision.selected_route.provider ?? decision.decision.selected_route.kind
+              : null;
+            const rowStatus: HealthRowStatus =
+              status === "available" ? "ok" : status === "not_configured" ? "warn" : status ? "error" : "unavailable";
+            if (rowStatus === "ok") okCount += 1;
+            row = {
               id: node.id,
               name: node.label,
               model,
-              status: status === "available" ? "ok" : status === "not_configured" ? "warn" : status ? "error" : "unavailable",
-              detail: health?.detail ?? known?.detail ?? "Provider not found."
+              status: rowStatus,
+              detail: `${policyPick ? `Policy picks ${policyPick} for "${node.intent ?? node.label}". ` : ""}${health?.detail ?? known?.detail ?? "Provider not found."}`
             };
           } catch (error) {
-            return { id: node.id, name: node.label, model, status: "error", detail: error instanceof Error ? error.message : String(error) };
+            row = { id: node.id, name: node.label, model, status: "error", detail: error instanceof Error ? error.message : String(error) };
           }
-        })
+        }
+        setRunTestResult((current) =>
+          current ? { ...current, agents: current.agents.map((entry) => (entry.id === row.id ? row : entry)) } : current
+        );
+        // Let the pulse be seen before moving to the next node.
+        await new Promise((resolve) => window.setTimeout(resolve, 650));
+      }
+      setRunTestResult((current) =>
+        current
+          ? {
+              ...current,
+              routeLabel: `Tested ${currentAgents.length} route${currentAgents.length === 1 ? "" : "s"} — ${okCount} healthy`,
+              routeDetail: "Per-node policy decision for each route intent + provider health.",
+              routeStatus: okCount === currentAgents.length ? "ok" : okCount > 0 ? "warn" : "error"
+            }
+          : current
       );
-
-      setRunTestResult({ routeLabel, routeDetail, routeStatus, agents: agentRows });
     } finally {
       setRunTestLoading(false);
     }

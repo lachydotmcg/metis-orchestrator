@@ -150,14 +150,17 @@ p {
   z-index: 19;
 }
 
-/* Compound selector (not just .run-test-panel) so this beats .healthsweep-panel's
-   `top: calc(100% + 8px)` on specificity rather than relying on source order — this
-   panel opens upward from the toolbar, so it needs `top: auto` to actually stick and
-   let the panel size to its content instead of being squeezed between two insets. */
+/* Compound selector so this beats .healthsweep-panel on specificity. The toolbar
+   anchor sits near the TOP of the canvas, so the panel opens DOWNWARD (opening
+   upward pushed it off-screen with only the bottom edge visible) and clamps its
+   height to the space below the anchor. */
 .healthsweep-panel.run-test-panel {
-  bottom: calc(100% + 8px);
-  top: auto;
+  top: calc(100% + 8px);
+  bottom: auto;
+  right: 0;
+  left: auto;
   width: 320px;
+  max-height: min(70vh, calc(100vh - 160px));
 }
 
 .run-test-subhead {
