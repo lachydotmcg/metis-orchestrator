@@ -6,6 +6,8 @@ export type ProviderKey =
   | "gemini"
   | "deepseek"
   | "openrouter"
+  | "nvidia"
+  | "groq"
   | "ollama";
 
 export type PermissionScope =
@@ -257,7 +259,7 @@ export interface ProviderInvokeResult {
   model: string;
   output: string;
   thoughts?: string;
-  source: "ollama" | "anthropic" | "openai" | "gemini" | "deepseek" | "openrouter" | "placeholder";
+  source: "ollama" | "anthropic" | "openai" | "gemini" | "deepseek" | "openrouter" | "nvidia" | "groq" | "placeholder";
   auditId: string;
   usage?: { inputTokens: number; outputTokens: number; estimated?: boolean };
 }

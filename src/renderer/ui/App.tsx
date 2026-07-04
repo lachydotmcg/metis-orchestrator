@@ -135,7 +135,9 @@ type ProviderId =
   | "gemini"
   | "grok"
   | "deepseek"
-  | "glm";
+  | "glm"
+  | "nvidia"
+  | "groq";
 
 type Vec = { x: number; y: number };
 type ModelRef = { provider: ProviderId; model: string };
@@ -390,7 +392,12 @@ const PROVIDERS: Record<ProviderId, { label: string; logo: string; tier: "cloud"
   gemini: { label: "Gemini", logo: "assets/providers/gemini.png", tier: "cloud" },
   grok: { label: "Grok", logo: "assets/providers/grok.png", tier: "cloud" },
   deepseek: { label: "DeepSeek", logo: "assets/providers/deepseek.png", tier: "cloud" },
-  glm: { label: "GLM", logo: "assets/providers/glm.png", tier: "local" }
+  glm: { label: "GLM", logo: "assets/providers/glm.png", tier: "local" },
+  // No brand logo assets exist yet for these two free-tier pool providers
+  // (docs/FABLE_PLANS.md §19) — reuse the auto-router glyph as a safe generic
+  // fallback rather than a broken <img>.
+  nvidia: { label: "NVIDIA NIM", logo: "assets/providers/autorouter.png", tier: "cloud" },
+  groq: { label: "Groq", logo: "assets/providers/autorouter.png", tier: "cloud" }
 };
 const AUTOROUTER_LOGO = "assets/providers/autorouter.png";
 const HEAT_ALPHAS = ["0", "0.18", "0.38", "0.62", "1"];
@@ -402,7 +409,9 @@ const PROVIDER_CONNECTIONS: Record<ProviderId, ProviderKey> = {
   gemini: "gemini",
   grok: "openrouter",
   deepseek: "deepseek",
-  glm: "ollama"
+  glm: "ollama",
+  nvidia: "nvidia",
+  groq: "groq"
 };
 
 /** Maps the live registry's `catalog/models.json` provider naming (ProviderKey,
@@ -415,6 +424,8 @@ const CATALOG_PROVIDER_TO_BRAND: Record<ProviderKey, ProviderId> = {
   gemini: "gemini",
   deepseek: "deepseek",
   openrouter: "grok",
+  nvidia: "nvidia",
+  groq: "groq",
   ollama: "qwen"
 };
 
@@ -430,6 +441,8 @@ const MODEL_LIBRARY: ModelRef[] = [
   { provider: "grok", model: "Grok 4" },
   { provider: "deepseek", model: "V3" },
   { provider: "deepseek", model: "R1" },
+  { provider: "nvidia", model: "DeepSeek V3.1 (NVIDIA)" },
+  { provider: "groq", model: "Llama 3.3 70B" },
   { provider: "qwen", model: "Qwen2.5 72B" },
   { provider: "qwen", model: "Qwen3 4B" },
   { provider: "glm", model: "GLM-4.6" }
@@ -576,14 +589,16 @@ const DEFAULT_SETTINGS: AppSettings = {
   defaultPreset: "balanced",
   rawPromptStorage: "local-only"
 };
-const PROVIDER_KEYS: ProviderKey[] = ["ollama", "anthropic", "openai", "gemini", "deepseek", "openrouter"];
+const PROVIDER_KEYS: ProviderKey[] = ["ollama", "anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
 const PROVIDER_LABELS: Record<ProviderKey, string> = {
   ollama: "Ollama",
   anthropic: "Anthropic",
   openai: "OpenAI",
   gemini: "Gemini",
   deepseek: "DeepSeek",
-  openrouter: "OpenRouter"
+  openrouter: "OpenRouter",
+  nvidia: "NVIDIA NIM",
+  groq: "Groq"
 };
 const PERMISSION_PRESETS: Array<{ scope: PermissionScope; target: string; note: string }> = [
   { scope: "filesystem.read", target: "current project", note: "Index project files for Graph View retrieval." },
@@ -3783,6 +3798,8 @@ function providerLabel(provider: ProviderKey): string {
   if (provider === "gemini") return "Gemini";
   if (provider === "deepseek") return "DeepSeek";
   if (provider === "openrouter") return "OpenRouter";
+  if (provider === "nvidia") return "NVIDIA NIM";
+  if (provider === "groq") return "Groq";
   return "Ollama";
 }
 
@@ -3801,6 +3818,8 @@ const PRETTY_MODEL_NAMES: Record<string, string> = {
   "gemini-2.0-flash": "Gemini 2.0 Flash",
   "deepseek-chat": "DeepSeek V3",
   "deepseek-reasoner": "DeepSeek R1",
+  "deepseek-ai/deepseek-v3.1": "DeepSeek V3.1 (NVIDIA)",
+  "llama-3.3-70b-versatile": "Llama 3.3 70B (Groq)",
   "gpt-5.1": "GPT-5.1",
   "gpt-5": "GPT-5",
   "gpt-4.1": "GPT-4.1",

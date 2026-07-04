@@ -88,6 +88,10 @@ const providerInfo: Record<ProviderKey, { label: string; defaultModel?: string }
   gemini: { label: "Google Gemini", defaultModel: "gemini-2.5-pro" },
   deepseek: { label: "DeepSeek", defaultModel: "deepseek-chat" },
   openrouter: { label: "OpenRouter", defaultModel: "auto" },
+  // Free-tier pool providers (docs/FABLE_PLANS.md section 19, "Never Run Dry").
+  // Both are OpenAI-chat-schema-compatible; see invokeCloudProvider below.
+  nvidia: { label: "NVIDIA NIM", defaultModel: "deepseek-ai/deepseek-v3.1" },
+  groq: { label: "Groq", defaultModel: "llama-3.3-70b-versatile" },
   ollama: { label: "Ollama", defaultModel: "qwen3:8b" }
 };
 
@@ -96,8 +100,69 @@ const providerEnvNames: Partial<Record<ProviderKey, string[]>> = {
   openai: ["OPENAI_API_KEY"],
   gemini: ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   deepseek: ["DEEPSEEK_API_KEY"],
-  openrouter: ["OPENROUTER_API_KEY"]
+  openrouter: ["OPENROUTER_API_KEY"],
+  nvidia: ["NVIDIA_API_KEY"],
+  groq: ["GROQ_API_KEY"]
 };
+
+// --- Never Run Dry: quota/rate-limit cooldown tracking (docs/FABLE_PLANS.md
+// section 19). Keyed by provider (phase 2 will key by pooled account instead).
+// Populated when invokeCloudProvider detects a 429/quota-ish failure; read by
+// callStageWithFallback (skip cooling entries) and healthCheckProvider/listProviders.
+const providerCooldowns = new Map<ProviderKey, number>();
+const DEFAULT_COOLDOWN_MS = 10 * 60 * 1000;
+const QUOTA_ERROR_PATTERN = /rate.?limit|quota|insufficient.?(balance|credits)|exceeded/i;
+
+/** Error thrown by invokeCloudProvider for HTTP failures; carries the status
+ *  code and a parsed Retry-After (seconds) when the response provided one, so
+ *  quota-rotation can set an accurate cooldown instead of always defaulting. */
+class ProviderHttpError extends Error {
+  status?: number;
+  retryAfterSeconds?: number;
+  constructor(message: string, status?: number, retryAfterSeconds?: number) {
+    super(message);
+    this.name = "ProviderHttpError";
+    this.status = status;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+function isQuotaError(error: unknown): error is ProviderHttpError {
+  if (error instanceof ProviderHttpError) {
+    if (error.status === 429) return true;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return QUOTA_ERROR_PATTERN.test(message);
+}
+
+function markProviderCooldown(provider: ProviderKey, error: unknown): number {
+  const retryAfterSeconds = error instanceof ProviderHttpError ? error.retryAfterSeconds : undefined;
+  const durationMs = typeof retryAfterSeconds === "number" && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : DEFAULT_COOLDOWN_MS;
+  const until = Date.now() + durationMs;
+  providerCooldowns.set(provider, until);
+  return until;
+}
+
+function providerCooldownUntil(provider: ProviderKey): number | undefined {
+  const until = providerCooldowns.get(provider);
+  if (!until) return undefined;
+  if (until <= Date.now()) {
+    providerCooldowns.delete(provider);
+    return undefined;
+  }
+  return until;
+}
+
+function isProviderCooling(provider: ProviderKey): boolean {
+  return providerCooldownUntil(provider) !== undefined;
+}
+
+function formatCooldownDuration(untilMs: number): string {
+  const remainingMs = Math.max(0, untilMs - Date.now());
+  const minutes = Math.round(remainingMs / 60000);
+  if (minutes <= 0) return "under a minute";
+  return `${minutes}m`;
+}
 
 /** The live community registry (docs/FABLE_PLANS.md sections 5, 8, 14). Raw GitHub
  *  base for `index.json`, `packages/<id>/manifest.json`, `catalog/models.json`,
@@ -311,6 +376,17 @@ async function listProviders(): Promise<ProviderStatus[]> {
       };
     }
     const configured = Boolean(secrets[provider]) || Boolean(secretStatuses.find((status) => status.provider === provider)?.hasSecret);
+    const cooldownUntil = providerCooldownUntil(provider);
+    if (cooldownUntil) {
+      return {
+        provider,
+        label: info.label,
+        configured,
+        status: "unavailable",
+        detail: `Cooling down until ${new Date(cooldownUntil).toLocaleTimeString()} after a quota/rate-limit response.`,
+        defaultModel: info.defaultModel
+      };
+    }
     return {
       provider,
       label: info.label,
@@ -332,6 +408,17 @@ async function healthCheckProvider(provider: ProviderKey): Promise<ProviderStatu
   if (provider !== "ollama") {
     const secrets = await readSecrets();
     const configured = Boolean(secrets[provider]);
+    const cooldownUntil = providerCooldownUntil(provider);
+    if (cooldownUntil) {
+      return {
+        provider,
+        label: info.label,
+        configured,
+        status: "unavailable",
+        detail: `Cooling down until ${new Date(cooldownUntil).toLocaleTimeString()} after a quota/rate-limit response.`,
+        defaultModel: info.defaultModel
+      };
+    }
     return {
       provider,
       label: info.label,
@@ -540,6 +627,15 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
       usage: reportedUsage ?? estimateUsage(input.prompt.length, output.length)
     };
   } catch (error) {
+    if (isQuotaError(error)) {
+      const until = markProviderCooldown(input.provider, error);
+      await appendAudit("warning", "provider.invoke.cooldown", `${providerInfo[input.provider].label} hit a quota/rate limit — cooling down for ${formatCooldownDuration(until)}.`, {
+        provider: input.provider,
+        model: input.model,
+        error: error instanceof Error ? error.message : String(error),
+        cooldownUntil: new Date(until).toISOString()
+      });
+    }
     const audit = await appendAudit("error", "provider.invoke.error", `${providerInfo[input.provider].label} invocation failed.`, {
       provider: input.provider,
       model: input.model,
@@ -762,6 +858,54 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
     return { text, usage };
   }
 
+  // NVIDIA NIM and Groq are both OpenAI-chat-schema-compatible — same request/
+  // response shape as OpenRouter above, just a different base URL (docs/FABLE_PLANS.md §19).
+  if (input.provider === "nvidia") {
+    const response = await fetchJson<{
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    }>("https://integrate.api.nvidia.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${secret}`
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: [{ role: "user", content: input.prompt }]
+      })
+    });
+    const text = response.choices?.map((choice) => choice.message?.content).filter(Boolean).join("\n").trim() || "NVIDIA NIM returned an empty response.";
+    const usage =
+      typeof response.usage?.prompt_tokens === "number" && typeof response.usage?.completion_tokens === "number"
+        ? { inputTokens: response.usage.prompt_tokens, outputTokens: response.usage.completion_tokens }
+        : undefined;
+    return { text, usage };
+  }
+
+  if (input.provider === "groq") {
+    const response = await fetchJson<{
+      choices?: Array<{ message?: { content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    }>("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${secret}`
+      },
+      body: JSON.stringify({
+        model: input.model,
+        messages: [{ role: "user", content: input.prompt }]
+      })
+    });
+    const text = response.choices?.map((choice) => choice.message?.content).filter(Boolean).join("\n").trim() || "Groq returned an empty response.";
+    const usage =
+      typeof response.usage?.prompt_tokens === "number" && typeof response.usage?.completion_tokens === "number"
+        ? { inputTokens: response.usage.prompt_tokens, outputTokens: response.usage.completion_tokens }
+        : undefined;
+    return { text, usage };
+  }
+
   throw new Error(`Live invocation is not implemented for ${input.provider}.`);
 }
 
@@ -769,7 +913,13 @@ async function fetchJson<T>(url: string, init: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(text || `HTTP ${response.status}`);
+    const retryAfterHeader = response.headers.get("retry-after");
+    const retryAfterSeconds = retryAfterHeader ? Number.parseInt(retryAfterHeader, 10) : undefined;
+    throw new ProviderHttpError(
+      text || `HTTP ${response.status}`,
+      response.status,
+      Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined
+    );
   }
   return JSON.parse(text) as T;
 }
@@ -2954,6 +3104,12 @@ const MODEL_DISPLAY_IDS: Partial<Record<ProviderKey, Record<string, string>>> = 
   openrouter: {
     "grok 4": "x-ai/grok-4"
   },
+  nvidia: {
+    "deepseek v3.1 (nvidia)": "deepseek-ai/deepseek-v3.1"
+  },
+  groq: {
+    "llama 3.3 70b": "llama-3.3-70b-versatile"
+  },
   ollama: {
     "qwen2.5 72b": "qwen2.5:72b",
     "qwen3 4b": "qwen3:4b",
@@ -3069,8 +3225,21 @@ async function writeProjectFiles(files: GeneratedFile[], workspace: ProjectWorks
 
 async function callStageWithFallback(chain: StageModelRef[], prompt: string): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
   const notes: string[] = [];
+  // "Never Run Dry" quota rotation (docs/FABLE_PLANS.md §19): a provider still
+  // cooling from a recent 429/quota failure is skipped outright rather than
+  // burning another call against it. `next` for the rotation note looks ahead
+  // to the next entry that isn't ALSO cooling, so the note names where we're
+  // actually headed.
   for (let i = 0; i < chain.length; i++) {
     const ref = chain[i];
+    const nextViable = chain.slice(i + 1).find((candidate) => !isProviderCooling(candidate.provider));
+    if (isProviderCooling(ref.provider)) {
+      const until = providerCooldownUntil(ref.provider)!;
+      notes.push(
+        `${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${nextViable ? ` — rotated to ${stageModelLabel(nextViable)}.` : "."}`
+      );
+      continue;
+    }
     const next = chain[i + 1];
     try {
       const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt });
@@ -3080,8 +3249,18 @@ async function callStageWithFallback(chain: StageModelRef[], prompt: string): Pr
       }
       return { ref, output: result.output.trim(), notes, failed: false };
     } catch (error) {
+      if (isQuotaError(error)) {
+        const until = markProviderCooldown(ref.provider, error);
+        notes.push(
+          `${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${next ? ` — rotated to ${stageModelLabel(next)}.` : "."}`
+        );
+        continue;
+      }
       notes.push(`Failed to call ${stageModelLabel(ref)} (${error instanceof Error ? error.message : String(error)})${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`);
     }
+  }
+  if (chain.every((ref) => isProviderCooling(ref.provider))) {
+    notes.push("Every model in this stage's chain is currently cooling down from a rate limit.");
   }
   return { ref: chain[chain.length - 1], output: "", notes: [...notes, "All models for this stage failed."], failed: true };
 }
