@@ -3691,6 +3691,54 @@ p {
   text-underline-offset: 2px;
 }
 
+/* Grouped-operations summary row (§20 loop-transcript chat grammar v2) —
+   batches of more than 3 ops collapse into one summary line with a caret;
+   expands into the exact same slim-op-line stack. Failures tint the dot and
+   counts text warning/red, same palette as the per-line warning/error state. */
+.slim-op-group > summary.slim-op-line {
+  cursor: pointer;
+}
+
+.slim-op-group .stage-caret {
+  color: var(--faint);
+  transition: transform 150ms ease;
+}
+
+.slim-op-group[open] > summary.slim-op-line .stage-caret {
+  transform: rotate(90deg);
+}
+
+.slim-op-group.warning > summary.slim-op-line span,
+.slim-op-group.error > summary.slim-op-line span {
+  color: #e0b070;
+}
+
+.slim-op-group.error > summary.slim-op-line span {
+  color: #c98e8e;
+}
+
+.slim-op-group.warning > summary.slim-op-line svg:not(.stage-caret),
+.slim-op-group.error > summary.slim-op-line svg:not(.stage-caret) {
+  color: #e0b070;
+}
+
+.slim-op-group.error > summary.slim-op-line svg:not(.stage-caret) {
+  color: #c98e8e;
+}
+
+.slim-op-group-body {
+  display: grid;
+  gap: 1px;
+  padding: 4px 0 2px 16px;
+  margin-top: 2px;
+  border-left: 1px solid color-mix(in srgb, var(--line), transparent 20%);
+}
+
+.slim-op-group-body > small {
+  margin: 0 0 3px;
+  padding-left: 4px;
+}
+
 .slim-op-extra {
   max-width: 620px;
   margin: 2px 0 0;

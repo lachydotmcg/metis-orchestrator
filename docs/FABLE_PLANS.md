@@ -486,7 +486,36 @@ the composer's permission control (replacing restricted/standard/trusted):
   prompt and the stage re-runs/continues; timeout → orchestrator answers itself with the most
   sensible default and says so.
 
-## 20. Loop-transcript chat polish (Lachy, 2026-07-04)
+## 25. Graph-driven pipeline + default gateways (Lachy, 2026-07-05 — priority)
+
+The orchestration graph stops being UI-only: the build pipeline reads the user's graph — each
+agent node's model, its `accessVia` override, and its fallback chain — instead of hardcoded
+`defaultAgenticStages`. Falls back to the defaults when the graph has no usable pipeline.
+**Default gateways:** a Settings map (store `defaultGateways: Partial<Record<ProviderKey,
+ProviderKey>>`-ish keyed by model brand/provider) letting the user say "DeepSeek models default
+via the deepseek API" or "default via NVIDIA NIM"; consumed by `resolveModelRoute` as the user
+pin, before the configured-and-not-cooling scan. NVIDIA-through-nodes is the headline use case.
+
+## 26. Visible side-chats for every model call (Lachy, 2026-07-05 — "go ham")
+
+Every API call the orchestrator makes is a sub-conversation the user can SEE: when a stage (or
+future sub-agent) calls a model, a side-chat card opens in a right-side stack (same surface family
+as the preview rail) showing that call live — header (stage name, pretty model, route), the prompt
+(collapsed), and the response streaming/appearing. Multiple side chats + the preview shrink to
+share the rail (stacked, each collapsible to its header). Backend: new stream events
+`stage_call` `{ id, stageId, provider, model, promptPreview, status: start|complete|failed,
+output? }` emitted from callStageWithFallback per attempt; per-token streaming per call can come
+later — start with start/complete snapshots. This is also the visual substrate for managed
+sub-agents (§3): each agent's transcript is just another side chat.
+
+## 20. Loop-transcript chat grammar v2 (spec finalized from Lachy's reference, 2026-07-05)
+
+Claude Code-style **grouped operations**: consecutive operation lines collapse into ONE summary
+row — "Searched code, edited 3 files, read 3 files" — which expands to the individual slim lines
+(Searched <pattern> / Read <name> / Edited <name> +14 -0 / Failed to edit <name> / Used
+PowerShell). Rules: group only CONSECUTIVE operations uninterrupted by prose; summary verb counts
+by kind; failures surface in the summary ("edited 3 files, 1 failed"); expansion is a <details>
+matching the existing slim grammar; applies to live streaming and completed runs.
 
 Lachy loves Claude Code's loop UX: every action ("Searched code", "Ran 2 agents, used 2 tools",
 "Read a file, edited a file") is a compact expandable chip in the transcript. Metis chat already

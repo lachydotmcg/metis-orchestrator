@@ -4161,8 +4161,60 @@ function StageBlock({ stage }: { stage: NonNullable<SessionRun["stages"]>[number
 
 /** Slim, Claude-Code-style single-line operation rows for the conversation
  *  feed. No box, no headers, no filter tabs — just a stack of collapsed
- *  one-liners that expand into the full detail on click. */
-const SLIM_OPERATION_VISIBLE_LIMIT = 6;
+ *  one-liners that expand into the full detail on click.
+ *
+ *  §20 grammar: batches of MORE THAN this many ops collapse into one summary
+ *  row ("Edited 3 files, read 2 files, ran 2 checks") that expands into the
+ *  full flat stack of SlimOperationLine rows. 3 or fewer stays flat — no
+ *  over-nesting for a couple of ops. */
+const SLIM_OPERATION_GROUP_THRESHOLD = 3;
+
+/** Claude-Code-style natural-order summary of a batch of operations: file ops
+ *  first (edited/created, merged), then context loads ("read N files"), then
+ *  commands+browser checks ("ran N checks"), then anything else by label.
+ *  Failures/warnings are appended per-clause ("edited 3 files, 1 failed").
+ *  Shared by the grouped-summary row (this file) and any other collapsed
+ *  one-liner that wants the same grammar — the single summarizer for the
+ *  whole app, no duplicate summary styles. */
+function timelineOperationLabel(operations: AgentOperation[]): string {
+  if (operations.length === 0) return "";
+
+  const edited = operations.filter((op) => op.kind === "file_edit");
+  const created = operations.filter((op) => op.kind === "file_create");
+  const contextLoads = operations.filter((op) => op.kind === "context_load");
+  const checks = operations.filter((op) => op.kind === "command" || op.kind === "browser_check");
+  const knownKinds = new Set(["file_edit", "file_create", "context_load", "command", "browser_check"]);
+  const others = operations.filter((op) => !knownKinds.has(op.kind));
+
+  function clause(count: number, verb: string, noun: string, group: AgentOperation[]): string | null {
+    if (count === 0) return null;
+    const failed = group.filter((op) => op.status !== "complete").length;
+    const base = `${verb} ${count} ${noun}${count === 1 ? "" : "s"}`;
+    return failed > 0 ? `${base}, ${failed} failed` : base;
+  }
+
+  const clauses: string[] = [];
+  const fileClause = clause(edited.length + created.length, edited.length && created.length ? "Edited/created" : created.length ? "Created" : "Edited", "file", [...edited, ...created]);
+  if (fileClause) clauses.push(fileClause);
+  const readClause = clause(contextLoads.length, "Read", "file", contextLoads);
+  if (readClause) clauses.push(readClause);
+  const checkClause = clause(checks.length, "Ran", "check", checks);
+  if (checkClause) clauses.push(checkClause);
+
+  // Group "others" by label so e.g. two "git" ops become "2 git" not two lines.
+  const othersByLabel = new Map<string, AgentOperation[]>();
+  for (const op of others) {
+    const list = othersByLabel.get(op.label) ?? [];
+    list.push(op);
+    othersByLabel.set(op.label, list);
+  }
+  for (const [label, group] of othersByLabel) {
+    clauses.push(group.length > 1 ? `${label} ×${group.length}` : label);
+  }
+
+  if (clauses.length === 0) return `${operations.length} operations`;
+  return clauses.join(", ");
+}
 
 function operationBasename(operation: AgentOperation): string {
   const source = operation.target ?? operation.command ?? "";
@@ -4244,6 +4296,30 @@ function SlimOperationLine({ operation, targetDir }: { operation: AgentOperation
   );
 }
 
+/** One collapsed summary row for a batch of >3 operations — the Claude-Code
+ *  "Edited 3 files, read 2 files, ran 2 checks" grammar. Expands (native
+ *  <details>) into the exact same SlimOperationLine stack used for small
+ *  batches; each line keeps its own nested expandable detail. */
+function GroupedOperationSummary({ operations, targetDir }: { operations: AgentOperation[]; targetDir?: string }): JSX.Element {
+  const hasIssue = operations.some((op) => op.status !== "complete");
+  const tone = operations.some((op) => op.status === "error") ? "error" : hasIssue ? "warning" : "complete";
+  return (
+    <details className={`slim-op-line-details slim-op-group ${tone}`}>
+      <summary className="slim-op-line">
+        <ChevronRight className="stage-caret" size={13} />
+        <Folder size={14} />
+        <span>{timelineOperationLabel(operations)}</span>
+      </summary>
+      <div className="operation-detail-body slim-op-group-body">
+        {targetDir ? <small>Target folder: {targetDir}</small> : null}
+        {operations.map((operation) => (
+          <SlimOperationLine key={operation.id} operation={operation} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function SlimOperationList({
   extraDetail,
   operations,
@@ -4257,27 +4333,16 @@ function SlimOperationList({
 }): JSX.Element | null {
   const previewControl = useContext(PreviewRailContext);
   if (operations.length === 0 && !previewUrl) return null;
-  const visible = operations.slice(0, SLIM_OPERATION_VISIBLE_LIMIT);
-  const overflow = operations.slice(SLIM_OPERATION_VISIBLE_LIMIT);
+  const grouped = operations.length > SLIM_OPERATION_GROUP_THRESHOLD;
   return (
     <div className="slim-op-list">
-      {visible.map((operation, index) => (
-        <SlimOperationLine key={operation.id} operation={operation} targetDir={index === 0 && overflow.length === 0 ? targetDir : undefined} />
-      ))}
-      {overflow.length > 0 ? (
-        <details className="slim-op-line-details">
-          <summary className="slim-op-line">
-            <Folder size={14} />
-            <span>and {overflow.length} more</span>
-          </summary>
-          <div className="operation-detail-body">
-            {targetDir ? <small>Target folder: {targetDir}</small> : null}
-            {overflow.map((operation) => (
-              <SlimOperationLine key={operation.id} operation={operation} />
-            ))}
-          </div>
-        </details>
-      ) : null}
+      {grouped ? (
+        <GroupedOperationSummary operations={operations} targetDir={targetDir} />
+      ) : (
+        operations.map((operation, index) => (
+          <SlimOperationLine key={operation.id} operation={operation} targetDir={index === 0 ? targetDir : undefined} />
+        ))
+      )}
       {previewUrl ? (
         <div className="slim-op-line preview-line">
           <Monitor size={14} />
