@@ -5822,9 +5822,36 @@ details.artifact-row[open] summary {
 .grant-list,
 .registry-list,
 .audit-list,
+.gateway-list,
 .permission-presets {
   display: grid;
   gap: 8px;
+}
+
+.settings-hint {
+  margin: -4px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.gateway-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.gateway-row > span {
+  overflow: hidden;
+  color: white;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .provider-row,

@@ -101,6 +101,8 @@ import type {
   CatalogModel,
   ConversationRecord,
   ConversationTurnRecord,
+  GraphPipelineConfig,
+  GraphPipelineStage,
   ModelCatalogState,
   PermissionGrant,
   PermissionMode,
@@ -4758,6 +4760,60 @@ function loadNodes(): GraphNode[] {
   return SEED_NODES;
 }
 
+/** Regexes used to guess a sensible pipeline ORDER from an agent node's intent
+ *  and label (docs/FABLE_PLANS.md section 25) — planning-ish nodes run first,
+ *  frontend-ish nodes next, everything else after, in original relative order
+ *  within each bucket. Best-effort only: a graph with no matching nodes just
+ *  keeps its original node order. */
+const PLAN_INTENT_PATTERN = /\b(plan|architect)/i;
+const FRONTEND_INTENT_PATTERN = /\b(front|ui|design)/i;
+
+function graphNodeOrderRank(node: GraphNode): number {
+  const text = `${node.intent ?? ""} ${node.label ?? ""}`;
+  if (PLAN_INTENT_PATTERN.test(text)) return 0;
+  if (FRONTEND_INTENT_PATTERN.test(text)) return 1;
+  return 2;
+}
+
+/** Projects the live graph's agent nodes into the compact pipeline config
+ *  main.ts reads from the "graphPipeline" store key (docs/FABLE_PLANS.md
+ *  section 25) — the graph persists to localStorage, which the main process
+ *  cannot read, so this is the bridge. Nodes with no assigned provider/model,
+ *  or whose provider doesn't map to a known ProviderKey, are dropped silently
+ *  (fail-soft — main.ts's own validity check requires >=2 usable stages
+ *  anyway). Ordered planning-ish first, frontend-ish second, everything else
+ *  after (stable within each bucket). */
+function projectGraphPipeline(nodes: GraphNode[]): GraphPipelineConfig {
+  const agentNodes = nodes.filter((node) => node.kind === "agent" || node.kind === "router");
+  const ordered = agentNodes
+    .map((node, index) => ({ node, index }))
+    .sort((a, b) => {
+      const rankDiff = graphNodeOrderRank(a.node) - graphNodeOrderRank(b.node);
+      if (rankDiff !== 0) return rankDiff;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.node);
+
+  const stages: GraphPipelineStage[] = [];
+  for (const node of ordered) {
+    if (!node.provider || !node.model?.trim()) continue;
+    const providerKey = PROVIDER_CONNECTIONS[node.provider];
+    if (!providerKey) continue;
+    const fallback = (node.fallbacks ?? [])
+      .filter((ref) => ref.model?.trim() && PROVIDER_CONNECTIONS[ref.provider])
+      .map((ref) => ({ provider: PROVIDER_CONNECTIONS[ref.provider], model: ref.model }));
+    stages.push({
+      id: node.id,
+      label: node.label,
+      provider: providerKey,
+      model: node.model,
+      accessVia: node.accessVia ? PROVIDER_CONNECTIONS[node.accessVia] : undefined,
+      fallback
+    });
+  }
+  return { updatedAt: new Date().toISOString(), stages };
+}
+
 function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; gallerySkills: string[] }): JSX.Element {
   const [nodes, setNodes] = useState<GraphNode[]>(loadNodes);
   const [installedSkills, setInstalledSkills] = useState<RegistryPackage[]>([]);
@@ -4816,6 +4872,21 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
     } catch {
       /* storage may be unavailable */
     }
+  }, [nodes]);
+
+  // Graph -> app-store pipeline projection (docs/FABLE_PLANS.md section 25):
+  // the build pipeline in main.ts can't read the graph's localStorage, so
+  // whenever the agent nodes change, project a compact pipeline config and
+  // push it through the app-store bridge. Debounced (~1s) so dragging a node
+  // around doesn't spam writes; skipped entirely in browser preview, where
+  // window.metisStore doesn't exist.
+  useEffect(() => {
+    if (!window.metisStore) return;
+    const handle = window.setTimeout(() => {
+      const config = projectGraphPipeline(nodesRef.current);
+      void window.metisStore?.set("graphPipeline", config);
+    }, 1000);
+    return () => window.clearTimeout(handle);
   }, [nodes]);
 
   // Marketplace-installed skill packages, merged into the Skills palette (docs/FABLE_PLANS.md
@@ -8575,6 +8646,12 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
   // "Is this done?" critic loop (docs/FABLE_PLANS.md §22) — a top-level store
   // key (not nested in AppSettings) since main.ts reads it directly by name.
   const [selfVerify, setSelfVerify] = useAppStoreState<"off" | "local" | "all">("selfVerify", "local");
+  // Default gateways (docs/FABLE_PLANS.md section 25) — "DeepSeek models
+  // default via NVIDIA NIM" style pins, keyed by the model's HOME provider
+  // (the catalog entry's own `provider`, not a route). Consumed by main.ts's
+  // resolveModelRoute as the user pin when a stage has no explicit accessVia.
+  const [defaultGateways, setDefaultGateways] = useAppStoreState<Partial<Record<ProviderKey, ProviderKey>>>("defaultGateways", {});
+  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([]);
   const [policyStatus, setPolicyStatus] = useState<PolicyStatus>(FALLBACK_POLICY_STATUS);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
@@ -8613,6 +8690,52 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
   useEffect(() => {
     void refreshRuntime();
   }, [refreshRuntime]);
+
+  // Default gateways (docs/FABLE_PLANS.md section 25): load the model catalog
+  // once so we can compute which providers are the HOME provider of at least
+  // one multi-route model — those are the only ones worth offering a gateway
+  // picker for. Fails soft (empty catalog -> no gateway rows) in preview.
+  useEffect(() => {
+    if (!window.metisCatalog) return;
+    let alive = true;
+    window.metisCatalog
+      .models()
+      .then((state) => {
+        if (alive) setCatalogModels(state.models);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // For each HOME provider that has at least one multi-route model, the
+  // distinct set of route providers available across all of its models
+  // (excluding itself, since "via itself" is just Auto's own default).
+  const gatewayOptions = useMemo(() => {
+    const byHome = new Map<ProviderKey, Set<ProviderKey>>();
+    for (const model of catalogModels) {
+      const routes = model.access ?? [];
+      if (routes.length < 2) continue;
+      const set = byHome.get(model.provider) ?? new Set<ProviderKey>();
+      for (const route of routes) {
+        if (route.provider !== model.provider) set.add(route.provider);
+      }
+      byHome.set(model.provider, set);
+    }
+    return Array.from(byHome.entries())
+      .filter(([, routes]) => routes.size > 0)
+      .map(([home, routes]) => ({ home, routes: Array.from(routes) }));
+  }, [catalogModels]);
+
+  function setDefaultGateway(home: ProviderKey, provider: ProviderKey | ""): void {
+    setDefaultGateways((current) => {
+      const next = { ...current };
+      if (provider) next[home] = provider;
+      else delete next[home];
+      return next;
+    });
+  }
 
   async function runBusy(label: string, work: () => Promise<void>): Promise<void> {
     setBusy(label);
@@ -8851,6 +8974,35 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
             <textarea value={settings.globalInstructions} placeholder="Optional instructions every route should know." onChange={(event) => updateSetting("globalInstructions", event.target.value)} />
           </label>
         </article>
+
+        {gatewayOptions.length > 0 ? (
+          <article className="settings-panel gateways-panel">
+            <header>
+              <span>
+                <small>Routing</small>
+                <h2>Default gateways</h2>
+              </span>
+              <span className="status-pill">{Object.keys(defaultGateways).length} set</span>
+            </header>
+            <p className="settings-hint">Route a model family through a preferred API by default — e.g. send DeepSeek models via NVIDIA NIM — unless a node overrides it.</p>
+            <div className="gateway-list">
+              {gatewayOptions.map(({ home, routes }) => (
+                <div className="gateway-row" key={home}>
+                  <span>{PROVIDER_LABELS[home]}</span>
+                  <CustomSelect
+                    ariaLabel={`Default gateway for ${PROVIDER_LABELS[home]}`}
+                    value={defaultGateways[home] ?? ""}
+                    onChange={(value) => setDefaultGateway(home, value ? (value as ProviderKey) : "")}
+                    options={[
+                      { value: "", label: "Auto", hint: "Best available route" },
+                      ...routes.map((provider) => ({ value: provider, label: PROVIDER_LABELS[provider] }))
+                    ]}
+                  />
+                </div>
+              ))}
+            </div>
+          </article>
+        ) : null}
 
         <article className="settings-panel providers-panel">
           <header>

@@ -40,6 +40,7 @@ import type {
   ProjectWorkspaceResource,
   ProjectWorkspaceSelectionResult,
   CatalogModel,
+  GraphPipelineConfig,
   ModelAccessRoute,
   ModelCatalogState,
   PulseFeed,
@@ -3319,7 +3320,15 @@ function estimateTokens(value: string): number {
 }
 
 type StageModelRef = { provider: ProviderKey; model: string };
-type StageConfig = { id: string; label: string; chain: StageModelRef[] };
+// `accessVia` (docs/FABLE_PLANS.md section 25) is the pinned route provider
+// for this stage's PRIMARY model only (a graph node's "Access via" override);
+// callStageWithFallback/expandChainByRoutes apply it exclusively to chain[0].
+// `templateRole` (section 25) decouples the STAGE PROMPT TEMPLATE from the
+// stage id: default stages use their own id as the role, but graph-driven
+// stages keep the graph node's real id (for audit/result tracking) and pick
+// their prompt template by POSITION instead — first stage plans, second
+// builds the front end, the rest are functional/support passes.
+type StageConfig = { id: string; label: string; chain: StageModelRef[]; accessVia?: ProviderKey; templateRole: "plan" | "frontend" | "functional" };
 
 function localStageRef(): StageModelRef {
   return { provider: "ollama", model: providerInfo.ollama.defaultModel ?? "qwen3:8b" };
@@ -3400,9 +3409,9 @@ function defaultAgenticStages(prompt = "", override?: SessionModelOverride): Sta
   const gemini: StageModelRef = { provider: "gemini", model: providerInfo.gemini.defaultModel ?? "gemini-2.5-pro" };
   const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-chat" };
   const stages: StageConfig[] = [
-    { id: "plan", label: "Plan", chain: [gemini, claude, localStageRef()] },
-    { id: "frontend", label: "Front end", chain: [claude, deepseek, localStageRef()] },
-    { id: "functional", label: "Make functional", chain: [deepseek, claude, localStageRef()] }
+    { id: "plan", label: "Plan", chain: [gemini, claude, localStageRef()], templateRole: "plan" },
+    { id: "frontend", label: "Front end", chain: [claude, deepseek, localStageRef()], templateRole: "frontend" },
+    { id: "functional", label: "Make functional", chain: [deepseek, claude, localStageRef()], templateRole: "functional" }
   ];
   const scoped = wantsSingleFileFrontend(prompt) ? stages.filter((stage) => stage.id !== "functional") : stages;
   if (!override) return scoped;
@@ -3411,6 +3420,76 @@ function defaultAgenticStages(prompt = "", override?: SessionModelOverride): Sta
     ...stage,
     chain: [pinned, ...stage.chain.filter((ref) => ref.provider !== pinned.provider || ref.model !== pinned.model)]
   }));
+}
+
+function isKnownProvider(provider: string): provider is ProviderKey {
+  return Object.prototype.hasOwnProperty.call(providerInfo, provider);
+}
+
+/** Normalizes a graph node's raw model text the same way the composer pin's
+ *  override goes through resolveOverrideModel — the renderer sends display
+ *  names ("Sonnet 5") for library picks and raw ids for hand-typed/custom
+ *  models, so both paths need the same MODEL_DISPLAY_IDS lookup + heuristic
+ *  fallback (docs/FABLE_PLANS.md section 25). */
+function resolveGraphStageModel(provider: ProviderKey, rawModel: string): string {
+  return resolveOverrideModel({ provider, model: rawModel });
+}
+
+/** Builds a StageConfig[] from the graph pipeline projected by the renderer
+ *  (docs/FABLE_PLANS.md section 25) — turns the user's orchestration graph
+ *  into the same shape defaultAgenticStages produces, so the rest of
+ *  runOrchestratedStages (prompt templates, critic loop, streaming) doesn't
+ *  need to know the difference. Invalid/unknown providers or empty models are
+ *  dropped silently (fail-soft); stage prompt template is chosen by POSITION
+ *  (first = plan, second = frontend, rest = functional), not by node id/label,
+ *  since graph node ids are arbitrary. Every chain still ends in the local
+ *  model so the run always completes even if every configured route fails. */
+function graphAgenticStages(config: GraphPipelineConfig, prompt: string, override?: SessionModelOverride): StageConfig[] | null {
+  const usable = config.stages.filter((stage) => isKnownProvider(stage.provider) && stage.model.trim().length > 0);
+  if (usable.length < 2) return null;
+
+  const singleFile = wantsSingleFileFrontend(prompt);
+  const templateRoleFor = (index: number): StageConfig["templateRole"] => (index === 0 ? "plan" : index === 1 ? "frontend" : "functional");
+
+  const stages: StageConfig[] = usable.map((stage, index) => {
+    const primary: StageModelRef = { provider: stage.provider, model: resolveGraphStageModel(stage.provider, stage.model) };
+    const fallbackRefs: StageModelRef[] = stage.fallback
+      .filter((ref) => isKnownProvider(ref.provider) && ref.model.trim().length > 0)
+      .map((ref) => ({ provider: ref.provider, model: resolveGraphStageModel(ref.provider, ref.model) }));
+    const accessVia = stage.accessVia && isKnownProvider(stage.accessVia) ? stage.accessVia : undefined;
+    return {
+      id: stage.id,
+      label: stage.label || `Stage ${index + 1}`,
+      chain: [primary, ...fallbackRefs, localStageRef()],
+      accessVia,
+      templateRole: templateRoleFor(index)
+    };
+  });
+
+  // Single-file frontend requests still collapse to just plan+frontend, same
+  // as the default pipeline — drop anything past the second stage.
+  const scoped = singleFile ? stages.slice(0, 2) : stages;
+  if (!override) return scoped;
+  const pinned = overrideStageRef(override);
+  return scoped.map((stage) => ({
+    ...stage,
+    chain: [pinned, ...stage.chain.filter((ref) => ref.provider !== pinned.provider || ref.model !== pinned.model)]
+  }));
+}
+
+/** Resolves the stage list for a build run (docs/FABLE_PLANS.md section 25):
+ *  prefers the user's orchestration graph (projected by the renderer into the
+ *  "graphPipeline" store key) when it has at least two usable stages, else
+ *  falls back to the hardcoded defaultAgenticStages. The model override
+ *  (composer pin) applies identically either way — it still prepends every
+ *  chain, outranking both the graph and the defaults. */
+async function resolveAgenticStages(prompt: string, override?: SessionModelOverride): Promise<{ stages: StageConfig[]; source: "graph" | "default" }> {
+  const graphConfig = await readStoreValue<GraphPipelineConfig | null>("graphPipeline", null);
+  if (graphConfig && Array.isArray(graphConfig.stages)) {
+    const graphStages = graphAgenticStages(graphConfig, prompt, override);
+    if (graphStages && graphStages.length >= 2) return { stages: graphStages, source: "graph" };
+  }
+  return { stages: defaultAgenticStages(prompt, override), source: "default" };
 }
 
 // "Build me X" — only run the full pipeline for clearly buildable requests.
@@ -3480,29 +3559,47 @@ async function writeProjectFiles(files: GeneratedFile[], workspace: ProjectWorks
   return buildProjectToolResult(root, workspace, prepared.files, workspace ? `Project: ${workspace.name}` : "Generated project", prepared.notes);
 }
 
-/** Route-before-model fallback (docs/FABLE_PLANS.md section 21): given one
- *  {provider, model} stage entry, looks it up in the cached model catalog and,
- *  if the catalog knows this exact provider+model as one of a model's access
- *  routes, returns ALL of that model's routes as StageModelRefs — ordered per
- *  resolveModelRoute's preference (pinned n/a here; just configured-and-not-
- *  cooling first, then configured-but-cooling, then the rest as a last resort)
- *  — so a rate-limited NVIDIA route falls through to the deepseek API route of
- *  the SAME model before the chain ever moves on to a different model. When
- *  the ref isn't found in the catalog (or the catalog is empty), returns the
- *  ref unchanged as a single-entry array — callers always get at least one
- *  StageModelRef back. */
-async function expandStageRef(ref: StageModelRef): Promise<StageModelRef[]> {
+/** Default gateways (docs/FABLE_PLANS.md section 25) — a Settings-configured
+ *  map of "route models from this HOME provider via this OTHER provider by
+ *  default" (e.g. { deepseek: "nvidia" } sends DeepSeek-family models via
+ *  NVIDIA NIM unless a node/stage pins something else). Read fresh on every
+ *  expansion since Settings can change it mid-session; fails soft to {}. */
+async function getDefaultGateways(): Promise<Partial<Record<ProviderKey, ProviderKey>>> {
+  return readStoreValue<Partial<Record<ProviderKey, ProviderKey>>>("defaultGateways", {});
+}
+
+/** Route-before-model fallback (docs/FABLE_PLANS.md section 21, extended by
+ *  section 25's default gateways): given one {provider, model} stage entry,
+ *  looks it up in the cached model catalog and, if the catalog knows this
+ *  exact provider+model as one of a model's access routes, returns ALL of
+ *  that model's routes as StageModelRefs, ordered so a rate-limited NVIDIA
+ *  route falls through to the deepseek API route of the SAME model before the
+ *  chain ever moves on to a different model. When the ref isn't found in the
+ *  catalog (or the catalog is empty), returns the ref unchanged as a
+ *  single-entry array — callers always get at least one StageModelRef back.
+ *
+ *  Pin precedence (section 25): explicit `pinned` (a node's "Access via"
+ *  override) > `defaultGateways[model's home provider]` > first
+ *  configured-and-not-cooling route > first configured-but-cooling route >
+ *  the rest. A pinned/gateway route only jumps the queue when it's actually
+ *  configured — an unconfigured pin is silently ignored, same as
+ *  resolveModelRoute's behavior. */
+async function expandStageRef(ref: StageModelRef, pinned?: ProviderKey): Promise<StageModelRef[]> {
   const catalog = await listModelCatalog();
   const model = catalog.models.find((entry) => (entry.access ?? []).some((route) => route.provider === ref.provider && route.id === ref.model));
   if (!model || !model.access || model.access.length === 0) return [ref];
 
+  const effectivePin = pinned ?? (await getDefaultGateways())[model.provider];
+
   const configuredFlags = await Promise.all(model.access.map((route) => isProviderConfigured(route.provider)));
   const withStatus = model.access.map((route, index) => ({ route, configured: configuredFlags[index], cooling: isProviderCooling(route.provider) }));
 
-  const healthy = withStatus.filter((entry) => entry.configured && !entry.cooling);
-  const configuredButCooling = withStatus.filter((entry) => entry.configured && entry.cooling);
-  const unconfigured = withStatus.filter((entry) => !entry.configured);
-  const ordered = [...healthy, ...configuredButCooling, ...unconfigured];
+  const pinnedEntry = effectivePin ? withStatus.find((entry) => entry.route.provider === effectivePin && entry.configured) : undefined;
+  const rest = withStatus.filter((entry) => entry !== pinnedEntry);
+  const healthy = rest.filter((entry) => entry.configured && !entry.cooling);
+  const configuredButCooling = rest.filter((entry) => entry.configured && entry.cooling);
+  const unconfigured = rest.filter((entry) => !entry.configured);
+  const ordered = [...(pinnedEntry ? [pinnedEntry] : []), ...healthy, ...configuredButCooling, ...unconfigured];
 
   return ordered.map((entry) => ({ provider: entry.route.provider, model: entry.route.id }));
 }
@@ -3511,9 +3608,14 @@ async function expandStageRef(ref: StageModelRef): Promise<StageModelRef[]> {
  *  result by provider+model, preserving first-seen order — so a chain of
  *  MODELS (e.g. [nvidia/deepseek-v3.1, anthropic/claude]) becomes a chain of
  *  ROUTES that tries every access route of the first model before moving on to
- *  the second model's routes (docs/FABLE_PLANS.md section 21). */
-async function expandChainByRoutes(chain: StageModelRef[]): Promise<StageModelRef[]> {
-  const expandedGroups = await Promise.all(chain.map((ref) => expandStageRef(ref)));
+ *  the second model's routes (docs/FABLE_PLANS.md section 21).
+ *
+ *  `primaryPin` (docs/FABLE_PLANS.md section 25) is a node's "Access via"
+ *  override — it only ever applies to the chain's FIRST entry (the stage's own
+ *  primary model), never to fallback entries, which keep resolving through
+ *  their own defaultGateways/health ordering. */
+async function expandChainByRoutes(chain: StageModelRef[], primaryPin?: ProviderKey): Promise<StageModelRef[]> {
+  const expandedGroups = await Promise.all(chain.map((ref, index) => expandStageRef(ref, index === 0 ? primaryPin : undefined)));
   const seen = new Set<string>();
   const result: StageModelRef[] = [];
   for (const group of expandedGroups) {
@@ -3527,16 +3629,17 @@ async function expandChainByRoutes(chain: StageModelRef[]): Promise<StageModelRe
   return result;
 }
 
-async function callStageWithFallback(rawChain: StageModelRef[], prompt: string): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
+async function callStageWithFallback(rawChain: StageModelRef[], prompt: string, primaryPin?: ProviderKey): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
   const notes: string[] = [];
-  // Route-before-model fallback (docs/FABLE_PLANS.md §21): expand each chain
-  // entry to every access route of its catalog model (if known) before the
-  // existing "Never Run Dry" cooldown-skip logic below runs — so a cooling
-  // route rotates to a sibling route of the SAME model first, and only moves
-  // to the next model once every route of the current one is exhausted.
-  // Rotation/cooldown notes below are unaffected: they're keyed by provider,
-  // same as before expansion.
-  const chain = await expandChainByRoutes(rawChain);
+  // Route-before-model fallback (docs/FABLE_PLANS.md §21, extended by §25's
+  // "Access via" node override / default gateways via primaryPin): expand
+  // each chain entry to every access route of its catalog model (if known)
+  // before the existing "Never Run Dry" cooldown-skip logic below runs — so a
+  // cooling route rotates to a sibling route of the SAME model first, and
+  // only moves to the next model once every route of the current one is
+  // exhausted. Rotation/cooldown notes below are unaffected: they're keyed by
+  // provider, same as before expansion.
+  const chain = await expandChainByRoutes(rawChain, primaryPin);
   // "Never Run Dry" quota rotation (docs/FABLE_PLANS.md §19): a provider still
   // cooling from a recent 429/quota failure is skipped outright rather than
   // burning another call against it. `next` for the rotation note looks ahead
@@ -3645,6 +3748,7 @@ async function runCriticLoop(args: {
   ref: StageModelRef;
   output: string;
   stream?: SessionStreamController;
+  accessVia?: ProviderKey;
 }): Promise<{ output: string; criticPasses: number }> {
   const isLocalStage = args.ref.provider === "ollama";
   if (!(await shouldSelfVerifyStage(args.ref))) return { output: args.output, criticPasses: 0 };
@@ -3667,7 +3771,7 @@ async function runCriticLoop(args: {
     const missingList = verdict.missing.length > 0 ? verdict.missing.map((item) => `- ${item}`).join("\n") : "- (no specifics given, but the task is not finished)";
     const continuationPrompt = `${args.stagePrompt}\n\nYour previous output was incomplete. You MUST complete: \n${missingList}\n\nContinue and return the COMPLETE result (full files, not diffs).\n\nYour previous output:\n${currentOutput.slice(0, 8000)}`;
 
-    const attempt = await callStageWithFallback(args.chain, continuationPrompt);
+    const attempt = await callStageWithFallback(args.chain, continuationPrompt, args.accessVia);
     if (!attempt.failed && attempt.output.trim()) {
       currentOutput = stripThinkBlocks(attempt.output);
     }
@@ -3795,11 +3899,23 @@ async function runOrchestratedStages(
 ): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed }> {
   const metisBlock = metisFilePromptBlock(metisFile ?? null);
   const singleFile = wantsSingleFileFrontend(prompt);
-  const stages = defaultAgenticStages(prompt, override);
+  const { stages, source: stageSource } = await resolveAgenticStages(prompt, override);
   const results: OrchestrationStage[] = [];
   const steeringLog: string[] = [];
   let plan = "";
   let frontend = "";
+
+  // docs/FABLE_PLANS.md section 25 — name the pipeline source up front so the
+  // user can tell at a glance whether their graph is actually driving the
+  // build or the run fell back to the hardcoded default pipeline.
+  emitTimeline(
+    stream,
+    timelineText(
+      stageSource === "graph"
+        ? `Running your orchestration graph pipeline (${stages.length} stage${stages.length === 1 ? "" : "s"}).`
+        : "Running the default build pipeline."
+    )
+  );
 
   // Design seed: picked once per run so every stage sees the same taste.
   // Rerollable mid-run via a steering directive (see below).
@@ -3812,9 +3928,9 @@ async function runOrchestratedStages(
   for (const stage of stages) {
     throwIfCancelled(projectPath);
     let stagePrompt: string;
-    if (stage.id === "plan") {
+    if (stage.templateRole === "plan") {
       stagePrompt = `You are the PLANNING model in a build pipeline. The user wants:\n${prompt}\n\nWrite a short, concrete build plan: the pages/components, the data, and the interactivity. Be tight — no code yet, just the plan.\n\nNever ask the user for a brief, requirements, or say the project is empty. If details are missing, invent tasteful, specific choices yourself (name, copy, palette, content) and state them briefly — you are the creative lead. Do not end with a question asking permission to proceed; proceed.`;
-    } else if (stage.id === "frontend") {
+    } else if (stage.templateRole === "frontend") {
       stagePrompt = `You are the FRONT-END model. Build the UI for this plan.\n\nPlan:\n${plan}\n\nReturn COMPLETE files, not snippets. Before each fenced code block, put the file path in backticks on its own line (e.g. \`index.html\` or \`public/index.html\`). Keep it clean and minimal — one short sentence of intro, then the files.\n\nAvoid the generic AI look — do not default to purple/violet gradients; choose a distinctive, coherent palette and typography that fit the subject.`;
       // Gallery visual RAG retrieval (docs/FABLE_PLANS.md section 4): the
       // user's own gallery outranks the canned design seed, but never the
@@ -3830,10 +3946,10 @@ async function runOrchestratedStages(
       stagePrompt = `You are the FUNCTIONALITY model. Make the site actually work end to end.\n\nPlan:\n${plan}\n\nFront end so far:\n${frontend}\n\nReturn COMPLETE files (full contents, not diffs) for everything needed to run it — backend (e.g. \`server.js\`, \`package.json\`) and any updated front-end files. Before each fenced code block, put the file path in backticks on its own line. One short sentence of intro, then the files.`;
     }
     if (metisBlock) stagePrompt = `${metisBlock}\n${stagePrompt}`;
-    if (stage.id === "plan" && singleFile) {
+    if (stage.templateRole === "plan" && singleFile) {
       stagePrompt += "\n\nImportant constraint: this must remain one static index.html file. Do not plan a server, package.json, external local CSS file, or extra JS file.";
     }
-    if (stage.id === "frontend" && singleFile) {
+    if (stage.templateRole === "frontend" && singleFile) {
       stagePrompt = `You are the FRONT-END model. Build the UI for this plan.\n\nPlan:\n${plan}\n\nReturn EXACTLY ONE complete file: \`index.html\`. Put the file path \`index.html\` on its own line before the fenced code block. All CSS must be inside a <style> tag. All JavaScript must be inside a <script> tag. Do not reference local files such as styles.css, script.js, package.json, server.js, images, or assets. No backend. One short sentence of intro, then the one file.\n\nAvoid the generic AI look — do not default to purple/violet gradients; choose a distinctive, coherent palette and typography that fit the subject.`;
     }
     // Mid-run steering: absorb directives posted while earlier stages were running.
@@ -3854,21 +3970,21 @@ async function runOrchestratedStages(
     }
     // Design seed injection: build stages only (plan + frontend), never the
     // functionality stage — the seed is a visual/voice constraint.
-    if (stage.id === "plan" || stage.id === "frontend") {
+    if (stage.templateRole === "plan" || stage.templateRole === "frontend") {
       stagePrompt += `\n\n${designSeedPromptLine(seed, { explicitStyle, replacesPrevious: seedReplacesPrevious })}`;
     }
     // AskUserQuestion (docs/FABLE_PLANS.md section 24): models MAY emit this
     // tag ONCE per stage for a genuinely blocking decision — never for "what
     // would you like to build", since the model remains the creative lead.
     stagePrompt += `\n\nIf, and only if, a genuinely blocking decision needs the user's input (not a creative choice you can make yourself), you may emit ONE tag anywhere in your output: <ask_user>{"question":"...","options":["a","b"]}</ask_user>. Otherwise never emit this tag — decide tastefully yourself and proceed.`;
-    if (stage.id === "plan") {
+    if (stage.templateRole === "plan") {
       emitTimeline(stream, timelineText("Planning the build and checking the constraints."));
-    } else if (stage.id === "frontend") {
+    } else if (stage.templateRole === "frontend") {
       emitTimeline(stream, timelineText("Calling the front-end route now."));
     } else {
       emitTimeline(stream, timelineText("Checking whether the build needs functionality or support files."));
     }
-    let attempt = await callStageWithFallback(stage.chain, stagePrompt);
+    let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.accessVia);
     // Scan for an AskUserQuestion tag; if present, pause for an answer, strip
     // the tag, append the answer to the stage prompt, and re-run once.
     const askedQuestion = extractAskUserTag(attempt.output);
@@ -3878,7 +3994,7 @@ async function runOrchestratedStages(
         emitTimeline(stream, timelineText(`No answer in time — I picked "${answer}" and kept going.`));
       }
       const continuationPrompt = `${stagePrompt}\n\nYou previously asked: "${askedQuestion.question}"\nUser answered: ${answer}\n\nContinue with the full stage output now (do not ask again).`;
-      attempt = await callStageWithFallback(stage.chain, continuationPrompt);
+      attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.accessVia);
     }
     await appendAudit(attempt.failed ? "error" : "info", "session.stage", `Stage ${stage.label} via ${stageModelLabel(attempt.ref)}.`, {
       stage: stage.id,
@@ -3902,7 +4018,8 @@ async function runOrchestratedStages(
         chain: stage.chain,
         ref: attempt.ref,
         output: cleanOutput,
-        stream
+        stream,
+        accessVia: stage.accessVia
       });
       cleanOutput = criticResult.output;
       criticPasses = criticResult.criticPasses;
@@ -3931,11 +4048,11 @@ async function runOrchestratedStages(
       }
     });
     emitTimeline(stream, { id: randomUUID(), kind: "stage", stageId: completedStage.id });
-    if (stage.id === "plan") plan = cleanOutput;
-    if (stage.id === "frontend") frontend = cleanOutput;
+    if (stage.templateRole === "plan") plan = cleanOutput;
+    if (stage.templateRole === "frontend") frontend = cleanOutput;
     // Plan mode (docs/FABLE_PLANS.md section 24): read-only — run only the
     // plan stage, no writes/commands, then stop before front end/functional.
-    if (stage.id === "plan" && permissionMode === "plan") {
+    if (stage.templateRole === "plan" && permissionMode === "plan") {
       emitTimeline(stream, timelineText("Plan mode — nothing was written. Switch to Auto and rerun to build it."));
       break;
     }
@@ -4060,8 +4177,12 @@ async function runExtractionRecovery(args: {
   stream?: SessionStreamController;
   metisFile?: { content: string; chars: number } | null;
 }): Promise<GeneratedFile[]> {
-  const planOutput = args.stages.find((stage) => stage.id === "plan")?.output ?? "";
-  const frontendOutput = args.stages.find((stage) => stage.id === "frontend")?.output ?? "";
+  // Graph-driven stages (docs/FABLE_PLANS.md section 25) keep the graph
+  // node's own id, not "plan"/"frontend" — fall back to position (stage 0 is
+  // always the plan-role stage, stage 1 the frontend-role stage) when the
+  // named lookup misses, so recovery still has real context either way.
+  const planOutput = (args.stages.find((stage) => stage.id === "plan") ?? args.stages[0])?.output ?? "";
+  const frontendOutput = (args.stages.find((stage) => stage.id === "frontend") ?? args.stages[1])?.output ?? "";
   // Reuse the frontend-style fallback chain, respecting a threaded-through
   // model override the same way defaultAgenticStages does for every stage.
   const frontendStage = defaultAgenticStages(args.prompt, args.override).find((stage) => stage.id === "frontend");
@@ -4313,7 +4434,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       run.warnings = [...(run.warnings ?? []), "No complete files were extracted from the build stages; nothing was written."];
     }
     if (permissionMode === "plan") {
-      const planStage = stages.find((stage) => stage.id === "plan");
+      // Graph-driven stages keep the graph node's own id (docs/FABLE_PLANS.md
+      // section 25) — fall back to the first stage (always the plan-role
+      // stage in plan mode, since the loop breaks right after it) when the
+      // named "plan" id isn't present.
+      const planStage = stages.find((stage) => stage.id === "plan") ?? stages[0];
       run.assistantText = `${planStage?.output ?? "I put together a plan."}\n\nPlan mode — nothing was written. Switch to Auto and rerun to build it.`;
       run.pipelineName = "Plan Mode";
     }

@@ -255,6 +255,31 @@ export interface ModelCatalogState {
   models: CatalogModel[];
 }
 
+/** One stage of a graph-projected build pipeline (docs/FABLE_PLANS.md section
+ *  25) — a compact, main.ts-readable snapshot of one orchestration graph agent
+ *  node. The renderer projects the live GraphWorkspace nodes into a list of
+ *  these on every change (debounced) and writes them to the app store under
+ *  the "graphPipeline" key, since main.ts cannot read the graph's own
+ *  localStorage. `provider`/`model` are already normalized to real API ids
+ *  (see main.ts's resolveOverrideModel-style normalization) by the time this
+ *  reaches the store. */
+export interface GraphPipelineStage {
+  id: string;
+  label: string;
+  provider: ProviderKey;
+  model: string;
+  /** Pinned route provider for this stage's primary model ("Access via" node
+   *  override), if the user set one. Falls back to defaultGateways, then Auto. */
+  accessVia?: ProviderKey;
+  fallback: Array<{ provider: ProviderKey; model: string }>;
+}
+
+/** Store payload for key "graphPipeline" (docs/FABLE_PLANS.md section 25). */
+export interface GraphPipelineConfig {
+  updatedAt: string;
+  stages: GraphPipelineStage[];
+}
+
 export interface PulseChangelogEntry {
   date: string;
   title: string;
