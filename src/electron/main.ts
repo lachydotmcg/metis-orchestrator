@@ -3512,6 +3512,86 @@ function hasImperativeBuildIntent(prompt: string): boolean {
 // private_sensitive/general_chat never justify running the build pipeline.
 const BUILD_TASK_TYPES: ReadonlySet<RouteDecision["task_type"]> = new Set(["coding", "frontend_design"]);
 
+// "Set up a preview / serve the site" is an operational request on the
+// EXISTING project, not a build. Requires an explicit serve-ish verb near a
+// preview/server word, and yields to genuine build phrasing.
+function wantsProjectPreview(prompt: string): boolean {
+  if (!/\b(set\s?up|start|open|launch|show|run|host|give me)\b[\s\S]{0,50}\b(preview|serve|server|localhost)\b/i.test(prompt)) return false;
+  return !/\b(build|creat|mak\w|generat|design|develop|cod\w|implement|scaffold)\w*\b/i.test(prompt);
+}
+
+/** Serves the selected project folder on the shared static preview server and
+ *  returns a lightweight run whose outputUrl opens the preview rail. */
+async function runPreviewRequest(args: {
+  input: SessionRunInput;
+  prompt: string;
+  conversationId: string;
+  createdAt: string;
+  promptHash: string;
+  decision: PolicyDecisionResult;
+  stream?: SessionStreamController;
+}): Promise<SessionRun> {
+  const { input, prompt, conversationId, createdAt, promptHash, decision, stream } = args;
+  const writable = await resolveWritableProjectWorkspace(input.projectPath);
+  const steps: SessionPipelineStep[] = [
+    { id: "route", label: "Route through Metis Policy", detail: "Recognized a preview request for the current project.", status: "complete" }
+  ];
+  let assistantText: string;
+  let outputUrl: string | undefined;
+  const warnings: string[] = [];
+  const operations: AgentOperation[] = [];
+  if (!writable) {
+    assistantText = "No project folder is selected (or its permission lapsed), so there is nothing to serve yet. Pick a project folder and ask again.";
+    warnings.push("Preview request received without a writable project workspace.");
+    steps.push({ id: "serve", label: "Start preview server", detail: "Skipped — no project folder.", status: "skipped" });
+  } else {
+    emitTimeline(stream, timelineText(`Starting a preview server for ${writable.name}.`));
+    try {
+      outputUrl = await ensureStaticPreview(writable.path);
+      assistantText = `Preview is up for ${writable.name}: ${outputUrl} — it should open in the preview rail on the right. It serves the folder as-is; rebuilds are not needed to see saved changes.`;
+      steps.push({ id: "serve", label: "Start preview server", detail: `Serving ${writable.name} at ${outputUrl}.`, status: "complete" });
+      operations.push({
+        id: randomUUID(),
+        kind: "browser_check",
+        label: "Started preview server",
+        target: outputUrl,
+        url: outputUrl,
+        status: "complete",
+        permission: "network.web",
+        detail: `Static server for ${writable.path}`
+      });
+      emitStream(stream, { kind: "operation", operation: operations[0] });
+      emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Preview server", operationIds: [operations[0].id] });
+      await appendAudit("info", "project.preview", `Preview server started for ${writable.name}.`, { url: outputUrl, root: writable.path });
+    } catch (error) {
+      assistantText = `I could not start the preview server for ${writable.name}: ${error instanceof Error ? error.message : String(error)}`;
+      warnings.push(assistantText);
+      steps.push({ id: "serve", label: "Start preview server", detail: "Failed to start.", status: "error" });
+    }
+  }
+  const run: SessionRun = {
+    id: randomUUID(),
+    conversationId,
+    createdAt,
+    completedAt: new Date().toISOString(),
+    promptSha256: promptHash,
+    promptPreview: prompt.slice(0, 180),
+    rawPromptStored: false,
+    projectPath: writable?.path ?? input.projectPath,
+    pipelineName: "Preview Pipeline",
+    routeLabel: "Preview",
+    decision,
+    steps,
+    assistantText,
+    outputUrl,
+    warnings
+  };
+  await appendRunToConversation(run, prompt);
+  await writeSessionRun(run);
+  emitStream(stream, { kind: "complete", run });
+  return run;
+}
+
 // Gate for the full multi-stage build pipeline. Prefers the router's own
 // judgement (decision.task_type) over regex-sniffing the prompt, so a status
 // question like "Without generating anything, what's the status of my
@@ -4385,6 +4465,12 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const routeLabel = routeLabelFromPrompt(prompt) ?? (shouldReusePreviousPipeline(prompt) ? await previousConversationRouteLabel(input.conversationId) : undefined);
   const effectiveDecision = applySessionRouteOverrides(prompt, decision.decision, routeContext);
   const effectiveDecisionResult: PolicyDecisionResult = { ...decision, decision: effectiveDecision };
+
+  // "Set up a preview" is an OPERATION on the existing project, not a build —
+  // serve the selected folder and open the rail instead of running the pipeline.
+  if (wantsProjectPreview(prompt)) {
+    return runPreviewRequest({ input, prompt, conversationId, createdAt, promptHash, decision: effectiveDecisionResult, stream });
+  }
 
   // Real multi-model build pipeline (plan -> front end -> functional) for "build me X".
   if (shouldRunBuildPipeline(prompt, effectiveDecision, decision.source)) {
