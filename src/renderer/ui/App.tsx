@@ -81,6 +81,7 @@ import {
   Search,
   Settings,
   Shield,
+  ShieldAlert,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -102,6 +103,7 @@ import type {
   ConversationTurnRecord,
   ModelCatalogState,
   PermissionGrant,
+  PermissionMode,
   PermissionScope,
   PolicyDecisionResult,
   PolicyStatus,
@@ -329,6 +331,11 @@ type ConversationTurn = {
   liveAssistantText?: string;
   liveThoughtText?: string;
   error?: string;
+  /** In-run permission prompt awaiting a verdict (docs/FABLE_PLANS.md §24) —
+   *  cleared once a later stream event arrives or the user responds. */
+  pendingPermission?: { id: string; scope: PermissionScope; target: string; detail: string; resolved?: { verdict: "allow" | "always" | "deny" } };
+  /** AskUserQuestion awaiting an answer (docs/FABLE_PLANS.md §24). */
+  pendingQuestion?: { id: string; text: string; options: string[]; resolved?: { answer: string } };
 };
 
 const ACCOUNT_EMAIL = "bytehavencreations@gmail.com";
@@ -389,6 +396,12 @@ function applyStreamEventToTurn(turn: ConversationTurn, event: SessionStreamEven
   }
   if (event.kind === "error") {
     return { ...turn, status: "error", error: event.message };
+  }
+  if (event.kind === "permission_request") {
+    return { ...turn, pendingPermission: { id: event.request.id, scope: event.request.scope, target: event.request.target, detail: event.request.detail } };
+  }
+  if (event.kind === "user_question") {
+    return { ...turn, pendingQuestion: { id: event.question.id, text: event.question.text, options: event.question.options } };
   }
   return turn;
 }
@@ -2181,10 +2194,15 @@ function CustomSelect({
   );
 }
 
-const PERM_LEVELS: { key: "restricted" | "standard" | "trusted"; label: string; desc: string }[] = [
-  { key: "restricted", label: "Restricted", desc: "Read-only. No file writes or network calls." },
-  { key: "standard", label: "Standard", desc: "Read / write in the local workspace and this project." },
-  { key: "trusted", label: "Trusted", desc: "Workspace, project, graph memory, and network." }
+/** Five permission modes (docs/FABLE_PLANS.md section 24), replacing the old
+ *  restricted/standard/trusted three-level scheme. Selected in the composer's
+ *  Permissions popover and persisted via useAppStoreState("permissionMode"). */
+const PERMISSION_MODES: { key: PermissionMode; label: string; desc: string }[] = [
+  { key: "ask", label: "Ask Permissions", desc: "Every file write, command, and new network scope pauses the run and asks." },
+  { key: "edits", label: "Accept Edits", desc: "File writes auto-approved; commands and new scopes still ask." },
+  { key: "plan", label: "Plan Mode", desc: "Read-only — plans and reports what it would do. No writes, no commands." },
+  { key: "auto", label: "Auto Mode", desc: "Proceeds, asking only for destructive or never-granted scopes. Default." },
+  { key: "bypass", label: "Bypass Permissions", desc: "No prompts at all. Use with care." }
 ];
 
 const OVERVIEW_STATS = [
@@ -2525,7 +2543,7 @@ function NewSessionWorkspace({
     return { columns, totalMessages, activeDays };
   }, [telemetryData.userMessages, range]);
 
-  const [level, setLevel] = useState<(typeof PERM_LEVELS)[number]["key"]>("standard");
+  const [permissionMode, setPermissionMode] = useAppStoreState<PermissionMode>("permissionMode", "auto");
   const [projectPickerBusy, setProjectPickerBusy] = useState(false);
   const [projectWorkspace, setProjectWorkspace] = useState<ProjectWorkspace | null>(null);
   const [workspaceResources, setWorkspaceResources] = useState<ProjectWorkspaceResource[]>([]);
@@ -2908,7 +2926,7 @@ function NewSessionWorkspace({
         prompt: text,
         conversationId: activeConversationId,
         projectPath: projectWorkspace?.path,
-        permissionLevel: level,
+        permissionMode,
         rawPromptStorage: "local-only",
         modelOverride: selectedModel
           ? {
@@ -3212,8 +3230,8 @@ function NewSessionWorkspace({
           suggestion={composerSuggestion}
           suggestionResetKey={`${lastRun?.id ?? "none"}::${activeConversationId ?? "none"}`}
           onSubmit={submitPrompt}
-          level={level}
-          setLevel={setLevel}
+          permissionMode={permissionMode}
+          setPermissionMode={setPermissionMode}
           resourceMenuOpen={resourceMenuOpen}
           setResourceMenuOpen={setResourceMenuOpen}
           projectPickerBusy={projectPickerBusy}
@@ -3259,8 +3277,8 @@ function SessionComposer({
   suggestion,
   suggestionResetKey,
   onSubmit,
-  level,
-  setLevel,
+  permissionMode,
+  setPermissionMode,
   resourceMenuOpen,
   setResourceMenuOpen,
   projectPickerBusy,
@@ -3284,8 +3302,8 @@ function SessionComposer({
   suggestion: string | null | undefined;
   suggestionResetKey: string;
   onSubmit: (text: string) => void | Promise<void>;
-  level: (typeof PERM_LEVELS)[number]["key"];
-  setLevel: (level: (typeof PERM_LEVELS)[number]["key"]) => void;
+  permissionMode: PermissionMode;
+  setPermissionMode: (mode: PermissionMode | ((current: PermissionMode) => PermissionMode)) => void;
   resourceMenuOpen: boolean;
   setResourceMenuOpen: (value: boolean | ((open: boolean) => boolean)) => void;
   projectPickerBusy: boolean;
@@ -3366,13 +3384,13 @@ function SessionComposer({
         <div className="composer-tools">
           <div className="perm-wrap">
             <button
-              className={`tool-btn ${permOpen ? "active" : ""}`}
+              className={`tool-btn ${permOpen ? "active" : ""} ${permissionMode === "bypass" ? "bypass" : ""}`}
               type="button"
               aria-label="Permissions"
               aria-expanded={permOpen}
               onClick={() => setPermOpen((open) => !open)}
             >
-              <Shield size={16} />
+              {permissionMode === "bypass" ? <ShieldAlert size={16} /> : <Shield size={16} />}
             </button>
             {permOpen ? (
               <>
@@ -3386,8 +3404,13 @@ function SessionComposer({
                     </button>
                   </header>
                   <div className="perm-levels">
-                    {PERM_LEVELS.map((option) => (
-                      <button key={option.key} type="button" className={`perm-level ${level === option.key ? "active" : ""}`} onClick={() => setLevel(option.key)}>
+                    {PERMISSION_MODES.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className={`perm-level ${permissionMode === option.key ? "active" : ""} ${option.key === "bypass" ? "bypass" : ""}`}
+                        onClick={() => setPermissionMode(option.key)}
+                      >
                         <span className="perm-radio" />
                         <span>
                           <strong>{option.label}</strong>
@@ -3402,10 +3425,10 @@ function SessionComposer({
                       <li className="on">
                         <HardDrive size={13} /> Local workspace
                       </li>
-                      <li className={level !== "restricted" ? "on" : ""}>
+                      <li className={permissionMode !== "plan" ? "on" : ""}>
                         <Folder size={13} /> Project folder · Metis
                       </li>
-                      <li className={level === "trusted" ? "on" : ""}>
+                      <li className={permissionMode === "auto" || permissionMode === "bypass" ? "on" : ""}>
                         <Network size={13} /> Graph memory + network
                       </li>
                     </ul>
@@ -3786,11 +3809,118 @@ function LiveRunTimeline({ turn }: { turn: ConversationTurn }): JSX.Element {
         }
         return null;
       })}
-      <div className="route-line running" role="status" aria-label="Still running">
-        <Waypoints size={13} />
-        <span className="thinking-text" aria-hidden="true" />
-        <span className="sr-only">Thinking...</span>
+      {turn.pendingPermission ? <PermissionRequestCard request={turn.pendingPermission} /> : null}
+      {turn.pendingQuestion ? <UserQuestionCard question={turn.pendingQuestion} /> : null}
+      {!turn.pendingPermission && !turn.pendingQuestion ? (
+        <div className="route-line running" role="status" aria-label="Still running">
+          <Waypoints size={13} />
+          <span className="thinking-text" aria-hidden="true" />
+          <span className="sr-only">Thinking...</span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** In-run permission approval card (docs/FABLE_PLANS.md §24) — slim,
+ *  accent-left-border, matching the chat grammar. Collapses to a one-line
+ *  record after a verdict; shows a disabled note in the no-bridge preview. */
+function PermissionRequestCard({ request }: { request: NonNullable<ConversationTurn["pendingPermission"]> }): JSX.Element {
+  const [resolved, setResolved] = useState<"allow" | "always" | "deny" | null>(null);
+
+  function respond(verdict: "allow" | "always" | "deny"): void {
+    setResolved(verdict);
+    window.metisPermissions?.respond(request.id, verdict);
+  }
+
+  if (resolved) {
+    const label = resolved === "deny" ? "Denied" : resolved === "always" ? "Always allowed" : "Allowed once";
+    return (
+      <div className="permission-card resolved">
+        <ShieldCheck size={13} />
+        <span>
+          {label} — {request.detail}
+        </span>
       </div>
+    );
+  }
+
+  return (
+    <div className="permission-card" role="dialog" aria-label="Permission request">
+      <div className="permission-card-detail">
+        <Shield size={14} />
+        <span>{request.detail}</span>
+      </div>
+      {window.metisPermissions ? (
+        <div className="permission-card-actions">
+          <button type="button" onClick={() => respond("allow")}>
+            Allow once
+          </button>
+          <button type="button" onClick={() => respond("always")}>
+            Always allow
+          </button>
+          <button type="button" className="deny" onClick={() => respond("deny")}>
+            Deny
+          </button>
+        </div>
+      ) : (
+        <small className="permission-card-disabled">Permission prompts need the desktop app — this is a preview.</small>
+      )}
+    </div>
+  );
+}
+
+/** AskUserQuestion card (docs/FABLE_PLANS.md §24) — option chips plus a small
+ *  free-text input; collapses to "You answered: X" once answered. */
+function UserQuestionCard({ question }: { question: NonNullable<ConversationTurn["pendingQuestion"]> }): JSX.Element {
+  const [answer, setAnswer] = useState<string | null>(null);
+  const [freeText, setFreeText] = useState("");
+
+  function respond(value: string): void {
+    const text = value.trim();
+    if (!text) return;
+    setAnswer(text);
+    window.metisSession?.answerQuestion(question.id, text);
+  }
+
+  if (answer) {
+    return (
+      <div className="permission-card resolved">
+        <HelpCircle size={13} />
+        <span>You answered: {answer}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="permission-card question-card" role="dialog" aria-label="Question">
+      <div className="permission-card-detail">
+        <HelpCircle size={14} />
+        <span>{question.text}</span>
+      </div>
+      {question.options.length > 0 ? (
+        <div className="question-card-options">
+          {question.options.map((option) => (
+            <button key={option} type="button" onClick={() => respond(option)}>
+              {option}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {window.metisSession ? (
+        <form
+          className="question-card-freetext"
+          onSubmit={(event) => {
+            event.preventDefault();
+            respond(freeText);
+          }}
+        >
+          <input value={freeText} onChange={(event) => setFreeText(event.target.value)} placeholder="Or type your own answer" />
+          <button type="submit">Send</button>
+        </form>
+      ) : (
+        <small className="permission-card-disabled">Answering needs the desktop app — this is a preview.</small>
+      )}
     </div>
   );
 }

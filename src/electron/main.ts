@@ -17,8 +17,11 @@ import type {
   ConversationTurnRecord,
   LabExperimentResult,
   LabExperimentStep,
+  InRunPermissionRequest,
   PermissionGrant,
+  PermissionMode,
   PermissionRequest,
+  PermissionVerdict,
   PolicyDecisionInput,
   OrchestrationStage,
   PolicyDecisionResult,
@@ -53,7 +56,8 @@ import type {
   SessionRunInput,
   SecretStatus,
   Routine,
-  StyleCard
+  StyleCard,
+  UserQuestionRequest
 } from "../shared/runtime-contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -977,6 +981,30 @@ function stripThinkBlocks(value: string): string {
   return value.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
 
+/** AskUserQuestion tag scan (docs/FABLE_PLANS.md section 24): looks for
+ *  `<ask_user>{"question":"...","options":[...]}</ask_user>` anywhere in a
+ *  stage's raw output. Fails soft — malformed JSON just means no question was
+ *  detected, so the stage output passes through unchanged. */
+function extractAskUserTag(value: string): { question: string; options: string[] } | null {
+  const match = /<ask_user>([\s\S]*?)<\/ask_user>/i.exec(value);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[1].trim()) as { question?: unknown; options?: unknown };
+    const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
+    if (!question) return null;
+    const options = Array.isArray(parsed.options) ? parsed.options.filter((item): item is string => typeof item === "string") : [];
+    return { question, options };
+  } catch {
+    return null;
+  }
+}
+
+/** Removes any <ask_user>...</ask_user> tag from output — used defensively so
+ *  a stray tag never leaks into extracted files or the chat transcript. */
+function stripAskUserTags(value: string): string {
+  return value.replace(/<ask_user>[\s\S]*?<\/ask_user>/gi, "").trim();
+}
+
 /** Best-effort token estimate (chars/4) for providers that don't report usage. */
 function estimateUsage(promptChars: number, outputChars: number): { inputTokens: number; outputTokens: number; estimated: boolean } {
   return {
@@ -988,6 +1016,78 @@ function estimateUsage(promptChars: number, outputChars: number): { inputTokens:
 
 async function listPermissions(): Promise<PermissionGrant[]> {
   return readStoreValue<PermissionGrant[]>("permissions", []);
+}
+
+// --- In-run permission prompts + AskUserQuestion pause/resume plumbing
+// (docs/FABLE_PLANS.md section 24). Both mechanisms share the same shape:
+// main emits a stream event, registers a resolver keyed by a generated id in
+// a module-level Map, and awaits it (with a timeout that resolves to a safe
+// default) while the renderer's IPC reply looks the id up and calls the
+// resolver. Fails soft everywhere — a destroyed window / dropped stream just
+// means the timeout path fires.
+const PERMISSION_PROMPT_TIMEOUT_MS = 5 * 60 * 1000;
+const pendingPermissionPrompts = new Map<string, (verdict: PermissionVerdict) => void>();
+
+async function promptForPermission(
+  stream: SessionStreamController | undefined,
+  scope: InRunPermissionRequest["scope"],
+  target: string,
+  detail: string
+): Promise<PermissionVerdict> {
+  if (!stream) return "deny";
+  const id = randomUUID();
+  const request: InRunPermissionRequest = { id, scope, target, detail };
+  emitStream(stream, { kind: "permission_request", request });
+  return new Promise<PermissionVerdict>((resolveVerdict) => {
+    const timer = setTimeout(() => {
+      pendingPermissionPrompts.delete(id);
+      resolveVerdict("deny");
+    }, PERMISSION_PROMPT_TIMEOUT_MS);
+    pendingPermissionPrompts.set(id, (verdict) => {
+      clearTimeout(timer);
+      pendingPermissionPrompts.delete(id);
+      resolveVerdict(verdict);
+    });
+  });
+}
+
+function respondToPermissionPrompt(id: string, verdict: PermissionVerdict): void {
+  const resolver = pendingPermissionPrompts.get(id);
+  if (resolver) resolver(verdict);
+}
+
+const PENDING_QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
+const pendingUserQuestions = new Map<string, (answer: string) => void>();
+
+/** Pauses awaiting a renderer answer to an AskUserQuestion tag; on timeout,
+ *  picks the first option (or a generic default) and reports that it did so
+ *  via the returned `timedOut` flag so the caller can add a timeline line. */
+async function promptUserQuestion(
+  stream: SessionStreamController | undefined,
+  text: string,
+  options: string[]
+): Promise<{ answer: string; timedOut: boolean }> {
+  const fallbackAnswer = options[0] ?? "(no preference given — use your best judgement)";
+  if (!stream) return { answer: fallbackAnswer, timedOut: false };
+  const id = randomUUID();
+  const question: UserQuestionRequest = { id, text, options };
+  emitStream(stream, { kind: "user_question", question });
+  return new Promise((resolveAnswer) => {
+    const timer = setTimeout(() => {
+      pendingUserQuestions.delete(id);
+      resolveAnswer({ answer: fallbackAnswer, timedOut: true });
+    }, PENDING_QUESTION_TIMEOUT_MS);
+    pendingUserQuestions.set(id, (answer) => {
+      clearTimeout(timer);
+      pendingUserQuestions.delete(id);
+      resolveAnswer({ answer, timedOut: false });
+    });
+  });
+}
+
+function respondToUserQuestion(id: string, answer: string): void {
+  const resolver = pendingUserQuestions.get(id);
+  if (resolver) resolver(answer);
 }
 
 async function requestPermission(request: PermissionRequest): Promise<PermissionGrant> {
@@ -1147,6 +1247,62 @@ async function resolveWritableProjectWorkspace(requestedPath?: string): Promise<
       sameResolvedPath(grant.projectPath ?? "", workspace.path)
   );
   return allowed ? workspace : null;
+}
+
+/** Resolves the effective five-mode permission for a session run, preferring
+ *  `permissionMode` and falling back to the old three-level `permissionLevel`
+ *  for back-compat (docs/FABLE_PLANS.md section 24): restricted -> ask,
+ *  standard -> auto, trusted -> auto. Defaults to "auto" (previous behavior). */
+function resolvePermissionMode(input: Pick<SessionRunInput, "permissionMode" | "permissionLevel">): PermissionMode {
+  if (input.permissionMode) return input.permissionMode;
+  if (input.permissionLevel === "restricted") return "ask";
+  return "auto";
+}
+
+/** Whether an existing grant covers this scope+target (+projectPath when
+ *  given) — used by "auto" mode to decide whether a prompt is even needed. */
+async function hasExistingGrant(scope: PermissionRequest["scope"], target: string, projectPath?: string): Promise<boolean> {
+  const grants = await listPermissions();
+  return grants.some((grant) => grant.scope === scope && grant.target === target && (!projectPath || sameResolvedPath(grant.projectPath ?? "", projectPath)));
+}
+
+/** Central gate for a permission-scoped action inside a run, per the five
+ *  permission modes (docs/FABLE_PLANS.md section 24):
+ *  - "bypass": always proceed, never prompts.
+ *  - "auto": proceeds unless there's no existing grant for scope+target, in
+ *    which case it prompts (so first use of a new scope still asks once).
+ *  - "edits": filesystem.write proceeds without asking; everything else asks.
+ *  - "ask": always asks.
+ *  - "plan": never proceeds (callers should not reach here in plan mode; the
+ *    build pipeline short-circuits earlier — this is a defensive default).
+ *  Returns `{ proceed, verdict }` — on "always", a PermissionGrant is written
+ *  before returning so future asks in this scope+target are skipped. */
+async function gatePermission(args: {
+  stream: SessionStreamController | undefined;
+  mode: PermissionMode;
+  scope: PermissionRequest["scope"];
+  target: string;
+  projectPath?: string;
+  detail: string;
+}): Promise<{ proceed: boolean; verdict?: PermissionVerdict }> {
+  const { stream, mode, scope, target, projectPath, detail } = args;
+  if (mode === "bypass") return { proceed: true };
+  if (mode === "plan") return { proceed: false };
+
+  const isEditScope = scope === "filesystem.write";
+  let shouldPrompt: boolean;
+  if (mode === "ask") shouldPrompt = true;
+  else if (mode === "edits") shouldPrompt = !isEditScope;
+  else /* auto */ shouldPrompt = !(await hasExistingGrant(scope, target, projectPath));
+
+  if (!shouldPrompt) return { proceed: true };
+
+  const verdict = await promptForPermission(stream, scope, target, detail);
+  if (verdict === "deny") return { proceed: false, verdict };
+  if (verdict === "always") {
+    await requestPermission({ scope, target, projectPath, note: detail });
+  }
+  return { proceed: true, verdict };
 }
 
 function isPathInside(child: string, parent: string): boolean {
@@ -2718,7 +2874,12 @@ async function runCommandOperation(input: { label: string; command: string; args
   }
 }
 
-async function maybeRunRequestedProjectCommand(prompt: string, workspace: ProjectWorkspace | null, permissionLevel: SessionRunInput["permissionLevel"]): Promise<AgentOperation[]> {
+async function maybeRunRequestedProjectCommand(
+  prompt: string,
+  workspace: ProjectWorkspace | null,
+  mode: PermissionMode,
+  stream?: SessionStreamController
+): Promise<AgentOperation[]> {
   const request = projectCommandRequest(prompt);
   if (!request) return [];
   if (!workspace) {
@@ -2733,17 +2894,43 @@ async function maybeRunRequestedProjectCommand(prompt: string, workspace: Projec
       }
     ];
   }
-  if (permissionLevel === "restricted") {
+  if (mode === "plan") {
     return [
       {
         id: randomUUID(),
         kind: "command",
-        label: `Blocked ${request.label.toLowerCase()}`,
+        label: `Skipped ${request.label.toLowerCase()}`,
         target: workspace.path,
         status: "warning",
         cwd: workspace.path,
         permission: "process.spawn",
-        detail: "This session is restricted, so project commands were not run."
+        detail: "Plan mode — nothing was run."
+      }
+    ];
+  }
+  // Command execution gates on process.spawn: ask + edits always prompt, auto
+  // prompts only when there's no existing grant, bypass never prompts
+  // (docs/FABLE_PLANS.md section 24).
+  const gate = await gatePermission({
+    stream,
+    mode,
+    scope: "process.spawn",
+    target: workspace.path,
+    projectPath: workspace.path,
+    detail: `Run "${request.label.toLowerCase()}" in ${workspace.name}?`
+  });
+  if (!gate.proceed) {
+    emitTimeline(stream, timelineText(`Permission denied — skipped ${request.label.toLowerCase()}.`));
+    return [
+      {
+        id: randomUUID(),
+        kind: "command",
+        label: `Denied ${request.label.toLowerCase()}`,
+        target: workspace.path,
+        status: "warning",
+        cwd: workspace.path,
+        permission: "process.spawn",
+        detail: "Permission was denied, so this command did not run."
       }
     ];
   }
@@ -3598,7 +3785,14 @@ function takePendingDirectives(projectPath: string | undefined, stageId: string)
   return pending.map((directive) => ({ ...directive, status: "applied" as const, appliedAtStage: stageId }));
 }
 
-async function runOrchestratedStages(prompt: string, stream?: SessionStreamController, override?: SessionModelOverride, projectPath?: string, metisFile?: { content: string; chars: number } | null): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed }> {
+async function runOrchestratedStages(
+  prompt: string,
+  stream?: SessionStreamController,
+  override?: SessionModelOverride,
+  projectPath?: string,
+  metisFile?: { content: string; chars: number } | null,
+  permissionMode: PermissionMode = "auto"
+): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed }> {
   const metisBlock = metisFilePromptBlock(metisFile ?? null);
   const singleFile = wantsSingleFileFrontend(prompt);
   const stages = defaultAgenticStages(prompt, override);
@@ -3663,6 +3857,10 @@ async function runOrchestratedStages(prompt: string, stream?: SessionStreamContr
     if (stage.id === "plan" || stage.id === "frontend") {
       stagePrompt += `\n\n${designSeedPromptLine(seed, { explicitStyle, replacesPrevious: seedReplacesPrevious })}`;
     }
+    // AskUserQuestion (docs/FABLE_PLANS.md section 24): models MAY emit this
+    // tag ONCE per stage for a genuinely blocking decision — never for "what
+    // would you like to build", since the model remains the creative lead.
+    stagePrompt += `\n\nIf, and only if, a genuinely blocking decision needs the user's input (not a creative choice you can make yourself), you may emit ONE tag anywhere in your output: <ask_user>{"question":"...","options":["a","b"]}</ask_user>. Otherwise never emit this tag — decide tastefully yourself and proceed.`;
     if (stage.id === "plan") {
       emitTimeline(stream, timelineText("Planning the build and checking the constraints."));
     } else if (stage.id === "frontend") {
@@ -3670,7 +3868,18 @@ async function runOrchestratedStages(prompt: string, stream?: SessionStreamContr
     } else {
       emitTimeline(stream, timelineText("Checking whether the build needs functionality or support files."));
     }
-    const attempt = await callStageWithFallback(stage.chain, stagePrompt);
+    let attempt = await callStageWithFallback(stage.chain, stagePrompt);
+    // Scan for an AskUserQuestion tag; if present, pause for an answer, strip
+    // the tag, append the answer to the stage prompt, and re-run once.
+    const askedQuestion = extractAskUserTag(attempt.output);
+    if (askedQuestion) {
+      const { answer, timedOut } = await promptUserQuestion(stream, askedQuestion.question, askedQuestion.options);
+      if (timedOut) {
+        emitTimeline(stream, timelineText(`No answer in time — I picked "${answer}" and kept going.`));
+      }
+      const continuationPrompt = `${stagePrompt}\n\nYou previously asked: "${askedQuestion.question}"\nUser answered: ${answer}\n\nContinue with the full stage output now (do not ask again).`;
+      attempt = await callStageWithFallback(stage.chain, continuationPrompt);
+    }
     await appendAudit(attempt.failed ? "error" : "info", "session.stage", `Stage ${stage.label} via ${stageModelLabel(attempt.ref)}.`, {
       stage: stage.id,
       provider: attempt.ref.provider,
@@ -3682,7 +3891,7 @@ async function runOrchestratedStages(prompt: string, stream?: SessionStreamContr
     // separately so the renderer can surface it later.
     const rawOutput = attempt.output;
     const stageThoughts = splitThinkTaggedOutput(rawOutput).thoughts;
-    let cleanOutput = stripThinkBlocks(rawOutput);
+    let cleanOutput = stripAskUserTags(stripThinkBlocks(rawOutput));
     // "Is this done?" critic loop (docs/FABLE_PLANS.md §22): only worth
     // running when the stage actually produced something to judge.
     let criticPasses = 0;
@@ -3724,6 +3933,12 @@ async function runOrchestratedStages(prompt: string, stream?: SessionStreamContr
     emitTimeline(stream, { id: randomUUID(), kind: "stage", stageId: completedStage.id });
     if (stage.id === "plan") plan = cleanOutput;
     if (stage.id === "frontend") frontend = cleanOutput;
+    // Plan mode (docs/FABLE_PLANS.md section 24): read-only — run only the
+    // plan stage, no writes/commands, then stop before front end/functional.
+    if (stage.id === "plan" && permissionMode === "plan") {
+      emitTimeline(stream, timelineText("Plan mode — nothing was written. Switch to Auto and rerun to build it."));
+      break;
+    }
   }
   return { stages: results, designSeed: seed };
 }
@@ -3920,6 +4135,8 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   if (!prompt) throw new Error("Session run requires a prompt.");
   clearSessionCancel(input.projectPath);
 
+  const permissionMode = resolvePermissionMode(input);
+
   const createdAt = new Date().toISOString();
   const conversationId = input.conversationId ?? randomUUID();
   const promptHash = sha256(prompt);
@@ -3968,8 +4185,15 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       metisOperations.push(metisOp);
       emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Read METIS.md", operationIds: [metisOp.id] });
     }
-    const { stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile);
-    let files = extractProjectFiles(stages);
+    const { stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode);
+    let files: GeneratedFile[] = [];
+    let projectResult: ProjectToolResult | undefined;
+    let repairCount = 0;
+    if (permissionMode === "plan") {
+      // Plan mode: no extraction, no writes, no commands, no repair/recovery —
+      // the stage loop already stopped after "plan" (docs/FABLE_PLANS.md §24).
+    } else {
+    files = extractProjectFiles(stages);
     // Never give up on 0 extracted files without a fight — ask the build model
     // again, explicitly, before conceding nothing was written.
     if (files.length === 0) {
@@ -3977,13 +4201,24 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       files = await runExtractionRecovery({ prompt, stages, override: input.modelOverride, stream, metisFile });
     }
     if (files.length > 0) {
-    emitTimeline(stream, timelineText(`I’ve got the generated files. Writing them into ${writable?.name ?? "the app workspace"} now.`));
+      const gate = await gatePermission({
+        stream,
+        mode: permissionMode,
+        scope: "filesystem.write",
+        target: writable?.path ?? "app-managed workspace",
+        projectPath: writable?.path,
+        detail: `Write ${files.length} file${files.length === 1 ? "" : "s"} into ${writable?.name ?? "the app workspace"}?`
+      });
+      if (gate.proceed) {
+        emitTimeline(stream, timelineText(`I’ve got the generated files. Writing them into ${writable?.name ?? "the app workspace"} now.`));
+        projectResult = await writeProjectFiles(files, writable, { singleFile });
+      } else {
+        emitTimeline(stream, timelineText(`Permission denied — skipped writing ${files.length} file${files.length === 1 ? "" : "s"}.`));
+      }
     } else {
       emitTimeline(stream, timelineText("I could not extract a complete project file from the model output, so I am leaving the folder unchanged."));
     }
-    let projectResult = files.length > 0 ? await writeProjectFiles(files, writable, { singleFile }) : undefined;
     // Self-healing: if verification failed, feed the errors back and retry.
-    let repairCount = 0;
     if (projectResult && !projectResult.verified) {
       throwIfCancelled(input.projectPath);
       const repaired = await runRepairPasses({
@@ -3999,6 +4234,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       });
       projectResult = repaired.projectResult;
       repairCount = repaired.repairCount;
+    }
     }
     const fileCount = projectResult ? projectResult.artifacts.filter((artifact) => artifact.kind === "file" || artifact.kind === "file_create").length : 0;
     const targetName = projectResult?.writeMode === "selected-project" ? writable?.name : "the app workspace";
@@ -4076,6 +4312,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       run.assistantText = "I ran this through the build pipeline, but no complete project files were extracted. I left the folder unchanged.";
       run.warnings = [...(run.warnings ?? []), "No complete files were extracted from the build stages; nothing was written."];
     }
+    if (permissionMode === "plan") {
+      const planStage = stages.find((stage) => stage.id === "plan");
+      run.assistantText = `${planStage?.output ?? "I put together a plan."}\n\nPlan mode — nothing was written. Switch to Auto and rerun to build it.`;
+      run.pipelineName = "Plan Mode";
+    }
     await appendRunToConversation(run, prompt);
     await writeSessionRun(run);
     emitStream(stream, { kind: "complete", run });
@@ -4118,7 +4359,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     emitStream(stream, { kind: "operation", operation: metisOp });
     emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Read METIS.md", operationIds: [metisOp.id] });
   }
-  const projectCommandOperations = await maybeRunRequestedProjectCommand(prompt, writableWorkspace, input.permissionLevel ?? "standard");
+  const projectCommandOperations = await maybeRunRequestedProjectCommand(prompt, writableWorkspace, permissionMode, stream);
   const showRouteCeremony = Boolean(override) || shouldStreamRouteCeremony(prompt, effectiveDecision, includeProjectTools, projectCommandOperations);
   if (showRouteCeremony) {
     emitTimeline(
@@ -4152,7 +4393,34 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   let projectResult: ProjectToolResult | undefined;
   let noProjectFilesWritten = false;
   const projectToolsIndex = steps.findIndex((step) => step.id === "project-tools");
-  if (projectToolsIndex >= 0) {
+  if (projectToolsIndex >= 0 && permissionMode === "plan") {
+    // Plan mode: chat-path project tools are disabled entirely — no writes,
+    // no commands (docs/FABLE_PLANS.md section 24).
+    steps[projectToolsIndex] = {
+      ...steps[projectToolsIndex],
+      status: "skipped",
+      detail: "Plan mode — project tools are disabled, so nothing was written.",
+      completedAt: new Date().toISOString()
+    };
+  } else if (projectToolsIndex >= 0) {
+    const gate = await gatePermission({
+      stream,
+      mode: permissionMode,
+      scope: "filesystem.write",
+      target: writableWorkspace?.path ?? "app-managed workspace",
+      projectPath: writableWorkspace?.path,
+      detail: `Write generated project files into ${writableWorkspace?.name ?? "the app workspace"}?`
+    });
+    if (!gate.proceed) {
+      emitTimeline(stream, timelineText("Permission denied — skipped writing project files."));
+      noProjectFilesWritten = true;
+      steps[projectToolsIndex] = {
+        ...steps[projectToolsIndex],
+        status: "skipped",
+        detail: "Permission was denied, so no project files were written.",
+        completedAt: new Date().toISOString()
+      };
+    } else {
     projectResult = await createFrontendProject(prompt, providerResult, writableWorkspace ?? undefined);
     if (projectResult) {
       const projectAudit = await appendAudit("info", "project.write", `Generated frontend project at ${projectResult.projectRoot}.`, {
@@ -4180,6 +4448,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         detail: "No complete files were produced, so nothing was written.",
         completedAt: new Date().toISOString()
       };
+    }
     }
   }
 
@@ -4242,6 +4511,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     ],
     ...(chatDesignSeed ? { designSeed: { id: chatDesignSeed.id, name: chatDesignSeed.name } } : {})
   };
+  if (permissionMode === "plan" && projectToolsIndex >= 0) {
+    run.assistantText = `${run.assistantText}\n\nPlan mode — nothing was written. Switch to Auto and rerun to build it.`;
+  }
 
   await appendRunToConversation(run, prompt);
   await writeSessionRun(run);
@@ -5145,6 +5417,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-permissions:list", () => listPermissions());
   ipcMain.handle("metis-permissions:request", (_event, request: PermissionRequest) => requestPermission(request));
   ipcMain.handle("metis-permissions:revoke", (_event, id: string) => revokePermission(id));
+  ipcMain.on("metis-permissions:respond", (_event, id: string, verdict: PermissionVerdict) => respondToPermissionPrompt(id, verdict));
+  ipcMain.on("metis-session:answer-question", (_event, id: string, answer: string) => respondToUserQuestion(id, answer));
   ipcMain.handle("metis-audit:list", (_event, limit?: number) => listAudit(limit));
   ipcMain.handle("metis-providers:list", () => listProviders());
   ipcMain.handle("metis-providers:health-check", (_event, provider: ProviderKey) => healthCheckProvider(provider));

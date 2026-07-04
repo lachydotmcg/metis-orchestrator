@@ -440,6 +440,20 @@ is "is this DONE?" instead of "is this factual" (though factuality checks fit th
   (the seeded `data:image/svg+xml` entries / their known ids) from stored boards, and remove
   now-empty sample boards.
 
+## 23c. Gallery round 3 (Lachy, 2026-07-04 evening — do immediately after §24 lands)
+
+- **Strip the boxes under images:** each masonry image card still renders title + caption
+  paragraph + tag chips beneath the thumbnail (pre-editor leftovers — these are the "boxes"
+  Lachy asked about). Reduce to: thumbnail + palette strip only (title optional, single muted
+  line). All detail lives in the left selected-image editor now.
+- **Board cover = latest image:** the board's `coverImage` should always be the MOST RECENTLY
+  added image's src (update on import and on image delete → next-latest; empty board → default/
+  no cover). Applies in the boards grid view.
+- **Reanalyse button:** in the left selected-image editor, add a "Reanalyse" button (Wand2 icon,
+  next to Delete/Done) that force-regenerates THAT image's style card — needs a per-image IPC
+  `metis-gallery:analyze-image (boardId, imageId, force)` (analyzeBoard currently skips images
+  that already have cards); busy spinner while running; refreshes the card after.
+
 ## 24. Permission modes + in-run prompts + AskUserQuestion (Lachy, 2026-07-04 — priority)
 
 Lachy wants the permission system revamped around FIVE MODES (Claude Code-style), selectable from

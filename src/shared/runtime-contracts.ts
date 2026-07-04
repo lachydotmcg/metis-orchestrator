@@ -53,6 +53,35 @@ export interface PermissionRequest {
   note?: string;
 }
 
+/** Five-mode permission system (docs/FABLE_PLANS.md section 24), replacing the
+ *  old restricted/standard/trusted three-level scheme:
+ *  - "ask": every file write, command, and new network scope pauses for a verdict.
+ *  - "edits": file writes auto-approved; commands + new scopes still ask.
+ *  - "plan": read-only — the pipeline runs planning/analysis only, no writes/commands.
+ *  - "auto": current trusted behavior — proceeds, asks only when there's no
+ *    existing grant for that scope+path (default).
+ *  - "bypass": no prompts at all, ever (scary-red UI treatment). */
+export type PermissionMode = "ask" | "edits" | "plan" | "auto" | "bypass";
+
+/** In-run permission prompt payload (docs/FABLE_PLANS.md section 24) — pauses
+ *  the run mid-stream awaiting a verdict via `metis-permissions:respond`. */
+export interface InRunPermissionRequest {
+  id: string;
+  scope: PermissionScope;
+  target: string;
+  detail: string;
+}
+
+export type PermissionVerdict = "allow" | "always" | "deny";
+
+/** AskUserQuestion payload (docs/FABLE_PLANS.md section 24) — a stage model
+ *  emitted `<ask_user>...</ask_user>` for a genuinely blocking decision. */
+export interface UserQuestionRequest {
+  id: string;
+  text: string;
+  options: string[];
+}
+
 export interface ProjectWorkspace {
   path: string;
   name: string;
@@ -330,7 +359,10 @@ export interface SessionRunInput {
   conversationId?: string;
   preset?: RouterPreset;
   projectPath?: string;
+  /** @deprecated use permissionMode; kept for back-compat and mapped in main.ts
+   *  (restricted -> ask, standard -> auto, trusted -> auto). */
   permissionLevel?: "restricted" | "standard" | "trusted";
+  permissionMode?: PermissionMode;
   rawPromptStorage?: "local-only" | "hash-only";
   /** When set, bypass Metis Policy routing and call this model directly. */
   modelOverride?: SessionModelOverride;
@@ -458,6 +490,14 @@ export type SessionStreamEvent =
   | {
       kind: "error";
       message: string;
+    }
+  | {
+      kind: "permission_request";
+      request: InRunPermissionRequest;
+    }
+  | {
+      kind: "user_question";
+      question: UserQuestionRequest;
     };
 
 export interface SessionRun {

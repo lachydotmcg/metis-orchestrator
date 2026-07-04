@@ -6501,6 +6501,163 @@ a:focus-visible,
   color: var(--accent);
 }
 
+/* Bypass Permissions mode — deliberately scary-red treatment
+   (docs/FABLE_PLANS.md section 24) so it reads as distinct from every other
+   mode at a glance, both in the popover list and the composer's tool button. */
+.perm-level.bypass {
+  border-color: #5a2a2a;
+}
+
+.perm-level.bypass strong {
+  color: #ff9a9a;
+}
+
+.perm-level.bypass.active {
+  border-color: #e05a5a;
+  background: #2a1414;
+}
+
+.perm-level.bypass.active .perm-radio {
+  border-color: #e05a5a;
+  background: radial-gradient(circle, #e05a5a 0 3px, transparent 4px);
+}
+
+.tool-btn.bypass {
+  color: #ff9a9a;
+  border-color: #5a2a2a;
+}
+
+.tool-btn.bypass:hover {
+  border-color: #e05a5a;
+}
+
+/* In-run permission approval + AskUserQuestion cards (docs/FABLE_PLANS.md
+   section 24) — slim, accent-left-border to match the chat grammar used
+   elsewhere (route-line, stage blocks). Bypass has no card; these only ever
+   appear for ask/edits/auto's "no existing grant" path. */
+.permission-card {
+  display: grid;
+  gap: 8px;
+  width: min(560px, 100%);
+  padding: 10px 12px;
+  color: var(--soft);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+  font-size: 12.5px;
+}
+
+.permission-card.resolved {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.permission-card.resolved svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.permission-card-detail {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.permission-card-detail svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.permission-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.permission-card-actions button {
+  padding: 6px 10px;
+  color: var(--soft);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.permission-card-actions button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.permission-card-actions button.deny {
+  color: #ff9a9a;
+}
+
+.permission-card-actions button.deny:hover {
+  border-color: #e05a5a;
+}
+
+.permission-card-disabled {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.question-card-options {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.question-card-options button {
+  padding: 6px 10px;
+  color: var(--soft);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.question-card-options button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.question-card-freetext {
+  display: flex;
+  gap: 6px;
+}
+
+.question-card-freetext input {
+  flex: 1;
+  padding: 6px 9px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.question-card-freetext button {
+  padding: 6px 10px;
+  color: var(--soft);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.question-card-freetext button:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
 .product-hero,
 .marketplace-hero {
   display: flex;

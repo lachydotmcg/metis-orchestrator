@@ -8,6 +8,7 @@ import type {
   ModelCatalogState,
   PermissionGrant,
   PermissionRequest,
+  PermissionVerdict,
   PolicyDecisionInput,
   PolicyDecisionResult,
   PolicyStatus,
@@ -56,6 +57,7 @@ declare global {
       runStream: (input: SessionRunInput, onEvent: (event: SessionStreamEvent) => void) => Promise<SessionRun>;
       list: () => Promise<SessionRun[]>;
       cancel: (projectPath?: string) => void;
+      answerQuestion: (id: string, answer: string) => void;
     };
     metisBus?: {
       post: (input: { projectPath?: string; conversationId?: string; text: string }) => Promise<SessionDirective>;
@@ -94,6 +96,7 @@ declare global {
       list: () => Promise<PermissionGrant[]>;
       request: (request: PermissionRequest) => Promise<PermissionGrant>;
       revoke: (id: string) => Promise<void>;
+      respond: (id: string, verdict: PermissionVerdict) => void;
     };
     metisAudit?: {
       list: (limit?: number) => Promise<AuditEvent[]>;

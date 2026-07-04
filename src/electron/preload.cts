@@ -3,6 +3,7 @@ import type {
   ConversationRecord,
   MetisFileReadResult,
   PermissionRequest,
+  PermissionVerdict,
   PolicyDecisionInput,
   ProviderInvokeInput,
   ProviderKey,
@@ -47,7 +48,8 @@ contextBridge.exposeInMainWorld("metisSession", {
     });
   },
   list: () => ipcRenderer.invoke("metis-session:list"),
-  cancel: (projectPath?: string) => ipcRenderer.send("metis-session:cancel", projectPath)
+  cancel: (projectPath?: string) => ipcRenderer.send("metis-session:cancel", projectPath),
+  answerQuestion: (id: string, answer: string) => ipcRenderer.send("metis-session:answer-question", id, answer)
 });
 
 contextBridge.exposeInMainWorld("metisBus", {
@@ -92,7 +94,8 @@ contextBridge.exposeInMainWorld("metisSecrets", {
 contextBridge.exposeInMainWorld("metisPermissions", {
   list: () => ipcRenderer.invoke("metis-permissions:list"),
   request: (request: PermissionRequest) => ipcRenderer.invoke("metis-permissions:request", request),
-  revoke: (id: string) => ipcRenderer.invoke("metis-permissions:revoke", id)
+  revoke: (id: string) => ipcRenderer.invoke("metis-permissions:revoke", id),
+  respond: (id: string, verdict: PermissionVerdict) => ipcRenderer.send("metis-permissions:respond", id, verdict)
 });
 
 contextBridge.exposeInMainWorld("metisAudit", {
