@@ -3320,15 +3320,19 @@ function estimateTokens(value: string): number {
 }
 
 type StageModelRef = { provider: ProviderKey; model: string };
-// `accessVia` (docs/FABLE_PLANS.md section 25) is the pinned route provider
-// for this stage's PRIMARY model only (a graph node's "Access via" override);
-// callStageWithFallback/expandChainByRoutes apply it exclusively to chain[0].
+// `gatewayPreference` (docs/FABLE_PLANS.md section 25) is the ordered route
+// preference for this stage's PRIMARY model only (a graph node's "Gateway" +
+// "Gateway fallbacks" controls — formerly a single "Access via" pin):
+// [gateway, ...gatewayFallbacks]. callStageWithFallback/expandChainByRoutes
+// apply it exclusively to chain[0], trying each listed route in order
+// (skipping unconfigured ones) before falling through to the model's
+// remaining access routes by the usual healthy-first ordering.
 // `templateRole` (section 25) decouples the STAGE PROMPT TEMPLATE from the
 // stage id: default stages use their own id as the role, but graph-driven
 // stages keep the graph node's real id (for audit/result tracking) and pick
 // their prompt template by POSITION instead — first stage plans, second
 // builds the front end, the rest are functional/support passes.
-type StageConfig = { id: string; label: string; chain: StageModelRef[]; accessVia?: ProviderKey; templateRole: "plan" | "frontend" | "functional" };
+type StageConfig = { id: string; label: string; chain: StageModelRef[]; gatewayPreference?: ProviderKey[]; templateRole: "plan" | "frontend" | "functional" };
 
 function localStageRef(): StageModelRef {
   return { provider: "ollama", model: providerInfo.ollama.defaultModel ?? "qwen3:8b" };
@@ -3456,12 +3460,19 @@ function graphAgenticStages(config: GraphPipelineConfig, prompt: string, overrid
     const fallbackRefs: StageModelRef[] = stage.fallback
       .filter((ref) => isKnownProvider(ref.provider) && ref.model.trim().length > 0)
       .map((ref) => ({ provider: ref.provider, model: resolveGraphStageModel(ref.provider, ref.model) }));
-    const accessVia = stage.accessVia && isKnownProvider(stage.accessVia) ? stage.accessVia : undefined;
+    // Gateway + gateway fallbacks (docs/FABLE_PLANS.md section 25): the
+    // renderer sends `gateway`/`gatewayFallbacks` for graphs authored with the
+    // new NodeInspector controls; older persisted graphs (or older renderer
+    // builds) may only send the single `accessVia` pin, which becomes the
+    // sole entry of the preference list.
+    const gateway = stage.gateway && isKnownProvider(stage.gateway) ? stage.gateway : stage.accessVia && isKnownProvider(stage.accessVia) ? stage.accessVia : undefined;
+    const gatewayFallbacks = (stage.gatewayFallbacks ?? []).filter((provider): provider is ProviderKey => isKnownProvider(provider));
+    const gatewayPreference = gateway ? [gateway, ...gatewayFallbacks.filter((provider) => provider !== gateway)] : gatewayFallbacks.length > 0 ? gatewayFallbacks : undefined;
     return {
       id: stage.id,
       label: stage.label || `Stage ${index + 1}`,
       chain: [primary, ...fallbackRefs, localStageRef()],
-      accessVia,
+      gatewayPreference,
       templateRole: templateRoleFor(index)
     };
   });
@@ -3511,6 +3522,24 @@ function hasImperativeBuildIntent(prompt: string): boolean {
 // "frontend_design" are the build-ish ones; summarisation/long_context/
 // private_sensitive/general_chat never justify running the build pipeline.
 const BUILD_TASK_TYPES: ReadonlySet<RouteDecision["task_type"]> = new Set(["coding", "frontend_design"]);
+
+// Explicit manual override: typing "/orchestration" or "/orch" as the first
+// token of the prompt forces the build pipeline unconditionally — it bypasses
+// the router's task_type check, the opt-out/question guards, and the preview
+// pre-gate. An explicit command always wins over inference.
+const ORCHESTRATION_COMMAND_RE = /^\s*\/(orchestration|orch)\b\s*(.*)$/is;
+
+interface OrchestrationCommandMatch {
+  /** The remainder of the prompt after the command token, trimmed. May be
+   *  empty when the user typed just "/orchestration" with nothing after it. */
+  remainder: string;
+}
+
+function parseOrchestrationCommand(prompt: string): OrchestrationCommandMatch | null {
+  const match = ORCHESTRATION_COMMAND_RE.exec(prompt);
+  if (!match) return null;
+  return { remainder: match[2].trim() };
+}
 
 // "Set up a preview / serve the site" is an operational request on the
 // EXISTING project, not a build. Requires an explicit serve-ish verb near a
@@ -3592,27 +3621,29 @@ async function runPreviewRequest(args: {
   return run;
 }
 
-// Gate for the full multi-stage build pipeline. Prefers the router's own
-// judgement (decision.task_type) over regex-sniffing the prompt, so a status
-// question like "Without generating anything, what's the status of my
-// website file?" never fires the pipeline just because it contains "website".
+// Gate for the full multi-stage build pipeline. Router judgement
+// (decision.task_type) is now the SOLE signal for the non-forced path — no
+// more regex-sniffing the prompt for imperative build verbs. That keyword
+// heuristic was too eager/too narrow in equal measure; the router's task_type
+// classification (coding/frontend_design) is trusted directly, gated only by
+// the opt-out/question guards below. A status question like "Without
+// generating anything, what's the status of my website file?" is still kept
+// out by isBuildOptOut/isBuildQuestionGuard, not by keyword-sniffing.
 function shouldRunBuildPipeline(prompt: string, decision: RouteDecision, decisionSource: PolicyDecisionResult["source"]): boolean {
   if (isBuildOptOut(prompt)) return false;
   if (isBuildQuestionGuard(prompt)) return false;
 
   if (decisionSource === "sample") {
-    // Offline/sample mode: the router has no real signal, so fall back to the
-    // legacy regex behavior (guards above already applied).
+    // Offline/sample mode: decision.task_type is a canned placeholder, not a
+    // real router judgement (see decidePolicy's offline fallback), so it
+    // carries no signal here. Keep the legacy imperative-build regex as the
+    // only available heuristic for this offline case (guards above already
+    // applied).
     return hasImperativeBuildIntent(prompt);
   }
 
-  if (BUILD_TASK_TYPES.has(decision.task_type)) {
-    // Router says this is a build/design task — still require imperative
-    // build intent in the prompt as confirmation, not the sole trigger.
-    return hasImperativeBuildIntent(prompt);
-  }
-
-  return false;
+  // Live router decision: task_type alone is the signal now.
+  return BUILD_TASK_TYPES.has(decision.task_type);
 }
 
 function shouldStreamRouteCeremony(prompt: string, decision: RouteDecision, includeProjectTools: boolean, projectCommandOperations: AgentOperation[]): boolean {
@@ -3639,47 +3670,74 @@ async function writeProjectFiles(files: GeneratedFile[], workspace: ProjectWorks
   return buildProjectToolResult(root, workspace, prepared.files, workspace ? `Project: ${workspace.name}` : "Generated project", prepared.notes);
 }
 
-/** Default gateways (docs/FABLE_PLANS.md section 25) — a Settings-configured
- *  map of "route models from this HOME provider via this OTHER provider by
- *  default" (e.g. { deepseek: "nvidia" } sends DeepSeek-family models via
- *  NVIDIA NIM unless a node/stage pins something else). Read fresh on every
- *  expansion since Settings can change it mid-session; fails soft to {}. */
+/** DORMANT/DEPRECATED (docs/FABLE_PLANS.md section 25 update): default
+ *  gateways used to be a Settings-level "route models from this HOME provider
+ *  via this OTHER provider by default" map, configured in the now-removed
+ *  Settings "Default gateways" panel. Gateways are now configured per node
+ *  (NodeInspector's "Gateway" + "Gateway fallbacks" controls), which is a
+ *  strictly richer replacement — nothing in the renderer writes to the
+ *  "defaultGateways" store key anymore. This lookup is kept only as a last-
+ *  resort fallback in expandStageRef for any pre-existing "defaultGateways"
+ *  store value a user may still have on disk from before this change; it can
+ *  be deleted entirely once that's no longer a concern. Fails soft to {}. */
 async function getDefaultGateways(): Promise<Partial<Record<ProviderKey, ProviderKey>>> {
   return readStoreValue<Partial<Record<ProviderKey, ProviderKey>>>("defaultGateways", {});
 }
 
 /** Route-before-model fallback (docs/FABLE_PLANS.md section 21, extended by
- *  section 25's default gateways): given one {provider, model} stage entry,
- *  looks it up in the cached model catalog and, if the catalog knows this
- *  exact provider+model as one of a model's access routes, returns ALL of
- *  that model's routes as StageModelRefs, ordered so a rate-limited NVIDIA
- *  route falls through to the deepseek API route of the SAME model before the
- *  chain ever moves on to a different model. When the ref isn't found in the
- *  catalog (or the catalog is empty), returns the ref unchanged as a
- *  single-entry array — callers always get at least one StageModelRef back.
+ *  section 25's per-node gateway + gateway-fallback chain): given one
+ *  {provider, model} stage entry, looks it up in the cached model catalog
+ *  and, if the catalog knows this exact provider+model as one of a model's
+ *  access routes, returns ALL of that model's routes as StageModelRefs,
+ *  ordered so a rate-limited NVIDIA route falls through to the deepseek API
+ *  route of the SAME model before the chain ever moves on to a different
+ *  model. When the ref isn't found in the catalog (or the catalog is empty),
+ *  returns the ref unchanged as a single-entry array — callers always get at
+ *  least one StageModelRef back.
  *
- *  Pin precedence (section 25): explicit `pinned` (a node's "Access via"
- *  override) > `defaultGateways[model's home provider]` > first
- *  configured-and-not-cooling route > first configured-but-cooling route >
- *  the rest. A pinned/gateway route only jumps the queue when it's actually
- *  configured — an unconfigured pin is silently ignored, same as
- *  resolveModelRoute's behavior. */
-async function expandStageRef(ref: StageModelRef, pinned?: ProviderKey): Promise<StageModelRef[]> {
+ *  Route order (section 25): explicit `preference` (a node's ordered
+ *  [gateway, ...gatewayFallbacks] list) comes FIRST, in that exact order,
+ *  filtered to routes the model actually has and is configured for —
+ *  regardless of cooldown state (a cooling preferred route still gets tried
+ *  in its preferred slot; the existing cooldown-skip logic in
+ *  callStageWithFallback is what actually skips it at call time, not this
+ *  ordering step). Falls back to `defaultGateways[model's home provider]`
+ *  (dormant/deprecated single-pin store value, see getDefaultGateways) only
+ *  when no `preference` is given. After the preference list, the model's
+ *  remaining routes follow the existing healthy-first ordering: first
+ *  configured-and-not-cooling, then configured-but-cooling, then
+ *  unconfigured. An unconfigured preferred route is dropped from the
+ *  preference list (never jumps the queue), same as before. */
+async function expandStageRef(ref: StageModelRef, preference?: ProviderKey[]): Promise<StageModelRef[]> {
   const catalog = await listModelCatalog();
   const model = catalog.models.find((entry) => (entry.access ?? []).some((route) => route.provider === ref.provider && route.id === ref.model));
   if (!model || !model.access || model.access.length === 0) return [ref];
 
-  const effectivePin = pinned ?? (await getDefaultGateways())[model.provider];
+  let effectivePreference = preference ?? [];
+  if (effectivePreference.length === 0) {
+    const defaultGateway = (await getDefaultGateways())[model.provider];
+    if (defaultGateway) effectivePreference = [defaultGateway];
+  }
 
   const configuredFlags = await Promise.all(model.access.map((route) => isProviderConfigured(route.provider)));
   const withStatus = model.access.map((route, index) => ({ route, configured: configuredFlags[index], cooling: isProviderCooling(route.provider) }));
 
-  const pinnedEntry = effectivePin ? withStatus.find((entry) => entry.route.provider === effectivePin && entry.configured) : undefined;
-  const rest = withStatus.filter((entry) => entry !== pinnedEntry);
+  // Preference entries win a slot in EXPLICIT order, each only once, and only
+  // when the model actually has that route AND it's configured.
+  const preferredEntries: typeof withStatus = [];
+  const claimed = new Set<typeof withStatus[number]>();
+  for (const providerPref of effectivePreference) {
+    const entry = withStatus.find((candidate) => candidate.route.provider === providerPref && candidate.configured && !claimed.has(candidate));
+    if (entry) {
+      preferredEntries.push(entry);
+      claimed.add(entry);
+    }
+  }
+  const rest = withStatus.filter((entry) => !claimed.has(entry));
   const healthy = rest.filter((entry) => entry.configured && !entry.cooling);
   const configuredButCooling = rest.filter((entry) => entry.configured && entry.cooling);
   const unconfigured = rest.filter((entry) => !entry.configured);
-  const ordered = [...(pinnedEntry ? [pinnedEntry] : []), ...healthy, ...configuredButCooling, ...unconfigured];
+  const ordered = [...preferredEntries, ...healthy, ...configuredButCooling, ...unconfigured];
 
   return ordered.map((entry) => ({ provider: entry.route.provider, model: entry.route.id }));
 }
@@ -3690,12 +3748,13 @@ async function expandStageRef(ref: StageModelRef, pinned?: ProviderKey): Promise
  *  ROUTES that tries every access route of the first model before moving on to
  *  the second model's routes (docs/FABLE_PLANS.md section 21).
  *
- *  `primaryPin` (docs/FABLE_PLANS.md section 25) is a node's "Access via"
- *  override — it only ever applies to the chain's FIRST entry (the stage's own
- *  primary model), never to fallback entries, which keep resolving through
- *  their own defaultGateways/health ordering. */
-async function expandChainByRoutes(chain: StageModelRef[], primaryPin?: ProviderKey): Promise<StageModelRef[]> {
-  const expandedGroups = await Promise.all(chain.map((ref, index) => expandStageRef(ref, index === 0 ? primaryPin : undefined)));
+ *  `primaryPreference` (docs/FABLE_PLANS.md section 25) is a node's ordered
+ *  [gateway, ...gatewayFallbacks] list (generalized from the old single
+ *  "Access via" pin) — it only ever applies to the chain's FIRST entry (the
+ *  stage's own primary model), never to fallback entries, which keep
+ *  resolving through their own defaultGateways/health ordering. */
+async function expandChainByRoutes(chain: StageModelRef[], primaryPreference?: ProviderKey[]): Promise<StageModelRef[]> {
+  const expandedGroups = await Promise.all(chain.map((ref, index) => expandStageRef(ref, index === 0 ? primaryPreference : undefined)));
   const seen = new Set<string>();
   const result: StageModelRef[] = [];
   for (const group of expandedGroups) {
@@ -3719,19 +3778,19 @@ type StageCallContext = { stream?: SessionStreamController; stageId: string; sta
 async function callStageWithFallback(
   rawChain: StageModelRef[],
   prompt: string,
-  primaryPin?: ProviderKey,
+  primaryPreference?: ProviderKey[],
   callContext?: StageCallContext
 ): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
   const notes: string[] = [];
   // Route-before-model fallback (docs/FABLE_PLANS.md §21, extended by §25's
-  // "Access via" node override / default gateways via primaryPin): expand
+  // per-node Gateway + Gateway fallbacks chain via primaryPreference): expand
   // each chain entry to every access route of its catalog model (if known)
   // before the existing "Never Run Dry" cooldown-skip logic below runs — so a
   // cooling route rotates to a sibling route of the SAME model first, and
   // only moves to the next model once every route of the current one is
   // exhausted. Rotation/cooldown notes below are unaffected: they're keyed by
   // provider, same as before expansion.
-  const chain = await expandChainByRoutes(rawChain, primaryPin);
+  const chain = await expandChainByRoutes(rawChain, primaryPreference);
   // "Never Run Dry" quota rotation (docs/FABLE_PLANS.md §19): a provider still
   // cooling from a recent 429/quota failure is skipped outright rather than
   // burning another call against it. `next` for the rotation note looks ahead
@@ -3920,7 +3979,7 @@ async function runCriticLoop(args: {
   ref: StageModelRef;
   output: string;
   stream?: SessionStreamController;
-  accessVia?: ProviderKey;
+  gatewayPreference?: ProviderKey[];
   stageId?: string;
 }): Promise<{ output: string; criticPasses: number }> {
   const isLocalStage = args.ref.provider === "ollama";
@@ -3947,7 +4006,7 @@ async function runCriticLoop(args: {
     const attempt = await callStageWithFallback(
       args.chain,
       continuationPrompt,
-      args.accessVia,
+      args.gatewayPreference,
       args.stageId ? { stream: args.stream, stageId: args.stageId, stageLabel: args.stageLabel } : undefined
     );
     if (!attempt.failed && attempt.output.trim()) {
@@ -4163,7 +4222,7 @@ async function runOrchestratedStages(
       emitTimeline(stream, timelineText("Checking whether the build needs functionality or support files."));
     }
     const stageCallContext: StageCallContext = { stream, stageId: stage.id, stageLabel: stage.label };
-    let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.accessVia, stageCallContext);
+    let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.gatewayPreference, stageCallContext);
     // Scan for an AskUserQuestion tag; if present, pause for an answer, strip
     // the tag, append the answer to the stage prompt, and re-run once.
     const askedQuestion = extractAskUserTag(attempt.output);
@@ -4173,7 +4232,7 @@ async function runOrchestratedStages(
         emitTimeline(stream, timelineText(`No answer in time — I picked "${answer}" and kept going.`));
       }
       const continuationPrompt = `${stagePrompt}\n\nYou previously asked: "${askedQuestion.question}"\nUser answered: ${answer}\n\nContinue with the full stage output now (do not ask again).`;
-      attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.accessVia, stageCallContext);
+      attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.gatewayPreference, stageCallContext);
     }
     await appendAudit(attempt.failed ? "error" : "info", "session.stage", `Stage ${stage.label} via ${stageModelLabel(attempt.ref)}.`, {
       stage: stage.id,
@@ -4198,7 +4257,7 @@ async function runOrchestratedStages(
         ref: attempt.ref,
         output: cleanOutput,
         stream,
-        accessVia: stage.accessVia,
+        gatewayPreference: stage.gatewayPreference,
         stageId: stage.id
       });
       cleanOutput = criticResult.output;
@@ -4447,9 +4506,50 @@ async function runExtractionRecovery(args: {
 }
 
 async function runSession(input: SessionRunInput, stream?: SessionStreamController): Promise<SessionRun> {
-  const prompt = input.prompt.trim();
-  if (!prompt) throw new Error("Session run requires a prompt.");
+  const originalPrompt = input.prompt.trim();
+  if (!originalPrompt) throw new Error("Session run requires a prompt.");
   clearSessionCancel(input.projectPath);
+
+  // "/orchestration" (or "/orch") as the leading token is an explicit manual
+  // command to run the build pipeline — it bypasses task-type inference
+  // entirely. The command token is stripped; the remainder is the actual
+  // build request and is what flows into routing/stages/design seeds. The
+  // conversation record still stores originalPrompt (as typed, command
+  // included) so history reflects what the user actually sent.
+  const orchestrationCommand = parseOrchestrationCommand(originalPrompt);
+  const forceBuildPipeline = orchestrationCommand !== null && orchestrationCommand.remainder.length > 0;
+  const orchestrationCommandWithoutTarget = orchestrationCommand !== null && orchestrationCommand.remainder.length === 0;
+  const prompt = orchestrationCommand ? orchestrationCommand.remainder || originalPrompt : originalPrompt;
+
+  if (orchestrationCommandWithoutTarget) {
+    // "/orchestration" with nothing after it — nothing to build yet. Answer
+    // as an ordinary chat turn asking what to build, rather than forcing an
+    // empty build pipeline run.
+    const createdAt = new Date().toISOString();
+    const conversationId = input.conversationId ?? randomUUID();
+    const promptHash = sha256(originalPrompt);
+    const decision = await decidePolicy({ prompt: originalPrompt, preset: input.preset });
+    const assistantText = "What would you like the build pipeline to make? Follow /orchestration with a description of the project, e.g. \"/orchestration a landing page for a coffee shop\".";
+    const run: SessionRun = {
+      id: randomUUID(),
+      conversationId,
+      createdAt,
+      completedAt: new Date().toISOString(),
+      promptSha256: promptHash,
+      promptPreview: originalPrompt.slice(0, 180),
+      rawPromptStored: false,
+      projectPath: input.projectPath,
+      pipelineName: "Chat",
+      decision,
+      steps: [],
+      assistantText,
+      warnings: []
+    };
+    await appendRunToConversation(run, originalPrompt);
+    await writeSessionRun(run);
+    emitStream(stream, { kind: "complete", run });
+    return run;
+  }
 
   const permissionMode = resolvePermissionMode(input);
 
@@ -4468,14 +4568,18 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
 
   // "Set up a preview" is an OPERATION on the existing project, not a build —
   // serve the selected folder and open the rail instead of running the pipeline.
-  if (wantsProjectPreview(prompt)) {
+  // An explicit /orchestration command always wins over the preview pre-gate.
+  if (!forceBuildPipeline && wantsProjectPreview(prompt)) {
     return runPreviewRequest({ input, prompt, conversationId, createdAt, promptHash, decision: effectiveDecisionResult, stream });
   }
 
   // Real multi-model build pipeline (plan -> front end -> functional) for "build me X".
-  if (shouldRunBuildPipeline(prompt, effectiveDecision, decision.source)) {
+  if (forceBuildPipeline || shouldRunBuildPipeline(prompt, effectiveDecision, decision.source)) {
     const singleFile = wantsSingleFileFrontend(prompt);
     emitTimeline(stream, timelineText("I’ll run this through the build pipeline and turn the model output into real project files."));
+    if (forceBuildPipeline) {
+      emitTimeline(stream, timelineText("Build pipeline invoked manually via /orchestration."));
+    }
     if (input.modelOverride) {
       emitTimeline(stream, timelineText(`You pinned ${overrideDisplayLabel(input.modelOverride)}, so it leads every stage; the usual chain stays as fallback.`));
     }
@@ -4604,7 +4708,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       createdAt,
       completedAt: new Date().toISOString(),
       promptSha256: promptHash,
-      promptPreview: prompt.slice(0, 180),
+      promptPreview: originalPrompt.slice(0, 180),
       rawPromptStored: false,
       projectPath: projectResult?.workspacePath ?? input.projectPath,
       pipelineName: "Build Orchestration Pipeline",
@@ -4643,7 +4747,10 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       run.assistantText = `${planStage?.output ?? "I put together a plan."}\n\nPlan mode — nothing was written. Switch to Auto and rerun to build it.`;
       run.pipelineName = "Plan Mode";
     }
-    await appendRunToConversation(run, prompt);
+    // Record the conversation turn with the prompt as the user actually typed
+    // it (including a leading /orchestration command, if any) — the stripped
+    // `prompt` is only for routing/stage inputs.
+    await appendRunToConversation(run, originalPrompt);
     await writeSessionRun(run);
     emitStream(stream, { kind: "complete", run });
     return run;

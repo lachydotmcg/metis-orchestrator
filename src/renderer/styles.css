@@ -5323,6 +5323,14 @@ details.artifact-row[open] summary {
   cursor: pointer;
 }
 
+/* /orchestration composer nicety (docs/FABLE_PLANS.md section 25 update) —
+   a static (non-clickable) heads-up chip, not the absolutely-positioned
+   suggestion overlay above; reuses the same slim chip look. */
+.composer-orchestration-chip {
+  margin: 0 0 6px 2px;
+  cursor: default;
+}
+
 /* ---- Pulse: full nav view (docs/FABLE_PLANS.md section 18) — a centered, generously-spaced
    feed. Calm, no boxes-in-boxes: timeline uses a date rail, community uses plain cards, news is
    compact link rows. ---- */
@@ -6039,7 +6047,6 @@ details.artifact-row[open] summary {
 .grant-list,
 .registry-list,
 .audit-list,
-.gateway-list,
 .permission-presets {
   display: grid;
   gap: 8px;
@@ -6050,25 +6057,6 @@ details.artifact-row[open] summary {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
-}
-
-.gateway-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(160px, 220px);
-  gap: 10px;
-  align-items: center;
-  padding: 10px;
-  background: var(--node);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-
-.gateway-row > span {
-  overflow: hidden;
-  color: white;
-  font-size: 13px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .provider-row,

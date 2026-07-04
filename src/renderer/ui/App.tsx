@@ -163,14 +163,24 @@ type GraphNode = {
   intent?: string;
   skills?: string[];
   temperature?: number;
-  /** "Access via" override (docs/FABLE_PLANS.md section 21): pins this node's
-   *  primary model to a specific route provider instead of Auto resolution.
-   *  Persisted with the rest of the graph node state (see the GraphWorkspace
-   *  localStorage effect). NOTE: the orchestration graph is still UI-only —
-   *  the real pipeline runs defaultAgenticStages in main.ts, not graph state —
-   *  so this override is stored + displayed now and will be consumed once
-   *  graph-driven stage execution lands; it does not affect any run today. */
+  /** @deprecated "Access via" override (docs/FABLE_PLANS.md section 21) —
+   *  superseded by `gateway` (section 25 update). Kept only so loadNodes can
+   *  migrate old persisted graphs: on load, an existing `accessVia` with no
+   *  `gateway` set becomes the node's `gateway`. Not written by the
+   *  NodeInspector anymore; do not read it directly elsewhere. */
   accessVia?: ProviderId;
+  /** Gateway (docs/FABLE_PLANS.md section 25, renamed from "Access via"):
+   *  pins this node's primary model to a specific route provider instead of
+   *  Auto resolution. Persisted with the rest of the graph node state (see
+   *  the GraphWorkspace localStorage effect) and projected into
+   *  GraphPipelineStage.gateway by projectGraphPipeline for main.ts to
+   *  consume as the stage's first route preference. */
+  gateway?: ProviderId;
+  /** Gateway fallbacks (docs/FABLE_PLANS.md section 25): an ordered list of
+   *  additional route providers to try, in order, after `gateway` and before
+   *  falling through to the model's remaining routes by health. Mirrors the
+   *  per-node model fallback chain's interaction pattern (add/remove/promote). */
+  gatewayFallbacks?: ProviderId[];
 };
 
 type DragPayload =
@@ -3390,6 +3400,10 @@ function SessionComposer({
   }, [suggestionResetKey]);
 
   const showSuggestion = Boolean(suggestion) && !suggestionDismissed && !sessionBusy && prompt.trim().length === 0;
+  // Mirrors main.ts's ORCHESTRATION_COMMAND_RE (/orchestration or /orch as the
+  // leading token) purely for the composer nicety chip below — no autocomplete
+  // menu, just a small heads-up that this prompt will force the build pipeline.
+  const showOrchestrationChip = /^\s*\/(orchestration|orch)\b/i.test(prompt);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
@@ -3401,6 +3415,9 @@ function SessionComposer({
 
   return (
     <form className="home-composer" onSubmit={handleSubmit}>
+      {showOrchestrationChip ? (
+        <span className="composer-suggestion-chip composer-orchestration-chip">Build pipeline will run</span>
+      ) : null}
       <div className="composer-input-wrap">
         <textarea
           value={prompt}
@@ -4887,12 +4904,25 @@ type Interaction =
   | { type: "node"; id: string; offset: Vec; isSkill: boolean; moved: boolean }
   | null;
 
+/** Migrates a single persisted node's legacy `accessVia` pin onto the new
+ *  `gateway` field (docs/FABLE_PLANS.md section 25 update) — old graphs saved
+ *  before the Gateway/Gateway fallbacks rework only have `accessVia`; new
+ *  graphs write `gateway` directly. `accessVia` is left in place afterward
+ *  (harmless, unread elsewhere) rather than deleted, so a downgrade to an
+ *  older build wouldn't silently lose the pin. */
+function migrateNodeGateway(node: GraphNode): GraphNode {
+  if (node.gateway === undefined && node.accessVia !== undefined) {
+    return { ...node, gateway: node.accessVia };
+  }
+  return node;
+}
+
 function loadNodes(): GraphNode[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as { nodes?: GraphNode[] };
-      if (parsed.nodes?.length) return parsed.nodes;
+      if (parsed.nodes?.length) return parsed.nodes.map(migrateNodeGateway);
     }
   } catch {
     /* ignore malformed cache */
@@ -4942,12 +4972,20 @@ function projectGraphPipeline(nodes: GraphNode[]): GraphPipelineConfig {
     const fallback = (node.fallbacks ?? [])
       .filter((ref) => ref.model?.trim() && PROVIDER_CONNECTIONS[ref.provider])
       .map((ref) => ({ provider: PROVIDER_CONNECTIONS[ref.provider], model: ref.model }));
+    const gatewayKey = node.gateway ? PROVIDER_CONNECTIONS[node.gateway] : undefined;
+    const gatewayFallbackKeys = (node.gatewayFallbacks ?? [])
+      .map((brand) => PROVIDER_CONNECTIONS[brand])
+      .filter((key): key is ProviderKey => Boolean(key));
     stages.push({
       id: node.id,
       label: node.label,
       provider: providerKey,
       model: node.model,
-      accessVia: node.accessVia ? PROVIDER_CONNECTIONS[node.accessVia] : undefined,
+      // `accessVia` kept populated with the same value for back-compat with
+      // older main.ts builds/consumers that only read the single pin.
+      accessVia: gatewayKey,
+      gateway: gatewayKey,
+      gatewayFallbacks: gatewayFallbackKeys.length > 0 ? gatewayFallbackKeys : undefined,
       fallback
     });
   }
@@ -8811,12 +8849,6 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
   // "Is this done?" critic loop (docs/FABLE_PLANS.md §22) — a top-level store
   // key (not nested in AppSettings) since main.ts reads it directly by name.
   const [selfVerify, setSelfVerify] = useAppStoreState<"off" | "local" | "all">("selfVerify", "local");
-  // Default gateways (docs/FABLE_PLANS.md section 25) — "DeepSeek models
-  // default via NVIDIA NIM" style pins, keyed by the model's HOME provider
-  // (the catalog entry's own `provider`, not a route). Consumed by main.ts's
-  // resolveModelRoute as the user pin when a stage has no explicit accessVia.
-  const [defaultGateways, setDefaultGateways] = useAppStoreState<Partial<Record<ProviderKey, ProviderKey>>>("defaultGateways", {});
-  const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([]);
   const [policyStatus, setPolicyStatus] = useState<PolicyStatus>(FALLBACK_POLICY_STATUS);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
@@ -8855,52 +8887,6 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
   useEffect(() => {
     void refreshRuntime();
   }, [refreshRuntime]);
-
-  // Default gateways (docs/FABLE_PLANS.md section 25): load the model catalog
-  // once so we can compute which providers are the HOME provider of at least
-  // one multi-route model — those are the only ones worth offering a gateway
-  // picker for. Fails soft (empty catalog -> no gateway rows) in preview.
-  useEffect(() => {
-    if (!window.metisCatalog) return;
-    let alive = true;
-    window.metisCatalog
-      .models()
-      .then((state) => {
-        if (alive) setCatalogModels(state.models);
-      })
-      .catch(() => undefined);
-    return () => {
-      alive = false;
-    };
-  }, []);
-
-  // For each HOME provider that has at least one multi-route model, the
-  // distinct set of route providers available across all of its models
-  // (excluding itself, since "via itself" is just Auto's own default).
-  const gatewayOptions = useMemo(() => {
-    const byHome = new Map<ProviderKey, Set<ProviderKey>>();
-    for (const model of catalogModels) {
-      const routes = model.access ?? [];
-      if (routes.length < 2) continue;
-      const set = byHome.get(model.provider) ?? new Set<ProviderKey>();
-      for (const route of routes) {
-        if (route.provider !== model.provider) set.add(route.provider);
-      }
-      byHome.set(model.provider, set);
-    }
-    return Array.from(byHome.entries())
-      .filter(([, routes]) => routes.size > 0)
-      .map(([home, routes]) => ({ home, routes: Array.from(routes) }));
-  }, [catalogModels]);
-
-  function setDefaultGateway(home: ProviderKey, provider: ProviderKey | ""): void {
-    setDefaultGateways((current) => {
-      const next = { ...current };
-      if (provider) next[home] = provider;
-      else delete next[home];
-      return next;
-    });
-  }
 
   async function runBusy(label: string, work: () => Promise<void>): Promise<void> {
     setBusy(label);
@@ -9140,35 +9126,6 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
           </label>
         </article>
 
-        {gatewayOptions.length > 0 ? (
-          <article className="settings-panel gateways-panel">
-            <header>
-              <span>
-                <small>Routing</small>
-                <h2>Default gateways</h2>
-              </span>
-              <span className="status-pill">{Object.keys(defaultGateways).length} set</span>
-            </header>
-            <p className="settings-hint">Route a model family through a preferred API by default — e.g. send DeepSeek models via NVIDIA NIM — unless a node overrides it.</p>
-            <div className="gateway-list">
-              {gatewayOptions.map(({ home, routes }) => (
-                <div className="gateway-row" key={home}>
-                  <span>{PROVIDER_LABELS[home]}</span>
-                  <CustomSelect
-                    ariaLabel={`Default gateway for ${PROVIDER_LABELS[home]}`}
-                    value={defaultGateways[home] ?? ""}
-                    onChange={(value) => setDefaultGateway(home, value ? (value as ProviderKey) : "")}
-                    options={[
-                      { value: "", label: "Auto", hint: "Best available route" },
-                      ...routes.map((provider) => ({ value: provider, label: PROVIDER_LABELS[provider] }))
-                    ]}
-                  />
-                </div>
-              ))}
-            </div>
-          </article>
-        ) : null}
-
         <article className="settings-panel providers-panel">
           <header>
             <span>
@@ -9405,10 +9362,11 @@ function NodeInspector({
   const fallbacks = node.fallbacks ?? [];
   const skillNodes = (node.skills ?? []).map((id) => nodes.find((n) => n.id === id)).filter((n): n is GraphNode => Boolean(n));
 
-  // "Access via" override (docs/FABLE_PLANS.md section 21) — the model catalog
-  // knows every route (provider) a given model is reachable through; fetched
-  // here so the inspector can offer only the routes that actually apply to
-  // this node's selected model. Guarded for browser preview / no catalog yet.
+  // Gateway (docs/FABLE_PLANS.md section 25, renamed from "Access via") — the
+  // model catalog knows every route (provider) a given model is reachable
+  // through; fetched here so the inspector can offer only the routes that
+  // actually apply to this node's selected model. Guarded for browser
+  // preview / no catalog yet.
   const [catalogModels, setCatalogModels] = useState<CatalogModel[]>([]);
   useEffect(() => {
     if (!window.metisCatalog) return;
@@ -9428,8 +9386,11 @@ function NodeInspector({
   // catalog entry whose name matches this node's model text, and map its
   // access routes' ProviderKeys onto the renderer's brand ids. When the model
   // isn't in the catalog (custom/hand-typed model), fall back to just the
-  // node's own provider — there's no known alternate route to offer.
-  const accessViaOptions = useMemo((): ProviderId[] => {
+  // node's own provider — there's no known alternate route to offer. When a
+  // model has only one route, this list is empty and the Gateway control
+  // shows just Auto + that one provider (harmless — every provider family,
+  // including anthropic/gemini, is handled identically here).
+  const gatewayOptions = useMemo((): ProviderId[] => {
     const catalogEntry = node.model ? catalogModels.find((entry) => entry.name.toLowerCase() === node.model!.toLowerCase()) : undefined;
     const routes = catalogEntry?.access ?? [];
     const brands = routes.map((route) => CATALOG_PROVIDER_TO_BRAND[route.provider]).filter((brand): brand is ProviderId => Boolean(brand));
@@ -9437,6 +9398,13 @@ function NodeInspector({
     if (distinct.length > 0) return distinct;
     return node.provider ? [node.provider] : [];
   }, [catalogModels, node.model, node.provider]);
+
+  const gatewayFallbacks = node.gatewayFallbacks ?? [];
+  // Gateway fallback picker offers the node's OTHER available route
+  // providers — the current gateway (or Auto's implicit home provider) and
+  // already-added fallbacks are excluded, same exclusion pattern as the model
+  // fallback picker's `exists` check below.
+  const gatewayFallbackChoices = gatewayOptions.filter((brand) => brand !== node.gateway);
 
   function setPrimary(event: ChangeEvent<HTMLSelectElement>): void {
     const [providerId, ...rest] = event.target.value.split("|");
@@ -9457,6 +9425,34 @@ function NodeInspector({
     const demoted: ModelRef | null = provider && node.model ? { provider: node.provider as ProviderId, model: node.model } : null;
     const nextFallbacks = fallbacks.filter((_, i) => i !== index);
     onUpdate(node.id, { provider: ref.provider, model: ref.model, fallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks });
+  }
+
+  function setGateway(value: ProviderId | ""): void {
+    const nextGateway = value || undefined;
+    // Dropping the gateway back to a provider that's already in the fallback
+    // list (or clearing it) keeps the fallback list as-is otherwise — it only
+    // dedupes the new gateway value out of the fallback list, mirroring how
+    // promoteFallback avoids duplicate entries for the model chain.
+    onUpdate(node.id, {
+      gateway: nextGateway,
+      gatewayFallbacks: gatewayFallbacks.filter((brand) => brand !== nextGateway)
+    });
+  }
+
+  function addGatewayFallback(brand: ProviderId): void {
+    if (gatewayFallbacks.includes(brand)) return;
+    onUpdate(node.id, { gatewayFallbacks: [...gatewayFallbacks, brand] });
+  }
+
+  function removeGatewayFallback(index: number): void {
+    onUpdate(node.id, { gatewayFallbacks: gatewayFallbacks.filter((_, i) => i !== index) });
+  }
+
+  function promoteGatewayFallback(index: number): void {
+    const brand = gatewayFallbacks[index];
+    const demoted = node.gateway;
+    const nextFallbacks = gatewayFallbacks.filter((_, i) => i !== index);
+    onUpdate(node.id, { gateway: brand, gatewayFallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks });
   }
 
   return (
@@ -9503,18 +9499,57 @@ function NodeInspector({
             </label>
 
             {node.provider ? (
-              <label className="field">
-                <span>Access via</span>
-                <CustomSelect
-                  ariaLabel="Access via"
-                  value={node.accessVia ?? ""}
-                  onChange={(value) => onUpdate(node.id, { accessVia: value ? (value as ProviderId) : undefined })}
-                  options={[
-                    { value: "", label: "Auto", hint: "Best available route" },
-                    ...accessViaOptions.map((brand) => ({ value: brand, label: PROVIDERS[brand].label }))
-                  ]}
-                />
-              </label>
+              <>
+                <label className="field">
+                  <span>Gateway</span>
+                  <CustomSelect
+                    ariaLabel="Gateway"
+                    value={node.gateway ?? ""}
+                    onChange={(value) => setGateway(value ? (value as ProviderId) : "")}
+                    options={[
+                      { value: "", label: "Auto", hint: "Best available route" },
+                      ...gatewayOptions.map((brand) => ({ value: brand, label: PROVIDERS[brand].label }))
+                    ]}
+                  />
+                </label>
+
+                <div className="field">
+                  <span>Gateway fallbacks · tries these routes, in order, before Auto</span>
+                  <ol className="fallback-list">
+                    {gatewayFallbacks.length === 0 ? <li className="fallback-empty">No gateway fallbacks yet</li> : null}
+                    {gatewayFallbacks.map((brand, index) => (
+                      <li className="fallback-row" key={`${brand}-${index}`}>
+                        <span className="fallback-rank">{index + 1}</span>
+                        <span className="palette-icon logo small">
+                          <img alt="" src={PROVIDERS[brand].logo} />
+                        </span>
+                        <span className="fallback-name">{PROVIDERS[brand].label}</span>
+                        <button type="button" aria-label="Promote to gateway" title="Make gateway" onClick={() => promoteGatewayFallback(index)}>
+                          <ChevronUp size={14} />
+                        </button>
+                        <button type="button" aria-label="Remove gateway fallback" title="Remove" onClick={() => removeGatewayFallback(index)}>
+                          <X size={14} />
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                  <div className="fallback-picker" aria-label="Add gateway fallback">
+                    {gatewayFallbackChoices.map((brand) => {
+                      const exists = gatewayFallbacks.includes(brand);
+                      return (
+                        <button key={brand} type="button" className={`fallback-option ${exists ? "active" : ""}`} disabled={exists} onClick={() => addGatewayFallback(brand)}>
+                          <span className="palette-icon logo small">
+                            <img alt="" src={PROVIDERS[brand].logo} />
+                          </span>
+                          <span>
+                            <strong>{PROVIDERS[brand].label}</strong>
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
             ) : null}
 
             {needsApiKey ? (

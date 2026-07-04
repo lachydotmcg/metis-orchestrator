@@ -268,9 +268,17 @@ export interface GraphPipelineStage {
   label: string;
   provider: ProviderKey;
   model: string;
-  /** Pinned route provider for this stage's primary model ("Access via" node
-   *  override), if the user set one. Falls back to defaultGateways, then Auto. */
+  /** Pinned route provider for this stage's primary model ("Gateway" node
+   *  control, formerly "Access via"), if the user set one. Falls back to
+   *  defaultGateways, then Auto.
+   *  @deprecated kept for back-compat with older consumers/persisted data;
+   *  always populated with the same value as `gateway` when `gateway` is set. */
   accessVia?: ProviderKey;
+  /** Gateway fallback chain (docs/FABLE_PLANS.md section 25/gateway-fallbacks):
+   *  an ordered list of additional route providers to try, in order, before
+   *  falling through to the model's remaining access routes by health. */
+  gateway?: ProviderKey;
+  gatewayFallbacks?: ProviderKey[];
   fallback: Array<{ provider: ProviderKey; model: string }>;
 }
 

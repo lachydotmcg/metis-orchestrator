@@ -486,6 +486,19 @@ the composer's permission control (replacing restricted/standard/trusted):
   prompt and the stage re-runs/continues; timeout → orchestrator answers itself with the most
   sensible default and says so.
 
+## 25b. CORRECTION (Lachy, 2026-07-05): gateways are PER NODE; builds activate by router or /orchestration
+
+- The Settings "Default gateways" panel was a misread — REMOVED. Gateways live on the node:
+  the inspector control is named **Gateway** (was "Access via"), and below it sits **Gateway
+  fallbacks** — an ordered chain exactly like model fallbacks but for routes (Gateway: NVIDIA,
+  fallbacks: Groq → DeepSeek). Applies to every provider family. Route order at call time =
+  [gateway, ...gatewayFallbacks] (filtered to the model's real routes), then remaining routes
+  healthy-first; cooldowns still skip at call time.
+- Build activation: NO keyword matching. **`/orchestration`** (or `/orch`) typed in the composer
+  forces the pipeline manually (wins over all guards); otherwise the ROUTER's task-type judgement
+  alone decides (opt-outs/question/preview gates remain). The old verb+artifact regex survives
+  only for the offline sample-decision fallback.
+
 ## 25. Graph-driven pipeline + default gateways (Lachy, 2026-07-05 — priority)
 
 The orchestration graph stops being UI-only: the build pipeline reads the user's graph — each
