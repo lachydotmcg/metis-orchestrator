@@ -7273,6 +7273,7 @@ a:focus-visible,
 
 .gallery-board-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   max-width: 1200px;
@@ -7283,9 +7284,10 @@ a:focus-visible,
   border-radius: 14px;
 }
 
-.gallery-board-head label {
+.gallery-board-head label,
+.gallery-board-head-title {
   display: grid;
-  flex: 1;
+  flex: 0 1 auto;
   gap: 4px;
   min-width: 0;
 }
@@ -7299,6 +7301,180 @@ a:focus-visible,
   font: inherit;
   font-size: 22px;
   font-weight: 850;
+}
+
+.gallery-board-head-title input {
+  font-size: 22px;
+  font-weight: 850;
+}
+
+/* Click-to-edit-in-place text (docs/FABLE_PLANS.md section 23b): board title and, once an
+   image is selected, its title/description in the header cluster — same interaction language,
+   a plain-looking button that swaps for a text input on click. */
+.click-to-edit {
+  display: block;
+  width: 100%;
+  padding: 0;
+  color: white;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+  text-align: left;
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+}
+
+.click-to-edit:hover {
+  border-bottom-color: var(--line);
+}
+
+.gallery-board-head-title .click-to-edit {
+  font-size: 22px;
+  font-weight: 850;
+}
+
+/* Compact "add images" control (docs/FABLE_PLANS.md section 23b): replaces the old large
+   drop-zone body element. Sits to the right of the board title and stays a drag target. */
+.gallery-header-add-control {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+}
+
+.gallery-header-add-control input {
+  display: none;
+}
+
+.gallery-header-add-control button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  color: var(--soft);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gallery-header-add-control button:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+/* Selected-image editor (docs/FABLE_PLANS.md section 23b, reworked per Lachy): when an image
+   is selected, the LEFT aside shows that image with click-to-edit title/description, mood tags,
+   palette, and a two-step delete — replacing the board meta until deselected. */
+.gallery-image-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.gallery-image-editor > img {
+  width: 100%;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+.gallery-image-editor-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.gallery-image-editor-field small {
+  color: var(--muted);
+}
+
+.gallery-image-editor-field .click-to-edit {
+  font-size: 13px;
+  font-weight: 650;
+  white-space: normal;
+}
+
+.gallery-image-editor-field input,
+.gallery-image-editor-field textarea {
+  width: 100%;
+  color: white;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.gallery-image-editor-source {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.gallery-image-editor-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.gallery-image-editor-actions button.danger {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 11px;
+  color: #ff8a8a;
+  background: transparent;
+  border: 1px solid rgb(224 85 106 / 0.35);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.gallery-image-editor-actions button.danger:hover {
+  background: rgb(224 85 106 / 0.14);
+}
+
+.gallery-image-editor-actions button.danger.armed {
+  color: white;
+  background: rgb(224 85 106 / 0.85);
+  border-color: rgb(224 85 106 / 0.85);
+}
+
+.gallery-image-editor-actions button.ghost {
+  padding: 7px 11px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.gallery-image-editor-actions button.ghost:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.gallery-image-area-empty {
+  margin: 0 0 12px;
+  padding: 14px;
+  color: var(--muted);
+  background: rgb(24 24 24 / 0.6);
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.image-card.selected {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
 }
 
 

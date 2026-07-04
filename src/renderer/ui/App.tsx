@@ -6622,9 +6622,35 @@ function MetricCard({ label, value }: { label: string; value: string }): JSX.Ele
   );
 }
 
+// One-time sample purge (docs/FABLE_PLANS.md section 23b): the earlier "real images only"
+// cleanup (section 23) only stopped seeding NEW installs — owners with a persisted store from
+// before that change still have the old seeded board+images. This strips exactly the known seed
+// shape (board id "client-websites" with images "cw-1".."cw-4", all `data:image/svg+xml` src —
+// see the pre-section-23 seed in git history at commit 1e25c68) and, if that leaves the seeded
+// board with zero images, drops the board too. Anything else (user-created boards/images, even
+// ones that happen to be empty) is left untouched.
+const SEED_BOARD_ID = "client-websites";
+const SEED_IMAGE_IDS = new Set(["cw-1", "cw-2", "cw-3", "cw-4"]);
+
+function purgeSeededGalleryBoards(current: GalleryBoard[]): GalleryBoard[] {
+  let mutated = false;
+  const next = current
+    .map((board) => {
+      if (board.id !== SEED_BOARD_ID) return board;
+      const filteredImages = board.images.filter((image) => !(SEED_IMAGE_IDS.has(image.id) && image.src.startsWith("data:image/svg+xml")));
+      if (filteredImages.length === board.images.length) return board;
+      mutated = true;
+      return { ...board, images: filteredImages };
+    })
+    .filter((board) => !(board.id === SEED_BOARD_ID && board.images.length === 0));
+  if (!mutated && next.length === current.length) return current;
+  return next;
+}
+
 function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; onBoardsChange: (next: GalleryBoard[] | ((current: GalleryBoard[]) => GalleryBoard[])) => void }): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const headerFileInputRef = useRef<HTMLInputElement | null>(null);
   const selectedBoard = boards.find((board) => board.id === selectedId) ?? null;
   // Style memory (docs/FABLE_PLANS.md section 4): cards come from window.metisGallery, keyed by
   // imageId. Loaded once on mount (guarded for preview, where the bridge doesn't exist) and again
@@ -6632,11 +6658,14 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   const [cards, setCards] = useState<StyleCard[]>([]);
   const [analyzingBoardId, setAnalyzingBoardId] = useState<string | null>(null);
   const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
-  // Editable style cards (docs/FABLE_PLANS.md section 23): clicking an image opens an inline
-  // edit panel for title/caption/mood tags; edits persist via window.metisGallery.updateCard
-  // and mark the card userEdited so it outranks model captions in retrieval.
-  const [editingImageId, setEditingImageId] = useState<string | null>(null);
-  const [editDraft, setEditDraft] = useState<{ title: string; caption: string; moodTags: string }>({ title: "", caption: "", moodTags: "" });
+  // Selecting an image (docs/FABLE_PLANS.md section 23b): a click selects the image; its
+  // title/description/mood-tags then surface for click-to-edit-in-place in the header cluster
+  // (same interaction as the board title), and a Delete image action becomes available.
+  const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
+  const [editingField, setEditingField] = useState<"board-title" | "image-title" | "image-caption" | null>(null);
+  const [fieldDraft, setFieldDraft] = useState("");
+  const [moodDraft, setMoodDraft] = useState("");
+  const [deleteImageArmed, setDeleteImageArmed] = useState(false);
 
   const refreshCards = useCallback(async () => {
     if (!window.metisGallery) return;
@@ -6651,6 +6680,118 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
     void refreshCards();
   }, [refreshCards]);
 
+  // One-time sample purge (docs/FABLE_PLANS.md section 23b) — runs once when boards first load
+  // from the persisted store. purgeSeededGalleryBoards is a no-op (returns the same reference)
+  // once the seed is gone, so this settles after the first mutation and never loops.
+  useEffect(() => {
+    onBoardsChange((current) => purgeSeededGalleryBoards(current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    setSelectedImageId(null);
+    setEditingField(null);
+    setDeleteImageArmed(false);
+  }, [selectedId]);
+
+  const selectedImage = selectedBoard?.images.find((image) => image.id === selectedImageId) ?? null;
+  const selectedCard = selectedBoard && selectedImage ? cardFor(selectedBoard.id, selectedImage.id) : undefined;
+
+  // Mood-tags input is a plain controlled field (not click-to-edit like title/caption), so its
+  // draft needs to re-sync whenever the selected image (or its card) changes underneath it.
+  useEffect(() => {
+    setMoodDraft((selectedCard?.moodTags ?? selectedImage?.tags ?? []).join(", "));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedImageId, selectedCard?.moodTags]);
+
+  function cardFor(boardId: string, imageId: string): StyleCard | undefined {
+    return cards.find((card) => card.boardId === boardId && card.imageId === imageId);
+  }
+
+  function startEditBoardTitle(board: GalleryBoard): void {
+    setEditingField("board-title");
+    setFieldDraft(board.title);
+  }
+
+  function startEditImageTitle(image: GalleryImage, card: StyleCard | undefined): void {
+    setEditingField("image-title");
+    setFieldDraft(card?.title ?? image.title);
+  }
+
+  function startEditImageCaption(image: GalleryImage, card: StyleCard | undefined): void {
+    setEditingField("image-caption");
+    setFieldDraft(card?.caption ?? image.analysis);
+  }
+
+  function cancelFieldEdit(): void {
+    setEditingField(null);
+  }
+
+  async function commitFieldEdit(boardId: string): Promise<void> {
+    const value = fieldDraft.trim();
+    if (editingField === "board-title") {
+      if (value) updateBoard(boardId, { title: value });
+      setEditingField(null);
+      return;
+    }
+    if ((editingField === "image-title" || editingField === "image-caption") && selectedImageId) {
+      const patch = editingField === "image-title" ? { title: value } : { caption: value };
+      if (window.metisGallery) {
+        try {
+          const updated = await window.metisGallery.updateCard(selectedImageId, boardId, patch);
+          setCards((current) => {
+            const rest = current.filter((card) => card.imageId !== updated.imageId);
+            return [...rest, updated];
+          });
+        } catch {
+          /* edit still applies locally even if persistence fails */
+        }
+      }
+    }
+    setEditingField(null);
+  }
+
+  async function commitMoodTags(boardId: string, image: GalleryImage): Promise<void> {
+    const moodTags = moodDraft
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    if (window.metisGallery) {
+      try {
+        const updated = await window.metisGallery.updateCard(image.id, boardId, { moodTags });
+        setCards((current) => {
+          const rest = current.filter((card) => card.imageId !== updated.imageId);
+          return [...rest, updated];
+        });
+      } catch {
+        /* leave existing cards in place on failure */
+      }
+    }
+  }
+
+  async function deleteSelectedImage(board: GalleryBoard): Promise<void> {
+    if (!selectedImageId) return;
+    if (!deleteImageArmed) {
+      setDeleteImageArmed(true);
+      window.setTimeout(() => setDeleteImageArmed(false), 3000);
+      return;
+    }
+    const imageId = selectedImageId;
+    onBoardsChange((current) =>
+      current.map((item) => (item.id === board.id ? { ...item, images: item.images.filter((image) => image.id !== imageId) } : item))
+    );
+    setCards((current) => current.filter((card) => card.imageId !== imageId));
+    setSelectedImageId(null);
+    setDeleteImageArmed(false);
+    if (window.metisGallery) {
+      try {
+        await window.metisGallery.deleteCard(imageId);
+      } catch {
+        /* orphan card, harmless */
+      }
+    }
+  }
+
   async function analyzeBoard(board: GalleryBoard): Promise<void> {
     if (!window.metisGallery || analyzingBoardId) return;
     setAnalyzingBoardId(board.id);
@@ -6662,45 +6803,6 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
     } finally {
       setAnalyzingBoardId(null);
     }
-  }
-
-  function cardFor(boardId: string, imageId: string): StyleCard | undefined {
-    return cards.find((card) => card.boardId === boardId && card.imageId === imageId);
-  }
-
-  function openEditor(image: GalleryImage, card: StyleCard | undefined): void {
-    setEditingImageId(image.id);
-    setEditDraft({
-      title: card?.title ?? image.title,
-      caption: card?.caption ?? image.analysis,
-      moodTags: (card?.moodTags ?? image.tags).join(", ")
-    });
-  }
-
-  function closeEditor(): void {
-    setEditingImageId(null);
-  }
-
-  async function saveEditor(boardId: string): Promise<void> {
-    if (!editingImageId) return;
-    const moodTags = editDraft.moodTags
-      .split(",")
-      .map((tag) => tag.trim().toLowerCase())
-      .filter(Boolean);
-    const patch = { title: editDraft.title.trim(), caption: editDraft.caption.trim(), moodTags };
-    if (window.metisGallery) {
-      try {
-        const updated = await window.metisGallery.updateCard(editingImageId, boardId, patch);
-        setCards((current) => {
-          const next = current.filter((card) => card.imageId !== updated.imageId);
-          next.push(updated);
-          return next;
-        });
-      } catch {
-        /* edit still applies locally to the gallery image below even if persistence fails */
-      }
-    }
-    setEditingImageId(null);
   }
 
   function updateBoard(id: string, patch: Partial<GalleryBoard>): void {
@@ -6747,17 +6849,55 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   if (selectedBoard) {
     const boardCardCount = selectedBoard.images.filter((image) => cardFor(selectedBoard.id, image.id)).length;
     const isAnalyzing = analyzingBoardId === selectedBoard.id;
+    const isEditingBoardTitle = editingField === "board-title";
+    const isEditingImageTitle = editingField === "image-title";
+    const isEditingImageCaption = editingField === "image-caption";
     return (
       <main className="product-workspace gallery-workspace" aria-label="Gallery board">
-        <section className="gallery-board-head">
+        <section
+          className="gallery-board-head"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            importFiles(event.dataTransfer.files, selectedBoard);
+          }}
+        >
           <button type="button" onClick={() => setSelectedId(null)}>
             <ChevronLeft size={16} /> Boards
           </button>
           <span className="hero-icon"><GalleryHorizontalEnd size={19} /></span>
-          <label>
+          <div className="gallery-board-head-title">
             <small>Board title</small>
-            <input value={selectedBoard.title} onChange={(event) => updateBoard(selectedBoard.id, { title: event.target.value })} />
-          </label>
+            {isEditingBoardTitle ? (
+              <input
+                autoFocus
+                value={fieldDraft}
+                onChange={(event) => setFieldDraft(event.target.value)}
+                onBlur={() => void commitFieldEdit(selectedBoard.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void commitFieldEdit(selectedBoard.id);
+                  if (event.key === "Escape") cancelFieldEdit();
+                }}
+              />
+            ) : (
+              <button type="button" className="click-to-edit" onClick={() => startEditBoardTitle(selectedBoard)}>
+                {selectedBoard.title}
+              </button>
+            )}
+          </div>
+
+          <div className="gallery-header-add-control">
+            <button type="button" onClick={() => headerFileInputRef.current?.click()}>
+              <ImagePlus size={15} /> Add images
+            </button>
+            <input
+              ref={headerFileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={(event) => event.target.files && importFiles(event.target.files, selectedBoard)}
+            />
+          </div>
         </section>
 
         {boardCardCount > 0 ? (
@@ -6768,46 +6908,128 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
 
         <section className="gallery-detail-grid">
           <aside className="gallery-board-meta">
-            {selectedBoard.coverImage ? <img alt="" src={selectedBoard.coverImage} /> : null}
-            <textarea value={selectedBoard.description} onChange={(event) => updateBoard(selectedBoard.id, { description: event.target.value })} />
-            <div className="tag-row">
-              {selectedBoard.tags.map((tag) => <span key={tag}>{tag}</span>)}
-            </div>
-            <button
-              type="button"
-              disabled={!window.metisGallery || isAnalyzing || selectedBoard.images.length === 0}
-              title={!window.metisGallery ? "unavailable in preview" : undefined}
-              onClick={() => void analyzeBoard(selectedBoard)}
-            >
-              {isAnalyzing ? <Loader2 size={15} className="spin" /> : <Wand2 size={15} />}
-              {isAnalyzing ? "Analyzing…" : "Analyze board"}
-            </button>
-            <button type="button" disabled><Cable size={15} /> Sync Pinterest board soon</button>
+            {selectedImage ? (
+              <div className="gallery-image-editor">
+                <img alt={selectedCard?.title ?? selectedImage.title} src={selectedImage.src} />
+                {selectedCard ? (
+                  <div className="palette-strip" aria-label="Extracted palette">
+                    {selectedCard.palette.map((hex, index) => (
+                      <span key={`${hex}-${index}`} className="palette-swatch" style={{ background: hex }} title={hex} />
+                    ))}
+                  </div>
+                ) : null}
+                <div className="gallery-image-editor-field">
+                  <small>Image title</small>
+                  {isEditingImageTitle ? (
+                    <input
+                      autoFocus
+                      value={fieldDraft}
+                      onChange={(event) => setFieldDraft(event.target.value)}
+                      onBlur={() => void commitFieldEdit(selectedBoard.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void commitFieldEdit(selectedBoard.id);
+                        if (event.key === "Escape") cancelFieldEdit();
+                      }}
+                    />
+                  ) : (
+                    <button type="button" className="click-to-edit" onClick={() => startEditImageTitle(selectedImage, selectedCard)}>
+                      {selectedCard?.title ?? selectedImage.title}
+                    </button>
+                  )}
+                </div>
+                <div className="gallery-image-editor-field">
+                  <small>Description</small>
+                  {isEditingImageCaption ? (
+                    <textarea
+                      autoFocus
+                      rows={4}
+                      value={fieldDraft}
+                      onChange={(event) => setFieldDraft(event.target.value)}
+                      onBlur={() => void commitFieldEdit(selectedBoard.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" && !event.shiftKey) void commitFieldEdit(selectedBoard.id);
+                        if (event.key === "Escape") cancelFieldEdit();
+                      }}
+                    />
+                  ) : (
+                    <button type="button" className="click-to-edit" onClick={() => startEditImageCaption(selectedImage, selectedCard)}>
+                      {selectedCard?.caption || selectedImage.analysis}
+                    </button>
+                  )}
+                </div>
+                <div className="gallery-image-editor-field">
+                  <small>Mood tags</small>
+                  <input
+                    value={moodDraft}
+                    placeholder={(selectedCard?.moodTags ?? selectedImage.tags).join(", ")}
+                    onChange={(event) => setMoodDraft(event.target.value)}
+                    onBlur={() => void commitMoodTags(selectedBoard.id, selectedImage)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") void commitMoodTags(selectedBoard.id, selectedImage);
+                    }}
+                  />
+                </div>
+                {selectedCard ? (
+                  <small className="gallery-image-editor-source">
+                    {selectedCard.userEdited ? "edited by you" : selectedCard.source === "vision-model" ? `captioned by ${selectedCard.model ?? "vision model"}` : "palette only"}
+                  </small>
+                ) : null}
+                <div className="gallery-image-editor-actions">
+                  <button
+                    type="button"
+                    className={`danger ${deleteImageArmed ? "armed" : ""}`}
+                    onClick={() => void deleteSelectedImage(selectedBoard)}
+                  >
+                    <Trash2 size={13} />
+                    {deleteImageArmed ? "Confirm" : "Delete image"}
+                  </button>
+                  <button type="button" className="ghost" onClick={() => setSelectedImageId(null)}>
+                    Done
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                {selectedBoard.coverImage ? <img alt="" src={selectedBoard.coverImage} /> : null}
+                <textarea value={selectedBoard.description} onChange={(event) => updateBoard(selectedBoard.id, { description: event.target.value })} />
+                <div className="tag-row">
+                  {selectedBoard.tags.map((tag) => <span key={tag}>{tag}</span>)}
+                </div>
+                <button
+                  type="button"
+                  disabled={!window.metisGallery || isAnalyzing || selectedBoard.images.length === 0}
+                  title={!window.metisGallery ? "unavailable in preview" : undefined}
+                  onClick={() => void analyzeBoard(selectedBoard)}
+                >
+                  {isAnalyzing ? <Loader2 size={15} className="spin" /> : <Wand2 size={15} />}
+                  {isAnalyzing ? "Analyzing…" : "Analyze board"}
+                </button>
+                <button type="button" disabled><Cable size={15} /> Sync Pinterest board soon</button>
+              </>
+            )}
           </aside>
 
-          <div className="gallery-image-area">
-            <div
-              className="drop-zone"
-              onDragOver={(event) => event.preventDefault()}
-              onDrop={(event) => {
-                event.preventDefault();
-                importFiles(event.dataTransfer.files, selectedBoard);
-              }}
-            >
-              <ImagePlus size={20} />
-              <span>Drop images here, or add a reference</span>
-              <button type="button" onClick={() => fileInputRef.current?.click()}>Choose images</button>
-              <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={(event) => event.target.files && importFiles(event.target.files, selectedBoard)} />
-            </div>
+          <div
+            className="gallery-image-area"
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              importFiles(event.dataTransfer.files, selectedBoard);
+            }}
+          >
+            <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={(event) => event.target.files && importFiles(event.target.files, selectedBoard)} style={{ display: "none" }} />
+            {selectedBoard.images.length === 0 ? (
+              <p className="gallery-image-area-empty">Drop images here, or use "Add images" above.</p>
+            ) : null}
             <div className="image-masonry">
               {selectedBoard.images.map((image) => {
                 const card = cardFor(selectedBoard.id, image.id);
                 const hovered = hoveredImageId === image.id;
-                const isEditing = editingImageId === image.id;
+                const isSelected = selectedImageId === image.id;
                 return (
                   <article
                     key={image.id}
-                    className={`image-card ${isEditing ? "editing" : ""}`}
+                    className={`image-card ${isSelected ? "selected" : ""}`}
                     onMouseEnter={() => setHoveredImageId(image.id)}
                     onMouseLeave={() => setHoveredImageId((current) => (current === image.id ? null : current))}
                   >
@@ -6815,13 +7037,13 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
                       className="image-card-media"
                       role="button"
                       tabIndex={0}
-                      onClick={() => (isEditing ? closeEditor() : openEditor(image, card))}
+                      onClick={() => setSelectedImageId((current) => (current === image.id ? null : image.id))}
                       onKeyDown={(event) => {
-                        if (event.key === "Enter" || event.key === " ") openEditor(image, card);
+                        if (event.key === "Enter" || event.key === " ") setSelectedImageId(image.id);
                       }}
                     >
                       <img alt={image.title} src={image.src} />
-                      {card && hovered && !isEditing ? (
+                      {card && hovered && !isSelected ? (
                         <div className="image-card-overlay">
                           <span className="image-card-source-badge">
                             {card.userEdited ? "edited" : card.source === "vision-model" ? card.model ?? "vision model" : "palette"}
@@ -6840,44 +7062,11 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
                         ))}
                       </div>
                     ) : null}
-                    {isEditing ? (
-                      <div className="image-card-edit-panel">
-                        <label>
-                          <small>Title</small>
-                          <input
-                            value={editDraft.title}
-                            onChange={(event) => setEditDraft((current) => ({ ...current, title: event.target.value }))}
-                            autoFocus
-                          />
-                        </label>
-                        <label>
-                          <small>Caption / description</small>
-                          <textarea
-                            value={editDraft.caption}
-                            onChange={(event) => setEditDraft((current) => ({ ...current, caption: event.target.value }))}
-                          />
-                        </label>
-                        <label>
-                          <small>Mood tags (comma-separated)</small>
-                          <input
-                            value={editDraft.moodTags}
-                            onChange={(event) => setEditDraft((current) => ({ ...current, moodTags: event.target.value }))}
-                          />
-                        </label>
-                        <div className="image-card-edit-actions">
-                          <button type="button" onClick={() => void saveEditor(selectedBoard.id)}>Save</button>
-                          <button type="button" className="ghost-action" onClick={closeEditor}>Cancel</button>
-                        </div>
-                      </div>
-                    ) : (
-                      <>
-                        <strong>{card?.title ?? image.title}</strong>
-                        <p>{card?.caption || image.analysis}</p>
-                        <div className="tag-row">
-                          {(card?.moodTags ?? image.tags).map((tag) => <span key={tag}>{tag}</span>)}
-                        </div>
-                      </>
-                    )}
+                    <strong>{card?.title ?? image.title}</strong>
+                    <p>{card?.caption || image.analysis}</p>
+                    <div className="tag-row">
+                      {(card?.moodTags ?? image.tags).map((tag) => <span key={tag}>{tag}</span>)}
+                    </div>
                   </article>
                 );
               })}

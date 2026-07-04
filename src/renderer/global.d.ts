@@ -126,6 +126,7 @@ declare global {
       analyzeBoard: (boardId: string) => Promise<StyleCard[]>;
       cards: () => Promise<StyleCard[]>;
       updateCard: (imageId: string, boardId: string, patch: { title?: string; caption?: string; moodTags?: string[] }) => Promise<StyleCard>;
+      deleteCard: (imageId: string) => Promise<void>;
     };
   }
 }

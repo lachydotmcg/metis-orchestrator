@@ -4999,6 +4999,15 @@ async function updateStyleCard(imageId: string, boardId: string, patch: StoredSt
   return next;
 }
 
+/** Deletes a style card (e.g. when its image is removed from a board via the
+ *  gallery delete-image action). No-op if no card exists for the imageId. */
+async function deleteStyleCard(imageId: string): Promise<void> {
+  const cards = await readStyleCards();
+  if (!(imageId in cards)) return;
+  delete cards[imageId];
+  await writeStyleCards(cards);
+}
+
 /** Scores a style card against the plan output + user prompt via lowercase
  *  token overlap on title+caption+moodTags. Score 0 means "ignore" (no signal).
  *  User-edited cards get a modest flat boost so human descriptions outrank
@@ -5157,6 +5166,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-gallery:analyze-board", (_event, boardId: string) => analyzeGalleryBoard(boardId));
   ipcMain.handle("metis-gallery:cards", () => listStyleCards());
   ipcMain.handle("metis-gallery:update-card", (_event, imageId: string, boardId: string, patch: StoredStyleCardPatch) => updateStyleCard(imageId, boardId, patch));
+  ipcMain.handle("metis-gallery:delete-card", (_event, imageId: string) => deleteStyleCard(imageId));
   await createWindow();
 
   // Warm the live registry, model catalog, and Pulse feed on launch so the

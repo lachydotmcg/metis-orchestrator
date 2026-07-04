@@ -132,5 +132,6 @@ contextBridge.exposeInMainWorld("metisGallery", {
   analyzeBoard: (boardId: string) => ipcRenderer.invoke("metis-gallery:analyze-board", boardId) as Promise<StyleCard[]>,
   cards: () => ipcRenderer.invoke("metis-gallery:cards") as Promise<StyleCard[]>,
   updateCard: (imageId: string, boardId: string, patch: { title?: string; caption?: string; moodTags?: string[] }) =>
-    ipcRenderer.invoke("metis-gallery:update-card", imageId, boardId, patch) as Promise<StyleCard>
+    ipcRenderer.invoke("metis-gallery:update-card", imageId, boardId, patch) as Promise<StyleCard>,
+  deleteCard: (imageId: string) => ipcRenderer.invoke("metis-gallery:delete-card", imageId) as Promise<void>
 });
