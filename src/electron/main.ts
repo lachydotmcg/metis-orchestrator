@@ -5246,6 +5246,20 @@ async function listStyleCards(): Promise<StyleCard[]> {
   return Object.values(await readStyleCards());
 }
 
+/** Force-regenerates the style card for one image (docs/FABLE_PLANS.md section 23c) —
+ *  unlike analyzeGalleryBoard, this does not skip images that already have a card.
+ *  User edits are overwritten by design: reanalysing is an explicit request. */
+async function analyzeGalleryImage(boardId: string, imageId: string): Promise<StyleCard | null> {
+  const boards = await readGalleryBoards();
+  const board = boards.find((entry) => entry.id === boardId);
+  const image = board?.images.find((entry) => entry.id === imageId);
+  if (!board || !image) return null;
+  const cards = await readStyleCards();
+  cards[imageId] = await generateStyleCard(image, boardId);
+  await writeStyleCards(cards);
+  return cards[imageId];
+}
+
 /** Merges a human edit (title/caption/moodTags) into an existing style card and
  *  persists it, marking `userEdited: true` so retrieval scoring favors it over
  *  model captions (docs/FABLE_PLANS.md section 23). If no card exists yet for the
@@ -5441,6 +5455,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-gallery:cards", () => listStyleCards());
   ipcMain.handle("metis-gallery:update-card", (_event, imageId: string, boardId: string, patch: StoredStyleCardPatch) => updateStyleCard(imageId, boardId, patch));
   ipcMain.handle("metis-gallery:delete-card", (_event, imageId: string) => deleteStyleCard(imageId));
+  ipcMain.handle("metis-gallery:analyze-image", (_event, boardId: string, imageId: string) => analyzeGalleryImage(boardId, imageId));
   await createWindow();
 
   // Warm the live registry, model catalog, and Pulse feed on launch so the

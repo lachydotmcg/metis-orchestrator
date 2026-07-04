@@ -127,6 +127,7 @@ declare global {
     };
     metisGallery?: {
       analyzeBoard: (boardId: string) => Promise<StyleCard[]>;
+      analyzeImage: (boardId: string, imageId: string) => Promise<StyleCard | null>;
       cards: () => Promise<StyleCard[]>;
       updateCard: (imageId: string, boardId: string, patch: { title?: string; caption?: string; moodTags?: string[] }) => Promise<StyleCard>;
       deleteCard: (imageId: string) => Promise<void>;

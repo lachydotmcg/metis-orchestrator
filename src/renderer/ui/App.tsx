@@ -6796,6 +6796,7 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   const [fieldDraft, setFieldDraft] = useState("");
   const [moodDraft, setMoodDraft] = useState("");
   const [deleteImageArmed, setDeleteImageArmed] = useState(false);
+  const [reanalyzingImageId, setReanalyzingImageId] = useState<string | null>(null);
 
   const refreshCards = useCallback(async () => {
     if (!window.metisGallery) return;
@@ -6908,7 +6909,12 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
     }
     const imageId = selectedImageId;
     onBoardsChange((current) =>
-      current.map((item) => (item.id === board.id ? { ...item, images: item.images.filter((image) => image.id !== imageId) } : item))
+      current.map((item) => {
+        if (item.id !== board.id) return item;
+        const images = item.images.filter((image) => image.id !== imageId);
+        // Cover follows the latest remaining image (docs/FABLE_PLANS.md section 23c).
+        return { ...item, images, coverImage: images.length > 0 ? images[images.length - 1].src : "" };
+      })
     );
     setCards((current) => current.filter((card) => card.imageId !== imageId));
     setSelectedImageId(null);
@@ -6919,6 +6925,21 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
       } catch {
         /* orphan card, harmless */
       }
+    }
+  }
+
+  async function reanalyzeSelectedImage(board: GalleryBoard, image: GalleryImage): Promise<void> {
+    if (!window.metisGallery || reanalyzingImageId) return;
+    setReanalyzingImageId(image.id);
+    try {
+      const card = await window.metisGallery.analyzeImage(board.id, image.id);
+      if (card) {
+        setCards((current) => [...current.filter((entry) => entry.imageId !== card.imageId), card]);
+      }
+    } catch {
+      /* keep the existing card on failure */
+    } finally {
+      setReanalyzingImageId(null);
     }
   }
 
@@ -6971,7 +6992,8 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
       )
     ).then((images) => {
       onBoardsChange((current) =>
-        current.map((item) => (item.id === board.id ? { ...item, coverImage: item.coverImage || images[0].src, images: [...item.images, ...images] } : item))
+        // Board cover always tracks the most recently added image (docs/FABLE_PLANS.md section 23c).
+        current.map((item) => (item.id === board.id ? { ...item, coverImage: images[images.length - 1].src, images: [...item.images, ...images] } : item))
       );
     });
   }
@@ -7107,6 +7129,16 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
                 <div className="gallery-image-editor-actions">
                   <button
                     type="button"
+                    className="ghost"
+                    disabled={!window.metisGallery || reanalyzingImageId === selectedImage.id}
+                    title={!window.metisGallery ? "unavailable in preview" : "Regenerate this image's caption, tags, and palette"}
+                    onClick={() => void reanalyzeSelectedImage(selectedBoard, selectedImage)}
+                  >
+                    {reanalyzingImageId === selectedImage.id ? <Loader2 size={13} className="spin" /> : <Wand2 size={13} />}
+                    {reanalyzingImageId === selectedImage.id ? "Reanalysing…" : "Reanalyse"}
+                  </button>
+                  <button
+                    type="button"
                     className={`danger ${deleteImageArmed ? "armed" : ""}`}
                     onClick={() => void deleteSelectedImage(selectedBoard)}
                   >
@@ -7192,11 +7224,7 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
                         ))}
                       </div>
                     ) : null}
-                    <strong>{card?.title ?? image.title}</strong>
-                    <p>{card?.caption || image.analysis}</p>
-                    <div className="tag-row">
-                      {(card?.moodTags ?? image.tags).map((tag) => <span key={tag}>{tag}</span>)}
-                    </div>
+                    <small className="image-card-name">{card?.title ?? image.title}</small>
                   </article>
                 );
               })}
