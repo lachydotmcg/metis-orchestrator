@@ -523,6 +523,20 @@ export type SessionStreamEvent =
   | {
       kind: "user_question";
       question: UserQuestionRequest;
+    }
+  | {
+      kind: "stage_call";
+      call: {
+        id: string;
+        stageId: string;
+        stageLabel: string;
+        provider: ProviderKey;
+        model: string;
+        promptPreview: string;
+        status: "start" | "complete" | "failed";
+        output?: string;
+        detail?: string;
+      };
     };
 
 export interface SessionRun {

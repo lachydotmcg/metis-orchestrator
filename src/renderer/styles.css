@@ -2407,27 +2407,48 @@ p {
   background: var(--line-soft);
 }
 
-/* ---- Preview rail (Feature B): live iframe panel beside the feed ---- */
+/* ---- Right rail (docs/FABLE_PLANS.md §26): shared surface for the preview
+   rail and the side-chat stack. When only one exists it takes the full rail;
+   when both exist they stack vertically and each shrinks to share the
+   height, scrolling independently. ---- */
 
-.preview-rail {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+.right-rail {
+  display: flex;
   flex: 0 0 42%;
+  flex-direction: column;
   min-width: 380px;
   max-width: 560px;
   height: 100%;
+  overflow: hidden;
   background: var(--surface-2);
   border-left: 1px solid var(--line);
 }
 
 @media (max-width: 1100px) {
-  .preview-rail {
+  .right-rail {
     position: absolute;
     inset: 0 0 0 auto;
     z-index: 18;
     flex-basis: min(72%, 460px);
     box-shadow: -18px 0 48px rgb(0 0 0 / 0.45);
   }
+}
+
+.preview-rail {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 0;
+  height: auto;
+  background: var(--surface-2);
+  border-left: 0;
+}
+
+/* When a side-chat stack is also present, the preview keeps a comfortable
+   floor but yields the rest of the rail's height to the stack. */
+.right-rail:has(.side-chat-stack) .preview-rail {
+  flex: 1 1 55%;
+  min-height: 160px;
 }
 
 .preview-rail-header {
@@ -2489,6 +2510,199 @@ p {
   height: 100%;
   border: 0;
   background: #f3f3f3;
+}
+
+/* ---- Side-chat stack (docs/FABLE_PLANS.md §26): every model call the
+   orchestrator makes, live, as a right-rail card stack. Slim cards matching
+   the .stage-block family — neutral greyscale, slate accent border. ---- */
+
+.side-chat-stack {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 120px;
+  overflow: hidden;
+  border-top: 1px solid var(--line);
+}
+
+.side-chat-stack-header {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 38px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--sidebar);
+  border-bottom: 1px solid var(--line);
+}
+
+.side-chat-stack-header svg:first-child {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.side-chat-stack-title {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.side-chat-stack-actions {
+  display: flex;
+  gap: 2px;
+  align-items: center;
+  margin-left: auto;
+}
+
+.side-chat-stack-actions button {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+}
+
+.side-chat-stack-actions button:hover {
+  color: white;
+  background: var(--hover);
+}
+
+.side-chat-stack-body {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.side-chat-empty {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.side-chat-card {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 10px;
+}
+
+.side-chat-card.failed {
+  border-left-color: #e0556a;
+}
+
+.side-chat-card-head {
+  display: flex;
+  width: 100%;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+}
+
+.side-chat-card-head .stage-caret {
+  transition: transform 150ms ease;
+}
+
+.side-chat-card-head .stage-caret.open {
+  transform: rotate(90deg);
+}
+
+.side-chat-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  background: var(--muted);
+  border-radius: 999px;
+}
+
+.side-chat-dot.start {
+  background: var(--accent);
+  animation: side-chat-pulse 1.1s ease-in-out infinite;
+}
+
+.side-chat-dot.complete {
+  background: #4caf7d;
+}
+
+.side-chat-dot.failed {
+  background: #e0556a;
+}
+
+@keyframes side-chat-pulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgb(140 150 165 / 0.45); }
+  50% { opacity: 0.55; box-shadow: 0 0 0 4px rgb(140 150 165 / 0); }
+}
+
+.side-chat-stage {
+  overflow: hidden;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-chat-model {
+  margin-left: auto;
+  overflow: hidden;
+  font-size: 11px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.side-chat-route {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--muted);
+  background: var(--faint);
+  border-radius: 999px;
+}
+
+.side-chat-card-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 10px 10px 10px;
+}
+
+.side-chat-prompt {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.side-chat-prompt summary {
+  cursor: pointer;
+}
+
+.side-chat-prompt p {
+  margin: 6px 0 0 0;
+  white-space: pre-wrap;
+}
+
+.side-chat-failed {
+  margin: 0;
+  color: #e0838f;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.side-chat-pending {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.side-chat-card-body .markdown {
+  font-size: 12.5px;
 }
 
 /* Conversation minimap — hyphen ticks, current one brighter + longer; hover

@@ -3629,7 +3629,19 @@ async function expandChainByRoutes(chain: StageModelRef[], primaryPin?: Provider
   return result;
 }
 
-async function callStageWithFallback(rawChain: StageModelRef[], prompt: string, primaryPin?: ProviderKey): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
+/** Optional stage identity + stream threaded through to callStageWithFallback
+ *  purely so it can emit `stage_call` side-chat events (docs/FABLE_PLANS.md
+ *  §26) — every model call becomes a visible card in the renderer's side-chat
+ *  stack. Callers that don't have a stage identity handy (or no stream) can
+ *  simply omit this and no events emit; it never affects control flow. */
+type StageCallContext = { stream?: SessionStreamController; stageId: string; stageLabel: string };
+
+async function callStageWithFallback(
+  rawChain: StageModelRef[],
+  prompt: string,
+  primaryPin?: ProviderKey,
+  callContext?: StageCallContext
+): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
   const notes: string[] = [];
   // Route-before-model fallback (docs/FABLE_PLANS.md §21, extended by §25's
   // "Access via" node override / default gateways via primaryPin): expand
@@ -3656,22 +3668,102 @@ async function callStageWithFallback(rawChain: StageModelRef[], prompt: string, 
       continue;
     }
     const next = chain[i + 1];
+    // Side-chat card (docs/FABLE_PLANS.md §26): each ATTEMPT (not each skipped
+    // cooling entry) gets its own call id, so a fallback rotation renders as a
+    // failed card followed by a fresh card for the next attempt.
+    const callId = randomUUID();
+    if (callContext?.stream) {
+      emitStream(callContext.stream, {
+        kind: "stage_call",
+        call: {
+          id: callId,
+          stageId: callContext.stageId,
+          stageLabel: callContext.stageLabel,
+          provider: ref.provider,
+          model: ref.model,
+          promptPreview: prompt.slice(0, 200),
+          status: "start"
+        }
+      });
+    }
     try {
       const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt });
       if (result.source === "placeholder" || !result.output.trim()) {
-        notes.push(`${stageModelLabel(ref)} unavailable${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`);
+        const note = `${stageModelLabel(ref)} unavailable${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
+        notes.push(note);
+        if (callContext?.stream) {
+          emitStream(callContext.stream, {
+            kind: "stage_call",
+            call: {
+              id: callId,
+              stageId: callContext.stageId,
+              stageLabel: callContext.stageLabel,
+              provider: ref.provider,
+              model: ref.model,
+              promptPreview: prompt.slice(0, 200),
+              status: "failed",
+              detail: note
+            }
+          });
+        }
         continue;
       }
-      return { ref, output: result.output.trim(), notes, failed: false };
+      const trimmedOutput = result.output.trim();
+      if (callContext?.stream) {
+        emitStream(callContext.stream, {
+          kind: "stage_call",
+          call: {
+            id: callId,
+            stageId: callContext.stageId,
+            stageLabel: callContext.stageLabel,
+            provider: ref.provider,
+            model: ref.model,
+            promptPreview: prompt.slice(0, 200),
+            status: "complete",
+            output: trimmedOutput.slice(0, 4000)
+          }
+        });
+      }
+      return { ref, output: trimmedOutput, notes, failed: false };
     } catch (error) {
       if (isQuotaError(error)) {
         const until = markProviderCooldown(ref.provider, error);
-        notes.push(
-          `${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${next ? ` — rotated to ${stageModelLabel(next)}.` : "."}`
-        );
+        const note = `${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${next ? ` — rotated to ${stageModelLabel(next)}.` : "."}`;
+        notes.push(note);
+        if (callContext?.stream) {
+          emitStream(callContext.stream, {
+            kind: "stage_call",
+            call: {
+              id: callId,
+              stageId: callContext.stageId,
+              stageLabel: callContext.stageLabel,
+              provider: ref.provider,
+              model: ref.model,
+              promptPreview: prompt.slice(0, 200),
+              status: "failed",
+              detail: note
+            }
+          });
+        }
         continue;
       }
-      notes.push(`Failed to call ${stageModelLabel(ref)} (${error instanceof Error ? error.message : String(error)})${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`);
+      const note = `Failed to call ${stageModelLabel(ref)} (${error instanceof Error ? error.message : String(error)})${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
+      notes.push(note);
+      if (callContext?.stream) {
+        emitStream(callContext.stream, {
+          kind: "stage_call",
+          call: {
+            id: callId,
+            stageId: callContext.stageId,
+            stageLabel: callContext.stageLabel,
+            provider: ref.provider,
+            model: ref.model,
+            promptPreview: prompt.slice(0, 200),
+            status: "failed",
+            detail: note
+          }
+        });
+      }
     }
   }
   if (chain.every((ref) => isProviderCooling(ref.provider))) {
@@ -3749,6 +3841,7 @@ async function runCriticLoop(args: {
   output: string;
   stream?: SessionStreamController;
   accessVia?: ProviderKey;
+  stageId?: string;
 }): Promise<{ output: string; criticPasses: number }> {
   const isLocalStage = args.ref.provider === "ollama";
   if (!(await shouldSelfVerifyStage(args.ref))) return { output: args.output, criticPasses: 0 };
@@ -3771,7 +3864,12 @@ async function runCriticLoop(args: {
     const missingList = verdict.missing.length > 0 ? verdict.missing.map((item) => `- ${item}`).join("\n") : "- (no specifics given, but the task is not finished)";
     const continuationPrompt = `${args.stagePrompt}\n\nYour previous output was incomplete. You MUST complete: \n${missingList}\n\nContinue and return the COMPLETE result (full files, not diffs).\n\nYour previous output:\n${currentOutput.slice(0, 8000)}`;
 
-    const attempt = await callStageWithFallback(args.chain, continuationPrompt, args.accessVia);
+    const attempt = await callStageWithFallback(
+      args.chain,
+      continuationPrompt,
+      args.accessVia,
+      args.stageId ? { stream: args.stream, stageId: args.stageId, stageLabel: args.stageLabel } : undefined
+    );
     if (!attempt.failed && attempt.output.trim()) {
       currentOutput = stripThinkBlocks(attempt.output);
     }
@@ -3984,7 +4082,8 @@ async function runOrchestratedStages(
     } else {
       emitTimeline(stream, timelineText("Checking whether the build needs functionality or support files."));
     }
-    let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.accessVia);
+    const stageCallContext: StageCallContext = { stream, stageId: stage.id, stageLabel: stage.label };
+    let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.accessVia, stageCallContext);
     // Scan for an AskUserQuestion tag; if present, pause for an answer, strip
     // the tag, append the answer to the stage prompt, and re-run once.
     const askedQuestion = extractAskUserTag(attempt.output);
@@ -3994,7 +4093,7 @@ async function runOrchestratedStages(
         emitTimeline(stream, timelineText(`No answer in time — I picked "${answer}" and kept going.`));
       }
       const continuationPrompt = `${stagePrompt}\n\nYou previously asked: "${askedQuestion.question}"\nUser answered: ${answer}\n\nContinue with the full stage output now (do not ask again).`;
-      attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.accessVia);
+      attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.accessVia, stageCallContext);
     }
     await appendAudit(attempt.failed ? "error" : "info", "session.stage", `Stage ${stage.label} via ${stageModelLabel(attempt.ref)}.`, {
       stage: stage.id,
@@ -4019,7 +4118,8 @@ async function runOrchestratedStages(
         ref: attempt.ref,
         output: cleanOutput,
         stream,
-        accessVia: stage.accessVia
+        accessVia: stage.accessVia,
+        stageId: stage.id
       });
       cleanOutput = criticResult.output;
       criticPasses = criticResult.criticPasses;
@@ -4110,7 +4210,12 @@ async function runRepairPasses(args: {
       .map((file) => `\`${file.path}\`\n\`\`\`\n${file.content.slice(0, 6000)}\n\`\`\``)
       .join("\n\n");
     const repairPrompt = `${metisFilePromptBlock(args.metisFile ?? null)}You are the REPAIR model in a build pipeline. The project below was written to disk, but verification failed.\n\nOriginal request:\n${args.prompt}\n\nVerification failures:\n${repairEvidence(projectResult)}\n\nCurrent project files:\n${fileDump}\n\nFix the failures. Return COMPLETE corrected files (full contents, not diffs) for every file you change — and only the files you change. Before each fenced code block, put the file path in backticks on its own line. One short sentence about what was wrong, then the files.`;
-    const attempt = await callStageWithFallback(repairChainFor(args.override), repairPrompt);
+    const repairStageId = `repair-${repairCount}`;
+    const attempt = await callStageWithFallback(repairChainFor(args.override), repairPrompt, undefined, {
+      stream: args.stream,
+      stageId: repairStageId,
+      stageLabel: `Repair pass ${repairCount}`
+    });
     const repairThoughts = splitThinkTaggedOutput(attempt.output).thoughts;
     const repairCleanOutput = stripThinkBlocks(attempt.output);
     const repairStage: OrchestrationStage = {
@@ -4194,7 +4299,13 @@ async function runExtractionRecovery(args: {
       timelineText(`The stages didn't include complete files — asking the build model to write them out properly (attempt ${attemptNumber} of ${EXTRACTION_RECOVERY_LIMIT}).`)
     );
     const recoveryPrompt = `${metisFilePromptBlock(args.metisFile ?? null)}Your previous output described the project but did not include complete writable files. Output ALL project files NOW, complete file contents (not diffs, not descriptions). Before each fenced code block put the file path in backticks on its own line (e.g. \`index.html\`). Plan and prior output follow:\n${planOutput}\n${frontendOutput.slice(0, 8000)}`;
-    const attempt = await callStageWithFallback(chain, recoveryPrompt);
+    const recoveryStageId = `extract-recovery-${attemptNumber}`;
+    const recoveryStageLabel = `File recovery ${attemptNumber}`;
+    const attempt = await callStageWithFallback(chain, recoveryPrompt, undefined, {
+      stream: args.stream,
+      stageId: recoveryStageId,
+      stageLabel: recoveryStageLabel
+    });
     const thoughts = splitThinkTaggedOutput(attempt.output).thoughts;
     let cleanOutput = stripThinkBlocks(attempt.output);
     // One cheap critique pass here too (docs/FABLE_PLANS.md §22) — skipped
@@ -4208,7 +4319,11 @@ async function runExtractionRecovery(args: {
         emitTimeline(args.stream, timelineText(`Self-check: still missing ${firstMissing.length > 100 ? `${firstMissing.slice(0, 97)}...` : firstMissing} — continuing.`));
         const missingList = verdict.missing.length > 0 ? verdict.missing.map((item) => `- ${item}`).join("\n") : "- (no specifics given, but the task is not finished)";
         const continuationPrompt = `${recoveryPrompt}\n\nYour previous output was incomplete. You MUST complete: \n${missingList}\n\nContinue and return the COMPLETE result (full files, not diffs).\n\nYour previous output:\n${cleanOutput.slice(0, 8000)}`;
-        const retryAttempt = await callStageWithFallback(chain, continuationPrompt);
+        const retryAttempt = await callStageWithFallback(chain, continuationPrompt, undefined, {
+          stream: args.stream,
+          stageId: recoveryStageId,
+          stageLabel: recoveryStageLabel
+        });
         if (!retryAttempt.failed && retryAttempt.output.trim()) {
           cleanOutput = stripThinkBlocks(retryAttempt.output);
         }

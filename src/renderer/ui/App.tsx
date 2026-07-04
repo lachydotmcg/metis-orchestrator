@@ -129,6 +129,11 @@ import type {
   StyleCard
 } from "../../shared/runtime-contracts";
 
+/** Narrows SessionStreamEvent down to the `stage_call` variant (docs/FABLE_PLANS.md
+ *  §26) so ConversationTurn and the side-chat stack can reference its `call`
+ *  shape without repeating the union. */
+type StageCallEvent = Extract<SessionStreamEvent, { kind: "stage_call" }>;
+
 type NavKey = "session" | "orchestration" | "routines" | "marketplace" | "gallery" | "graph" | "benchmark" | "todo" | "manager" | "settings" | "pulse";
 type NodeKind = "router" | "agent" | "skill";
 
@@ -330,6 +335,10 @@ type ConversationTurn = {
   streamOperations?: AgentOperation[];
   streamSteps?: SessionPipelineStep[];
   streamProject?: SessionRun["projectResult"];
+  /** Side-chat cards — one per model-call attempt the orchestrator makes
+   *  during this run (docs/FABLE_PLANS.md §26). Capped at ~30, oldest dropped
+   *  first, so a long run's side-chat stack never grows unbounded. */
+  streamCalls?: StageCallEvent["call"][];
   liveAssistantText?: string;
   liveThoughtText?: string;
   error?: string;
@@ -392,6 +401,17 @@ function applyStreamEventToTurn(turn: ConversationTurn, event: SessionStreamEven
   }
   if (event.kind === "project") {
     return { ...turn, streamProject: event.project };
+  }
+  if (event.kind === "stage_call") {
+    // Side-chat cards (docs/FABLE_PLANS.md §26): same id updates in place
+    // (start -> complete/failed), new ids append. Capped at ~30 stored calls
+    // per conversation turn — drop the oldest once the cap is hit so a long
+    // run's stack never grows unbounded.
+    const existing = turn.streamCalls ?? [];
+    const withoutThis = existing.filter((call) => call.id !== event.call.id);
+    const next = [...withoutThis, event.call];
+    const capped = next.length > 30 ? next.slice(next.length - 30) : next;
+    return { ...turn, streamCalls: capped };
   }
   if (event.kind === "complete") {
     return { ...turn, id: event.run.id, status: "complete", run: event.run };
@@ -2678,6 +2698,14 @@ function NewSessionWorkspace({
   const [workspaceContextOpen, setWorkspaceContextOpen] = useState(false);
   const [previewRail, setPreviewRail] = useState<{ url: string; title: string } | null>(null);
   const [previewRefreshTick, setPreviewRefreshTick] = useState(0);
+  // Side-chat stack (docs/FABLE_PLANS.md §26): user-dismissable independent of
+  // the underlying data — the cards themselves live on each turn's
+  // streamCalls (so they survive scrollback / re-render), this flag just lets
+  // the user close the whole stack for the current conversation. Reset (shown
+  // again) on the next run and on conversation switch, same lifecycle as the
+  // preview rail.
+  const [sideChatClosed, setSideChatClosed] = useState(false);
+  const [sideChatCollapsed, setSideChatCollapsed] = useState(false);
   const [contextRenaming, setContextRenaming] = useState(false);
   const [contextRenameDraft, setContextRenameDraft] = useState("");
   const [contextDeleteArmed, setContextDeleteArmed] = useState(false);
@@ -2754,6 +2782,14 @@ function NewSessionWorkspace({
   }, [sections]);
   const activeBar = sections.length === 0 ? 0 : Math.min(minimapBars.length - 1, Math.floor((activeSection * minimapBars.length) / sections.length));
 
+  // Side-chat cards (docs/FABLE_PLANS.md §26): flatten every visible turn's
+  // streamCalls into one ordered stack for this conversation, newest last,
+  // capped at ~30 so a long multi-run conversation doesn't grow unbounded.
+  const sideChatCalls = useMemo(() => {
+    const all = conversation.flatMap((turn) => turn.streamCalls ?? []);
+    return all.length > 30 ? all.slice(all.length - 30) : all;
+  }, [conversation]);
+
   // Smart composer suggestion (docs/FABLE_PLANS.md section 15) — derived from
   // the last completed run and last user message in this open conversation.
   // Dismissed (typing/Escape) until the next run completes or the
@@ -2807,6 +2843,8 @@ function NewSessionWorkspace({
     // conversation's own bucket — including a still-streaming turn if this
     // conversation has a run in flight in the background.
     setPreviewRail(null);
+    setSideChatClosed(false);
+    setSideChatCollapsed(false);
     // Land at the top of the conversation, not the bottom.
     requestAnimationFrame(() => homeScrollRef.current?.scrollTo({ top: 0 }));
 
@@ -2916,6 +2954,9 @@ function NewSessionWorkspace({
     const pending = makePendingTurn(turnId, text);
     updatePendingTurns(runKey, (current) => [...current, pending]);
     setBusyKeys((current) => new Set(current).add(runKey));
+    // New runs in the same conversation reopen the side-chat stack even if the
+    // user closed it during a previous run (docs/FABLE_PLANS.md §26).
+    setSideChatClosed(false);
     try {
       if (!window.metisSession) {
         const previewRun = makePreviewRun(text);
@@ -3254,14 +3295,26 @@ function NewSessionWorkspace({
         />
       </div>
     </div>
-    {previewRail ? (
-      <PreviewRail
-        key={previewRail.url}
-        onClose={() => setPreviewRail(null)}
-        refreshTick={previewRefreshTick}
-        title={previewRail.title}
-        url={previewRail.url}
-      />
+    {previewRail || (sideChatCalls.length > 0 && !sideChatClosed) ? (
+      <div className="right-rail">
+        {previewRail ? (
+          <PreviewRail
+            key={previewRail.url}
+            onClose={() => setPreviewRail(null)}
+            refreshTick={previewRefreshTick}
+            title={previewRail.title}
+            url={previewRail.url}
+          />
+        ) : null}
+        {sideChatCalls.length > 0 && !sideChatClosed ? (
+          <SideChatStack
+            calls={sideChatCalls}
+            collapsed={sideChatCollapsed}
+            onToggleCollapsed={() => setSideChatCollapsed((value) => !value)}
+            onClose={() => setSideChatClosed(true)}
+          />
+        ) : null}
+      </div>
     ) : null}
     </main>
     </PreviewRailContext.Provider>
@@ -3619,6 +3672,93 @@ function PreviewRail({
           title={title}
         />
       </div>
+    </aside>
+  );
+}
+
+/** One live model-call card (docs/FABLE_PLANS.md §26) — a "side chat" the user
+ *  can watch happen: header (status dot, stage, pretty model, route chip),
+ *  collapsible to just the header, with the prompt tucked in a <details> and
+ *  the output/failure detail in the body. Collapsed by default once resolved
+ *  (complete/failed); the active (still "start") call stays expanded so its
+ *  activity is visible without a click. */
+function SideChatCard({ call }: { call: StageCallEvent["call"] }): JSX.Element {
+  const resolved = call.status !== "start";
+  const [expanded, setExpanded] = useState(!resolved);
+  useEffect(() => {
+    // Auto-expand the moment a card goes live; leave the user's manual
+    // collapse/expand choice alone once it's resolved (no snapping shut a
+    // card the user opened to read).
+    if (!resolved) setExpanded(true);
+  }, [resolved]);
+  return (
+    <div className={`side-chat-card ${call.status}`}>
+      <button type="button" className="side-chat-card-head" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+        <ChevronRight className={`stage-caret ${expanded ? "open" : ""}`} size={13} />
+        <span className={`side-chat-dot ${call.status}`} aria-hidden="true" />
+        <span className="side-chat-stage">{call.stageLabel}</span>
+        <span className="side-chat-model">{prettyModelName(call.provider, call.model)}</span>
+        <span className="side-chat-route">{providerLabel(call.provider)}</span>
+      </button>
+      {expanded ? (
+        <div className="side-chat-card-body">
+          {call.promptPreview ? (
+            <details className="side-chat-prompt">
+              <summary>Prompt</summary>
+              <p>{call.promptPreview}</p>
+            </details>
+          ) : null}
+          {call.status === "failed" ? (
+            <p className="side-chat-failed">{call.detail ?? "This call failed."}</p>
+          ) : call.output ? (
+            <Markdown>{call.output}</Markdown>
+          ) : (
+            <p className="side-chat-pending">Waiting on a response…</p>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Right-side stack of every model call the orchestrator makes during a run
+ *  (docs/FABLE_PLANS.md §26) — shares the rail with PreviewRail: when both
+ *  exist they stack vertically, each independently scrollable, so a build
+ *  with a live preview AND several stage calls doesn't have to choose. */
+function SideChatStack({
+  calls,
+  collapsed,
+  onToggleCollapsed,
+  onClose
+}: {
+  calls: StageCallEvent["call"][];
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
+  onClose: () => void;
+}): JSX.Element {
+  return (
+    <aside className="side-chat-stack" aria-label="Side chats">
+      <div className="side-chat-stack-header">
+        <Waypoints size={14} />
+        <span className="side-chat-stack-title">Side chats ({calls.length})</span>
+        <div className="side-chat-stack-actions">
+          <button type="button" aria-label={collapsed ? "Expand side chats" : "Collapse side chats"} onClick={onToggleCollapsed}>
+            {collapsed ? <ChevronDown size={14} /> : <Minus size={14} />}
+          </button>
+          <button type="button" aria-label="Close side chats" onClick={onClose}>
+            <X size={14} />
+          </button>
+        </div>
+      </div>
+      {collapsed ? null : (
+        <div className="side-chat-stack-body">
+          {calls.length === 0 ? (
+            <p className="side-chat-empty">No model calls yet.</p>
+          ) : (
+            calls.map((call) => <SideChatCard key={call.id} call={call} />)
+          )}
+        </div>
+      )}
     </aside>
   );
 }
