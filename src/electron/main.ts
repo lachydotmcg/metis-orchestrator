@@ -4357,6 +4357,7 @@ async function startRoutineScheduler(): Promise<void> {
 // import from renderer/ui.
 type StoredGalleryImage = { id: string; src: string; title: string; tags: string[]; analysis: string };
 type StoredGalleryBoard = { id: string; title: string; description: string; coverImage: string; images: StoredGalleryImage[]; tags: string[]; linkedSkill: boolean };
+type StoredStyleCardPatch = { title?: string; caption?: string; moodTags?: string[] };
 
 const OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 
@@ -4401,23 +4402,72 @@ async function detectOllamaVisionModel(): Promise<string | null> {
   }
 }
 
-/** Reduces an image (data URL or file path) to a small nativeImage bitmap for
- *  palette extraction. Returns null on any decode failure (fail soft). */
+/** Rasterizes a `data:image/svg+xml,...` (URL-encoded, NOT base64) data URL to a PNG
+ *  nativeImage via a hidden, off-screen BrowserWindow capture. Electron's `nativeImage`
+ *  cannot decode SVG at all (createFromDataURL silently yields an empty image for it),
+ *  so this is the only reliable in-process rasterization path (docs/FABLE_PLANS.md
+ *  section 23). Returns null on any failure (fail soft — caller falls back to
+ *  palette-only or skips captioning). */
+async function rasterizeSvgDataUrl(src: string): Promise<ReturnType<typeof nativeImage.createEmpty> | null> {
+  let win: BrowserWindow | null = null;
+  try {
+    const commaIndex = src.indexOf(",");
+    const encoded = commaIndex >= 0 ? src.slice(commaIndex + 1) : "";
+    const svgMarkup = decodeURIComponent(encoded);
+    const widthMatch = svgMarkup.match(/width="(\d+)"/);
+    const heightMatch = svgMarkup.match(/height="(\d+)"/);
+    const width = Math.min(Number(widthMatch?.[1]) || 900, 1024);
+    const height = Math.min(Number(heightMatch?.[1]) || 650, 1024);
+    win = new BrowserWindow({
+      width,
+      height,
+      show: false,
+      webPreferences: { offscreen: true }
+    });
+    const html = `<!doctype html><html><body style="margin:0;padding:0;">${svgMarkup}</body></html>`;
+    await win.loadURL(`data:text/html,${encodeURIComponent(html)}`);
+    const captured = await win.webContents.capturePage();
+    if (captured.isEmpty()) return null;
+    return captured;
+  } catch {
+    return null;
+  } finally {
+    if (win && !win.isDestroyed()) win.destroy();
+  }
+}
+
+/** Rasterizes any gallery image source (SVG data URL, raster data URL, or file path)
+ *  down to a `nativeImage` bitmap plus PNG base64, resized so the longer edge is
+ *  <=1024px. This is the single path both palette extraction AND vision captioning
+ *  use, so whatever reaches the model is a real decodable PNG — never raw SVG text
+ *  or URL-encoded garbage (docs/FABLE_PLANS.md section 23). Returns null on any
+ *  decode failure (fail soft). */
 async function decodeImageForPalette(src: string): Promise<{ image: ReturnType<typeof nativeImage.createEmpty>; base64?: string } | null> {
   try {
     let image: ReturnType<typeof nativeImage.createEmpty>;
-    let base64: string | undefined;
-    if (src.startsWith("data:")) {
+    const isSvgDataUrl = src.startsWith("data:image/svg+xml");
+    if (isSvgDataUrl) {
+      const rasterized = await rasterizeSvgDataUrl(src);
+      if (!rasterized) return null;
+      image = rasterized;
+    } else if (src.startsWith("data:")) {
       image = nativeImage.createFromDataURL(src);
-      const commaIndex = src.indexOf(",");
-      base64 = commaIndex >= 0 ? src.slice(commaIndex + 1) : undefined;
     } else {
       const buffer = await readFile(src);
       image = nativeImage.createFromBuffer(buffer);
-      base64 = buffer.toString("base64");
     }
     if (image.isEmpty()) return null;
-    return { image, base64 };
+
+    // Resize so the longer edge is <=1024px (vision models choke on huge inputs
+    // and it keeps the request payload small), then re-encode as PNG so the
+    // base64 handed to Ollama is always a real, decodable raster image.
+    const size = image.getSize();
+    const longestEdge = Math.max(size.width, size.height);
+    const resized = longestEdge > 1024
+      ? image.resize(size.width >= size.height ? { width: 1024 } : { height: 1024 })
+      : image;
+    const base64 = resized.toPNG().toString("base64");
+    return { image: resized, base64 };
   } catch {
     return null;
   }
@@ -4531,29 +4581,70 @@ function parseCaptionResponse(raw: string): { caption: string; moodTags: string[
   return { caption: plain.slice(0, 240), moodTags: [] };
 }
 
-/** Captions an image via the local Ollama vision model (`/api/generate` with
- *  base64 `images`). Returns null on any failure — caller falls back to
- *  palette-only cards (fail soft, no Ollama, no cards, no images must never
- *  break a run). */
+const VISION_CAPTION_PROMPT =
+  "Look at this image from a design/style moodboard. Respond with ONLY a JSON object, no other text: " +
+  '{"caption": "one concise sentence describing the visual style", "tags": ["3 to 6 lowercase mood or style tags"]}.';
+
+/** Detects the "I can't see an image" refusal family some vision models emit when the
+ *  image payload didn't actually reach them (the root cause of docs/FABLE_PLANS.md
+ *  section 23 — SVG data URLs previously being base64'd as raw URL-encoded text). A
+ *  caption matching this must NEVER be stored — it isn't a real caption. */
+function looksLikeMissingImageRefusal(text: string): boolean {
+  return /provide the image|cannot see|no (visual|image) input|unable to view/i.test(text);
+}
+
+/** Calls Ollama's `/api/generate`, which expects top-level `images: [<base64>]`. */
+async function captionViaGenerateEndpoint(model: string, base64: string): Promise<string | null> {
+  const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      prompt: VISION_CAPTION_PROMPT,
+      images: [base64],
+      stream: false
+    })
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { response?: string };
+  return payload.response ?? "";
+}
+
+/** Calls Ollama's `/api/chat`, which expects the image attached to the message via
+ *  `messages: [{ role, content, images: [<base64>] }]` rather than a top-level field.
+ *  Used as the retry shape when `/api/generate` yields a "no image" refusal. */
+async function captionViaChatEndpoint(model: string, base64: string): Promise<string | null> {
+  const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: VISION_CAPTION_PROMPT, images: [base64] }],
+      stream: false
+    })
+  });
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { message?: { content?: string } };
+  return payload.message?.content ?? "";
+}
+
+/** Captions an image via the local Ollama vision model. Tries `/api/generate` first;
+ *  if the response is empty OR matches the "I can't see an image" refusal family
+ *  (meaning the image didn't really reach the model), retries ONCE via `/api/chat`'s
+ *  message-attached image shape. If both fail or both come back as refusals, returns
+ *  null so the caller falls back to a palette-only card — a refusal string must never
+ *  be stored as a caption (docs/FABLE_PLANS.md section 23). */
 async function captionImageWithVisionModel(model: string, base64: string): Promise<{ caption: string; moodTags: string[] } | null> {
   try {
-    const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model,
-        prompt:
-          "Look at this image from a design/style moodboard. Respond with ONLY a JSON object, no other text: " +
-          '{"caption": "one concise sentence describing the visual style", "tags": ["3 to 6 lowercase mood or style tags"]}.',
-        images: [base64],
-        stream: false
-      })
-    });
-    if (!response.ok) return null;
-    const payload = (await response.json()) as { response?: string };
-    const text = payload.response ?? "";
-    if (!text.trim()) return null;
-    return parseCaptionResponse(text);
+    const first = await captionViaGenerateEndpoint(model, base64);
+    if (first && first.trim() && !looksLikeMissingImageRefusal(first)) {
+      return parseCaptionResponse(first);
+    }
+    const retry = await captionViaChatEndpoint(model, base64);
+    if (retry && retry.trim() && !looksLikeMissingImageRefusal(retry)) {
+      return parseCaptionResponse(retry);
+    }
+    return null;
   } catch {
     return null;
   }
@@ -4625,15 +4716,45 @@ async function listStyleCards(): Promise<StyleCard[]> {
   return Object.values(await readStyleCards());
 }
 
+/** Merges a human edit (title/caption/moodTags) into an existing style card and
+ *  persists it, marking `userEdited: true` so retrieval scoring favors it over
+ *  model captions (docs/FABLE_PLANS.md section 23). If no card exists yet for the
+ *  image (e.g. the board was never analyzed), synthesizes a minimal palette-less
+ *  one from the edit so the human description isn't lost. Returns the updated card. */
+async function updateStyleCard(imageId: string, boardId: string, patch: StoredStyleCardPatch): Promise<StyleCard> {
+  const cards = await readStyleCards();
+  const existing = cards[imageId];
+  const next: StyleCard = {
+    imageId,
+    boardId: existing?.boardId ?? boardId,
+    title: patch.title !== undefined ? patch.title : existing?.title,
+    caption: patch.caption !== undefined ? patch.caption : existing?.caption ?? "",
+    moodTags: patch.moodTags !== undefined ? patch.moodTags : existing?.moodTags ?? [],
+    palette: existing?.palette ?? [],
+    source: existing?.source ?? "palette-only",
+    model: existing?.model,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    userEdited: true
+  };
+  cards[imageId] = next;
+  await writeStyleCards(cards);
+  return next;
+}
+
 /** Scores a style card against the plan output + user prompt via lowercase
- *  token overlap on caption+moodTags. Score 0 means "ignore" (no signal). */
+ *  token overlap on title+caption+moodTags. Score 0 means "ignore" (no signal).
+ *  User-edited cards get a modest flat boost so human descriptions outrank
+ *  model captions in retrieval (docs/FABLE_PLANS.md section 23). */
+const USER_EDITED_SCORE_BOOST = 2;
+
 function scoreStyleCard(card: StyleCard, tokens: Set<string>): number {
-  const cardText = `${card.caption} ${card.moodTags.join(" ")}`.toLowerCase();
+  const cardText = `${card.title ?? ""} ${card.caption} ${card.moodTags.join(" ")}`.toLowerCase();
   const cardTokens = cardText.split(/[^a-z0-9]+/).filter(Boolean);
   let score = 0;
   for (const token of cardTokens) {
     if (tokens.has(token)) score++;
   }
+  if (score > 0 && card.userEdited) score += USER_EDITED_SCORE_BOOST;
   return score;
 }
 
@@ -4777,6 +4898,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-routines:run-now", (_event, id: string) => runRoutineNow(id));
   ipcMain.handle("metis-gallery:analyze-board", (_event, boardId: string) => analyzeGalleryBoard(boardId));
   ipcMain.handle("metis-gallery:cards", () => listStyleCards());
+  ipcMain.handle("metis-gallery:update-card", (_event, imageId: string, boardId: string, patch: StoredStyleCardPatch) => updateStyleCard(imageId, boardId, patch));
   await createWindow();
 
   // Warm the live registry, model catalog, and Pulse feed on launch so the

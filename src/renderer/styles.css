@@ -6562,8 +6562,7 @@ a:focus-visible,
 .gallery-board-meta button,
 .drop-zone button,
 .marketplace-card button,
-.gallery-board-head > button,
-.link-board {
+.gallery-board-head > button {
   display: inline-flex;
   gap: 7px;
   align-items: center;
@@ -6591,8 +6590,7 @@ a:focus-visible,
 .gallery-board-meta button,
 .drop-zone button,
 .marketplace-card button,
-.gallery-board-head > button,
-.link-board {
+.gallery-board-head > button {
   color: var(--soft);
   background: var(--surface-2);
   border: 1px solid var(--line);
@@ -6603,8 +6601,7 @@ a:focus-visible,
 .stage-actions button:hover,
 .gallery-board-meta button:hover,
 .drop-zone button:hover,
-.gallery-board-head > button:hover,
-.link-board:hover {
+.gallery-board-head > button:hover {
   color: white;
   background: var(--line);
   border-color: var(--line);
@@ -7289,11 +7286,6 @@ a:focus-visible,
   font-weight: 850;
 }
 
-.link-board.active {
-  color: #0c0d10;
-  background: var(--accent);
-  border-color: var(--accent);
-}
 
 .gallery-detail-grid {
   display: grid;
@@ -7497,6 +7489,74 @@ a:focus-visible,
 
 .image-card .tag-row {
   margin-bottom: 12px;
+}
+
+.image-card-media {
+  cursor: pointer;
+}
+
+.image-card.editing {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+
+.image-card-edit-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 11px 12px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.image-card-edit-panel label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.image-card-edit-panel input,
+.image-card-edit-panel textarea {
+  padding: 6px 8px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 12.5px;
+  font-family: inherit;
+}
+
+.image-card-edit-panel textarea {
+  min-height: 56px;
+  resize: vertical;
+}
+
+.image-card-edit-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.image-card-edit-actions button {
+  padding: 5px 12px;
+  color: var(--text);
+  background: var(--accent);
+  border: none;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.image-card-edit-actions button.ghost-action {
+  color: var(--soft);
+  background: transparent;
+  border: 1px solid var(--line);
 }
 
 .board-grid {

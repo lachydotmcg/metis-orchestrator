@@ -142,12 +142,17 @@ export interface DesignSeed {
 export interface StyleCard {
   imageId: string;
   boardId: string;
+  /** Optional human-given title, editable in the gallery board detail view. */
+  title?: string;
   caption: string;
   moodTags: string[];
   palette: string[];
   source: "vision-model" | "palette-only";
   model?: string;
   createdAt: string;
+  /** True once a human has edited title/caption/moodTags for this card — user edits
+   *  outrank model captions in retrieval scoring (docs/FABLE_PLANS.md section 23). */
+  userEdited?: boolean;
 }
 
 export type RegistryPackageKind = "skill" | "mcp" | "preset" | "template" | "pipeline";

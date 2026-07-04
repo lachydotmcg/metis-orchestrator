@@ -378,6 +378,41 @@ CHOSEN route — with key fallback across routes.
   QwQ, Llama 4 Scout/Maverick, R1 distills, Gemma 3/4, gpt-oss). Ids are best-effort — the
   registry PR flow is the correction mechanism.
 
+## 22. The "Is This Done?" loop — local-model self-verification (Lachy, 2026-07-04)
+
+Lachy's idea: a Markov-style critic loop. Because LOCAL tokens are effectively free, every stage
+output can be gated by an auto-prompted local critic — like Claude's constitution but the question
+is "is this DONE?" instead of "is this factual" (though factuality checks fit the same slot).
+
+- **Mechanism:** after each stage (and especially after a local model's output), auto-prompt the
+  local model with a critic template: "Here is the task. Here is the output. Answer JSON:
+  { done: bool, missing: [..] }". If not done → re-prompt the ORIGINAL stage with the missing
+  list appended ("You are not finished. Complete: ..."). Loop until done or cap (e.g. 4 local
+  iterations; 1 for cloud models since their tokens cost).
+- This directly fixes the "local model kinda just gave up" failure mode — qwen stopping halfway
+  through file output would get caught by the critic ("missing: complete style.css") and pushed
+  to continue. It generalizes the existing verify→repair loop from files to ANY completeness.
+- **Chain abstraction:** stage → critic → (re-prompt)* is a Markov chain over states
+  {draft, critiqued, done}; expose the iteration count as slim chat lines ("Self-check 2:
+  still missing the nav styles — continuing.").
+- Config: per-node toggle in the orchestration graph ("Self-verify: off / local / strict"),
+  default ON for local providers.
+
+## 23. Gallery fix list (Lachy, 2026-07-04 — low-token note, action next session)
+
+- **BUG — gemma sees no image:** analyze returned "Please provide the image you would like me to
+  analyze" → the image payload isn't reaching the model. Likely causes to check: the seeded
+  gallery images are `data:image/svg+xml` (gemma can't decode SVG — convert to PNG via
+  `nativeImage` before base64ing), base64 extraction from data URLs (url-encoded svg text is not
+  base64), and whether the ollama call actually populates `images: [<base64>]` for /api/generate
+  vs /api/chat message format. Fix: rasterize everything to PNG ≤1024px via nativeImage, send
+  proper base64, and treat "no visual input" style responses as a detectable failure (retry once,
+  then palette-only).
+- **Editable style cards:** click an image → edit its caption/description and give it a TITLE;
+  edits persist to the style card (and user edits should outrank model captions in retrieval).
+- **Remove the "Linked to orchestration" button** — gallery is always part of orchestration.
+- **Remove "Add sample reference" and ALL seeded sample references** — real images only.
+
 ## 20. Loop-transcript chat polish (Lachy, 2026-07-04)
 
 Lachy loves Claude Code's loop UX: every action ("Searched code", "Ran 2 agents, used 2 tools",

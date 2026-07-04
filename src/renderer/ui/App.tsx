@@ -55,7 +55,6 @@ import {
   ImageIcon,
   ImagePlus,
   Layers,
-  Link2,
   ListTodo,
   LogOut,
   Loader2,
@@ -541,44 +540,19 @@ function fitLabel(fit: Fit): string {
   return fit === "great" ? "Great fit" : fit === "tight" ? "Tight" : fit === "cpu" ? "CPU · slow" : "Needs more VRAM";
 }
 
+// New installs start with a single empty board and no seeded sample images —
+// "Add sample reference" and the demo boards were removed per docs/FABLE_PLANS.md
+// section 23 ("real images only"). Existing stores keep whatever the owner already
+// has; this default only applies when no `galleryBoards` value has been persisted yet.
 const DEFAULT_GALLERY_BOARDS: GalleryBoard[] = [
   {
-    id: "client-websites",
-    title: "Client Websites",
-    description: "Reference direction for frontend and small-business landing pages.",
-    coverImage: makeGalleryThumb("Client Websites", "#151923", "#5865f2"),
-    tags: ["frontend", "client work", "landing pages"],
-    linkedSkill: true,
-    images: [
-      {
-        id: "cw-1",
-        src: makeGalleryThumb("Premium Service", "#101217", "#7c3aed"),
-        title: "Premium service hero",
-        tags: ["hero", "service", "trust"],
-        analysis: "Strong first viewport with concise offer, dark premium contrast, and clear service trust cues."
-      },
-      {
-        id: "cw-2",
-        src: makeGalleryThumb("Local Business", "#0f172a", "#0ea5e9"),
-        title: "Local business proof",
-        tags: ["proof", "reviews", "conversion"],
-        analysis: "Useful pattern for small client sites: proof strip, direct CTA, and low-friction contact flow."
-      },
-      {
-        id: "cw-3",
-        src: makeGalleryThumb("Portfolio Detail", "#18181b", "#22c55e"),
-        title: "Portfolio detail section",
-        tags: ["case study", "layout", "before-after"],
-        analysis: "Good inspiration for showing outcomes without turning the page into a generic template."
-      },
-      {
-        id: "cw-4",
-        src: makeGalleryThumb("Mobile Flow", "#111827", "#f59e0b"),
-        title: "Mobile booking flow",
-        tags: ["mobile", "booking", "forms"],
-        analysis: "Compact mobile-first form rhythm with actions reachable near the bottom of the viewport."
-      }
-    ]
+    id: "references",
+    title: "References",
+    description: "Drop your own design references here to build visual style memory for builds.",
+    coverImage: "",
+    tags: [],
+    linkedSkill: false,
+    images: []
   }
 ];
 
@@ -1269,7 +1243,9 @@ export function App(): JSX.Element {
   const [galleryBoards, setGalleryBoards] = useAppStoreState("galleryBoards", DEFAULT_GALLERY_BOARDS);
   const [pinnedConversationIds, setPinnedConversationIds] = useAppStoreState("pinnedConversationIds", [] as string[]);
   const benchmarkGateLocked = !benchmarkLoaded || benchmarkWizard.status !== "complete";
-  const linkedGallerySkills = useMemo(() => galleryBoards.filter((board) => board.linkedSkill).map((board) => `Gallery: ${board.title}`), [galleryBoards]);
+  // Gallery boards are always part of orchestration now (docs/FABLE_PLANS.md section 23) —
+  // no per-board "linked" toggle, every board's title feeds the skills palette.
+  const linkedGallerySkills = useMemo(() => galleryBoards.map((board) => `Gallery: ${board.title}`), [galleryBoards]);
   const activeStoredConversations = useMemo(() => storedConversations.filter((conversation) => !conversation.archived), [storedConversations]);
   const archivedConversations = useMemo(
     () =>
@@ -6595,6 +6571,11 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   const [cards, setCards] = useState<StyleCard[]>([]);
   const [analyzingBoardId, setAnalyzingBoardId] = useState<string | null>(null);
   const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
+  // Editable style cards (docs/FABLE_PLANS.md section 23): clicking an image opens an inline
+  // edit panel for title/caption/mood tags; edits persist via window.metisGallery.updateCard
+  // and mark the card userEdited so it outranks model captions in retrieval.
+  const [editingImageId, setEditingImageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{ title: string; caption: string; moodTags: string }>({ title: "", caption: "", moodTags: "" });
 
   const refreshCards = useCallback(async () => {
     if (!window.metisGallery) return;
@@ -6626,6 +6607,41 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
     return cards.find((card) => card.boardId === boardId && card.imageId === imageId);
   }
 
+  function openEditor(image: GalleryImage, card: StyleCard | undefined): void {
+    setEditingImageId(image.id);
+    setEditDraft({
+      title: card?.title ?? image.title,
+      caption: card?.caption ?? image.analysis,
+      moodTags: (card?.moodTags ?? image.tags).join(", ")
+    });
+  }
+
+  function closeEditor(): void {
+    setEditingImageId(null);
+  }
+
+  async function saveEditor(boardId: string): Promise<void> {
+    if (!editingImageId) return;
+    const moodTags = editDraft.moodTags
+      .split(",")
+      .map((tag) => tag.trim().toLowerCase())
+      .filter(Boolean);
+    const patch = { title: editDraft.title.trim(), caption: editDraft.caption.trim(), moodTags };
+    if (window.metisGallery) {
+      try {
+        const updated = await window.metisGallery.updateCard(editingImageId, boardId, patch);
+        setCards((current) => {
+          const next = current.filter((card) => card.imageId !== updated.imageId);
+          next.push(updated);
+          return next;
+        });
+      } catch {
+        /* edit still applies locally to the gallery image below even if persistence fails */
+      }
+    }
+    setEditingImageId(null);
+  }
+
   function updateBoard(id: string, patch: Partial<GalleryBoard>): void {
     onBoardsChange((current) => current.map((board) => (board.id === id ? { ...board, ...patch } : board)));
   }
@@ -6638,17 +6654,6 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
       { id, title: "Untitled board", description: "Drop references here and turn them into a route-aware skill.", coverImage: image, images: [], tags: ["new"], linkedSkill: false }
     ]);
     setSelectedId(id);
-  }
-
-  function addSyntheticImage(board: GalleryBoard): void {
-    const nextImage: GalleryImage = {
-      id: `image-${Date.now()}`,
-      src: makeGalleryThumb("Reference", "#171923", "#8b5cf6"),
-      title: "New design reference",
-      tags: ["reference", "analysis pending"],
-      analysis: "Queued for visual analysis. This placeholder will become model-generated design notes."
-    };
-    updateBoard(board.id, { images: [...board.images, nextImage], coverImage: board.coverImage || nextImage.src });
   }
 
   function importFiles(files: FileList | File[], board: GalleryBoard): void {
@@ -6692,10 +6697,6 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
             <small>Board title</small>
             <input value={selectedBoard.title} onChange={(event) => updateBoard(selectedBoard.id, { title: event.target.value })} />
           </label>
-          <button className={`link-board ${selectedBoard.linkedSkill ? "active" : ""}`} type="button" onClick={() => updateBoard(selectedBoard.id, { linkedSkill: !selectedBoard.linkedSkill })}>
-            <Link2 size={15} />
-            {selectedBoard.linkedSkill ? "Linked to Orchestration" : "Link as skill"}
-          </button>
         </section>
 
         {boardCardCount > 0 ? (
@@ -6706,7 +6707,7 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
 
         <section className="gallery-detail-grid">
           <aside className="gallery-board-meta">
-            <img alt="" src={selectedBoard.coverImage} />
+            {selectedBoard.coverImage ? <img alt="" src={selectedBoard.coverImage} /> : null}
             <textarea value={selectedBoard.description} onChange={(event) => updateBoard(selectedBoard.id, { description: event.target.value })} />
             <div className="tag-row">
               {selectedBoard.tags.map((tag) => <span key={tag}>{tag}</span>)}
@@ -6735,25 +6736,35 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
               <ImagePlus size={20} />
               <span>Drop images here, or add a reference</span>
               <button type="button" onClick={() => fileInputRef.current?.click()}>Choose images</button>
-              <button type="button" onClick={() => addSyntheticImage(selectedBoard)}>Add sample reference</button>
               <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={(event) => event.target.files && importFiles(event.target.files, selectedBoard)} />
             </div>
             <div className="image-masonry">
               {selectedBoard.images.map((image) => {
                 const card = cardFor(selectedBoard.id, image.id);
                 const hovered = hoveredImageId === image.id;
+                const isEditing = editingImageId === image.id;
                 return (
                   <article
                     key={image.id}
-                    className="image-card"
+                    className={`image-card ${isEditing ? "editing" : ""}`}
                     onMouseEnter={() => setHoveredImageId(image.id)}
                     onMouseLeave={() => setHoveredImageId((current) => (current === image.id ? null : current))}
                   >
-                    <div className="image-card-media">
+                    <div
+                      className="image-card-media"
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => (isEditing ? closeEditor() : openEditor(image, card))}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") openEditor(image, card);
+                      }}
+                    >
                       <img alt={image.title} src={image.src} />
-                      {card && hovered ? (
+                      {card && hovered && !isEditing ? (
                         <div className="image-card-overlay">
-                          <span className="image-card-source-badge">{card.source === "vision-model" ? card.model ?? "vision model" : "palette"}</span>
+                          <span className="image-card-source-badge">
+                            {card.userEdited ? "edited" : card.source === "vision-model" ? card.model ?? "vision model" : "palette"}
+                          </span>
                           <p className="image-card-caption">{card.caption}</p>
                           <div className="tag-row">
                             {card.moodTags.map((tag) => <span key={tag}>{tag}</span>)}
@@ -6768,11 +6779,44 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
                         ))}
                       </div>
                     ) : null}
-                    <strong>{image.title}</strong>
-                    <p>{image.analysis}</p>
-                    <div className="tag-row">
-                      {image.tags.map((tag) => <span key={tag}>{tag}</span>)}
-                    </div>
+                    {isEditing ? (
+                      <div className="image-card-edit-panel">
+                        <label>
+                          <small>Title</small>
+                          <input
+                            value={editDraft.title}
+                            onChange={(event) => setEditDraft((current) => ({ ...current, title: event.target.value }))}
+                            autoFocus
+                          />
+                        </label>
+                        <label>
+                          <small>Caption / description</small>
+                          <textarea
+                            value={editDraft.caption}
+                            onChange={(event) => setEditDraft((current) => ({ ...current, caption: event.target.value }))}
+                          />
+                        </label>
+                        <label>
+                          <small>Mood tags (comma-separated)</small>
+                          <input
+                            value={editDraft.moodTags}
+                            onChange={(event) => setEditDraft((current) => ({ ...current, moodTags: event.target.value }))}
+                          />
+                        </label>
+                        <div className="image-card-edit-actions">
+                          <button type="button" onClick={() => void saveEditor(selectedBoard.id)}>Save</button>
+                          <button type="button" className="ghost-action" onClick={closeEditor}>Cancel</button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <strong>{card?.title ?? image.title}</strong>
+                        <p>{card?.caption || image.analysis}</p>
+                        <div className="tag-row">
+                          {(card?.moodTags ?? image.tags).map((tag) => <span key={tag}>{tag}</span>)}
+                        </div>
+                      </>
+                    )}
                   </article>
                 );
               })}
@@ -6802,12 +6846,14 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
         {boards.map((board) => (
           <button key={board.id} className="board-card" type="button" onClick={() => setSelectedId(board.id)}>
             <span className="board-collage">
-              {[board.coverImage, ...board.images.slice(0, 3).map((image) => image.src)].slice(0, 4).map((src, index) => <img alt="" key={`${src}-${index}`} src={src} />)}
+              {[board.coverImage, ...board.images.slice(0, 3).map((image) => image.src)]
+                .filter(Boolean)
+                .slice(0, 4)
+                .map((src, index) => <img alt="" key={`${src}-${index}`} src={src} />)}
             </span>
             <span className="board-card-copy">
               <strong>{board.title}</strong>
               <small>{board.images.length} references</small>
-              <em>{board.linkedSkill ? "Linked skill" : "Not linked"}</em>
             </span>
             <span className="tag-row">
               {board.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
