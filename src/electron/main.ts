@@ -3621,6 +3621,58 @@ async function runPreviewRequest(args: {
   return run;
 }
 
+// "Fix the existing site" is an EDIT of the current project, never a rebuild:
+// scratch-building over a user's files is destructive. Explicit fresh-build
+// phrasing opts back out of edit mode.
+function isEditIntent(prompt: string): boolean {
+  if (/\b(from scratch|brand new|new (site|website|app|project|page)|start over|rebuild)\b/i.test(prompt)) return false;
+  return /\b(fix|repair|broken|adjust|tweak|update|change|edit|improve|restyle|refactor|modify|polish|clean ?up)\b/i.test(prompt);
+}
+
+const EDIT_CONTEXT_MAX_FILES = 12;
+const EDIT_CONTEXT_FILE_CAP = 8000;
+const EDIT_CONTEXT_TOTAL_CAP = 48000;
+const EDIT_CONTEXT_SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", "out"]);
+const EDIT_CONTEXT_EXTENSIONS = new Set([".html", ".htm", ".css", ".js", ".mjs", ".cjs", ".json", ".ts", ".tsx", ".jsx", ".svg", ".md"]);
+
+/** Loads the existing project's source files (capped) so edit-mode stages see
+ *  what is actually on disk instead of planning a replacement from nothing. */
+async function readExistingProjectFiles(root: string): Promise<GeneratedFile[]> {
+  const resolvedRoot = resolve(root);
+  const collected: GeneratedFile[] = [];
+  let total = 0;
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (collected.length >= EDIT_CONTEXT_MAX_FILES || depth > 2) return;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (collected.length >= EDIT_CONTEXT_MAX_FILES) return;
+      if (entry.isDirectory()) {
+        if (!EDIT_CONTEXT_SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) await walk(join(dir, entry.name), depth + 1);
+        continue;
+      }
+      if (!EDIT_CONTEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
+      if (entry.name === "package-lock.json" || entry.name.toUpperCase() === "METIS.MD") continue;
+      const full = join(dir, entry.name);
+      try {
+        let content = await readFile(full, "utf8");
+        if (content.length > EDIT_CONTEXT_FILE_CAP) content = `${content.slice(0, EDIT_CONTEXT_FILE_CAP)}\n/* [truncated] */`;
+        if (total + content.length > EDIT_CONTEXT_TOTAL_CAP) return;
+        total += content.length;
+        collected.push({ path: full.slice(resolvedRoot.length + 1).replace(/\\/g, "/"), content });
+      } catch {
+        /* unreadable file — skip */
+      }
+    }
+  }
+  await walk(resolvedRoot, 0);
+  return collected;
+}
+
 // Gate for the full multi-stage build pipeline. Router judgement
 // (decision.task_type) is now the SOLE signal for the non-forced path — no
 // more regex-sniffing the prompt for imperative build verbs. That keyword
@@ -4611,7 +4663,73 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       metisOperations.push(metisOp);
       emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Read METIS.md", operationIds: [metisOp.id] });
     }
-    const { stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode);
+    // EDIT MODE: "fix/change/update the existing site" on a project that has
+    // files must edit those files — never replan a replacement from scratch
+    // (a scratch build here would overwrite the user's work).
+    const editContextFiles = isEditIntent(prompt) && writable ? await readExistingProjectFiles(writable.path) : [];
+    const editMode = editContextFiles.length > 0;
+    let stages: OrchestrationStage[];
+    let designSeed: Awaited<ReturnType<typeof runOrchestratedStages>>["designSeed"] | undefined;
+    if (editMode) {
+      emitTimeline(
+        stream,
+        timelineText(`This reads as an edit to ${writable!.name} — I loaded ${editContextFiles.length} existing files and will change only what's needed. No rebuild, no new design.`)
+      );
+      const readOp: AgentOperation = {
+        id: randomUUID(),
+        kind: "context_load",
+        label: `Read ${editContextFiles.length} project files`,
+        target: writable!.path,
+        status: "complete",
+        charCount: editContextFiles.reduce((sum, file) => sum + file.content.length, 0),
+        permission: "filesystem.read",
+        detail: editContextFiles.map((file) => file.path).join(", ").slice(0, 400)
+      };
+      metisOperations.push(readOp);
+      emitStream(stream, { kind: "operation", operation: readOp });
+      emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Read project files", operationIds: [readOp.id] });
+
+      const { stages: stageConfigs } = await resolveAgenticStages(prompt, input.modelOverride);
+      const editConfig = stageConfigs.find((config) => config.templateRole === "frontend") ?? stageConfigs[0];
+      const fileDump = editContextFiles.map((file) => `\`${file.path}\`\n\`\`\`\n${file.content}\n\`\`\``).join("\n\n");
+      let editPrompt = `You are EDITING an existing project. Do NOT redesign or rebuild it — preserve its current structure, style, and content except where the user's request requires changes.\n\nUser request:\n${prompt}\n\nCurrent project files:\n${fileDump}\n\nReturn ONLY the complete files you changed (full contents, not diffs) — and nothing you did not change. Before each fenced code block, put the file path in backticks on its own line. One short sentence describing the fix, then the files.`;
+      if (metisFile) editPrompt = `${metisFilePromptBlock(metisFile)}\n\n${editPrompt}`;
+      // Stage id "frontend" keeps extraction recovery's existing output lookup working.
+      const editCallContext: StageCallContext = { stream, stageId: "frontend", stageLabel: "Edit existing project" };
+      const attempt = await callStageWithFallback(editConfig.chain, editPrompt, editConfig.gatewayPreference, editCallContext);
+      const cleanOutput = stripThinkBlocks(attempt.output);
+      const editStage: OrchestrationStage = {
+        id: "frontend",
+        label: "Edit existing project",
+        provider: attempt.ref.provider,
+        model: attempt.ref.model,
+        output: cleanOutput,
+        fallbackNotes: attempt.notes,
+        failed: attempt.failed
+      };
+      stages = [editStage];
+      designSeed = undefined;
+      emitStream(stream, { kind: "stage", stage: editStage });
+      emitStream(stream, {
+        kind: "step",
+        step: {
+          id: "frontend",
+          label: `Edit existing project - ${providerInfo[attempt.ref.provider].label}`,
+          detail: editStage.failed ? "All models failed." : `Handled by ${stageModelLabel(attempt.ref)}.`,
+          status: editStage.failed ? "error" : "complete",
+          completedAt: new Date().toISOString()
+        }
+      });
+      emitTimeline(stream, { id: randomUUID(), kind: "stage", stageId: "frontend" });
+      await appendAudit(editStage.failed ? "error" : "info", "session.edit", `Edit stage via ${stageModelLabel(attempt.ref)}.`, {
+        provider: attempt.ref.provider,
+        model: attempt.ref.model,
+        files: editContextFiles.length,
+        failed: editStage.failed
+      });
+    } else {
+      ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode));
+    }
     let files: GeneratedFile[] = [];
     let projectResult: ProjectToolResult | undefined;
     let repairCount = 0;
@@ -4732,7 +4850,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         ...(input.projectPath && !writable ? ["Project folder permission was missing or revoked, so files were written to the app-managed workspace instead."] : []),
         ...(projectResult && !projectResult.verified ? [projectResult.verificationDetail] : [])
       ],
-      designSeed: { id: designSeed.id, name: designSeed.name }
+      designSeed: designSeed ? { id: designSeed.id, name: designSeed.name } : undefined
     };
     if (!projectResult) {
       run.assistantText = "I ran this through the build pipeline, but no complete project files were extracted. I left the folder unchanged.";
