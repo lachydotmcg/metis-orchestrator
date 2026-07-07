@@ -3677,6 +3677,15 @@ function wantsFreshBuild(prompt: string): boolean {
   return /\b(from scratch|brand new|start over|rebuild|replace (everything|it all)|completely new)\b/i.test(prompt);
 }
 
+// A modification request against an EXISTING project ("space out the header",
+// "fix the nav", "add a contact section", "make the hero bigger"). Broad on
+// verbs on purpose — the caller only consults it when the folder actually has
+// files, and shouldRunBuildPipeline's opt-out/question guards run first, so a
+// plain question like "what does the header do?" never trips it.
+function isEditIntent(prompt: string): boolean {
+  return /\b(fix|repair|change|update|tweak|adjust|edit|modify|revise|rework|restyle|refactor|rename|resize|reposition|realign|recolou?r|re-?colour|move|replace|swap|add|remove|delete|insert|improve|polish|clean\s?up|shorten|expand|space\s?out|align|cent(er|re)|make\s+(it|the|them)|give\s+(it|the))\b/i.test(prompt);
+}
+
 const EDIT_CONTEXT_MAX_FILES = 12;
 const EDIT_CONTEXT_FILE_CAP = 8000;
 const EDIT_CONTEXT_TOTAL_CAP = 48000;
@@ -3721,6 +3730,36 @@ async function readExistingProjectFiles(root: string): Promise<GeneratedFile[]> 
   return collected;
 }
 
+/** Cheap presence check for shouldRunBuildPipeline's edit-intent rule — does
+ *  the folder actually have eligible source files, without reading any file
+ *  contents? Mirrors readExistingProjectFiles' skip-dir/extension rules and
+ *  depth cap, but returns on the very first match instead of collecting. */
+async function projectHasSourceFiles(root: string): Promise<boolean> {
+  const resolvedRoot = resolve(root);
+  async function walk(dir: string, depth: number): Promise<boolean> {
+    if (depth > 2) return false;
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) {
+        if (!EDIT_CONTEXT_SKIP_DIRS.has(entry.name) && !entry.name.startsWith(".")) {
+          if (await walk(join(dir, entry.name), depth + 1)) return true;
+        }
+        continue;
+      }
+      if (!EDIT_CONTEXT_EXTENSIONS.has(extname(entry.name).toLowerCase())) continue;
+      if (entry.name === "package-lock.json" || entry.name.toUpperCase() === "METIS.MD") continue;
+      return true;
+    }
+    return false;
+  }
+  return walk(resolvedRoot, 0);
+}
+
 /** Check-first summary line (owner's principle: an ongoing-work tool must
  *  look at the folder before deciding create-vs-edit, not guess from prompt
  *  wording). Called for EVERY build-branch run against a writable workspace,
@@ -3741,9 +3780,16 @@ function projectCheckSummary(files: GeneratedFile[]): string {
 // the opt-out/question guards below. A status question like "Without
 // generating anything, what's the status of my website file?" is still kept
 // out by isBuildOptOut/isBuildQuestionGuard, not by keyword-sniffing.
-function shouldRunBuildPipeline(prompt: string, decision: RouteDecision, decisionSource: PolicyDecisionResult["source"]): boolean {
+function shouldRunBuildPipeline(prompt: string, decision: RouteDecision, decisionSource: PolicyDecisionResult["source"], editableProject: boolean): boolean {
   if (isBuildOptOut(prompt)) return false;
   if (isBuildQuestionGuard(prompt)) return false;
+
+  // An edit request against a folder that already has files always runs the
+  // (edit branch of the) pipeline, even when the router labels it general_chat —
+  // otherwise "space out the header" on a real project falls through to plain
+  // chat and nothing gets edited. The folder-truth gate downstream then sends it
+  // to the non-destructive edit stage (no replan, no new design seed).
+  if (editableProject && isEditIntent(prompt)) return true;
 
   if (decisionSource === "sample") {
     // Offline/sample mode: decision.task_type is a canned placeholder, not a
@@ -4688,8 +4734,15 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     return runPreviewRequest({ input, prompt, conversationId, createdAt, promptHash, decision: effectiveDecisionResult, stream });
   }
 
+  // Hoisted so shouldRunBuildPipeline's edit-intent rule can consult folder
+  // truth (does the selected project actually have files?) before the build
+  // gate decides, and so the build branch below reuses the same resolution
+  // instead of resolving the workspace twice.
+  const writable = await resolveWritableProjectWorkspace(input.projectPath);
+  const editableProject = writable ? await projectHasSourceFiles(writable.path) : false;
+
   // Real multi-model build pipeline (plan -> front end -> functional) for "build me X".
-  if (forceBuildPipeline || shouldRunBuildPipeline(prompt, effectiveDecision, decision.source)) {
+  if (forceBuildPipeline || shouldRunBuildPipeline(prompt, effectiveDecision, decision.source, editableProject)) {
     const singleFile = wantsSingleFileFrontend(prompt);
     emitTimeline(stream, timelineText("I’ll run this through the build pipeline and turn the model output into real project files."));
     if (forceBuildPipeline) {
@@ -4709,7 +4762,6 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         completedAt: new Date().toISOString()
       }
     });
-    const writable = await resolveWritableProjectWorkspace(input.projectPath);
     const metisFile = await loadProjectMetisFile(writable?.path ?? input.projectPath);
     const metisOperations: AgentOperation[] = [];
     if (metisFile) {
