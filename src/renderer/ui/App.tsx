@@ -3694,44 +3694,75 @@ function PreviewRail({
 }
 
 /** One live model-call card (docs/FABLE_PLANS.md §26) — a "side chat" the user
- *  can watch happen: header (status dot, stage, pretty model, route chip),
- *  collapsible to just the header, with the prompt tucked in a <details> and
- *  the output/failure detail in the body. Collapsed by default once resolved
- *  (complete/failed); the active (still "start") call stays expanded so its
- *  activity is visible without a click. */
+ *  can watch happen, restyled as a miniature chat transcript so it reads like
+ *  a real conversation instead of a collapsed log entry:
+ *  - header (status dot, stage, pretty model, route chip) — click to collapse
+ *    to just the header, as before.
+ *  - a compact right-aligned "Router" bubble (the router speaking as the
+ *    user) holding promptPreview, expandable to the fuller `prompt` field
+ *    (capped ~2000 chars server-side) when there's more to show.
+ *  - a left-aligned plain-markdown "AI" reply under the pretty model name.
+ *  - while status is "start", the AI slot shows the shared thinking-dots
+ *    typing indicator instead of output.
+ *  - failures render the failure detail in the AI slot with a warning tint.
+ *  Collapsed by default once resolved (complete/failed); the active (still
+ *  "start") call stays expanded so its activity is visible without a click. */
 function SideChatCard({ call }: { call: StageCallEvent["call"] }): JSX.Element {
   const resolved = call.status !== "start";
   const [expanded, setExpanded] = useState(!resolved);
+  const [promptExpanded, setPromptExpanded] = useState(false);
   useEffect(() => {
     // Auto-expand the moment a card goes live; leave the user's manual
     // collapse/expand choice alone once it's resolved (no snapping shut a
     // card the user opened to read).
     if (!resolved) setExpanded(true);
   }, [resolved]);
+  const hasMorePrompt = Boolean(call.prompt && call.prompt.length > call.promptPreview.length);
+  const modelName = prettyModelName(call.provider, call.model);
   return (
     <div className={`side-chat-card ${call.status}`}>
       <button type="button" className="side-chat-card-head" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
         <ChevronRight className={`stage-caret ${expanded ? "open" : ""}`} size={13} />
         <span className={`side-chat-dot ${call.status}`} aria-hidden="true" />
         <span className="side-chat-stage">{call.stageLabel}</span>
-        <span className="side-chat-model">{prettyModelName(call.provider, call.model)}</span>
+        <span className="side-chat-model">{modelName}</span>
         <span className="side-chat-route">{providerLabel(call.provider)}</span>
       </button>
       {expanded ? (
         <div className="side-chat-card-body">
-          {call.promptPreview ? (
-            <details className="side-chat-prompt">
-              <summary>Prompt</summary>
-              <p>{call.promptPreview}</p>
-            </details>
-          ) : null}
-          {call.status === "failed" ? (
-            <p className="side-chat-failed">{call.detail ?? "This call failed."}</p>
-          ) : call.output ? (
-            <Markdown>{call.output}</Markdown>
-          ) : (
-            <p className="side-chat-pending">Waiting on a response…</p>
-          )}
+          <div className="side-chat-turn side-chat-turn-router">
+            <span className="side-chat-caption">Router</span>
+            <div className="side-chat-bubble side-chat-bubble-router">
+              <p>{promptExpanded && call.prompt ? call.prompt : call.promptPreview}</p>
+            </div>
+            {hasMorePrompt ? (
+              <button type="button" className="side-chat-prompt-toggle" onClick={() => setPromptExpanded((value) => !value)}>
+                {promptExpanded ? "Show less" : "Show full prompt"}
+              </button>
+            ) : null}
+          </div>
+          <div className="side-chat-turn side-chat-turn-ai">
+            <span className="side-chat-caption">{modelName}</span>
+            {call.status === "start" ? (
+              <div className="side-chat-bubble side-chat-bubble-ai">
+                <span className="thinking-dots" aria-label="Waiting on a response">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              </div>
+            ) : call.status === "failed" ? (
+              <div className="side-chat-bubble side-chat-bubble-ai side-chat-bubble-warning">
+                <p className="side-chat-failed">{call.detail ?? "This call failed."}</p>
+              </div>
+            ) : call.output ? (
+              <div className="side-chat-bubble side-chat-bubble-ai">
+                <Markdown>{call.output}</Markdown>
+              </div>
+            ) : (
+              <p className="side-chat-pending">No output.</p>
+            )}
+          </div>
         </div>
       ) : null}
     </div>

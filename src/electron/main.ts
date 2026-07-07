@@ -2051,7 +2051,16 @@ function completeStep(step: SessionPipelineStep, auditId?: string): SessionPipel
   };
 }
 
-function sessionProviderPrompt(prompt: string, decision: RouteDecision, _pipelineName: string, previousRun?: SessionRun | null, projectSnapshot?: ProjectSnapshot, designSeed?: DesignSeed, metisFile?: { content: string; chars: number } | null): string {
+function sessionProviderPrompt(
+  prompt: string,
+  decision: RouteDecision,
+  _pipelineName: string,
+  previousRun?: SessionRun | null,
+  projectSnapshot?: ProjectSnapshot,
+  designSeed?: DesignSeed,
+  metisFile?: { content: string; chars: number } | null,
+  conversationContext?: string | null
+): string {
   const previousSource = previousRun?.providerResult
     ? `Previous response source: ${providerInfo[previousRun.providerResult.provider].label} / ${previousRun.providerResult.model} via ${previousRun.pipelineName}.`
     : previousRun
@@ -2059,6 +2068,7 @@ function sessionProviderPrompt(prompt: string, decision: RouteDecision, _pipelin
       : "";
   return [
     metisFilePromptBlock(metisFile ?? null),
+    conversationContext ? `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}` : "",
     `You are running inside Metis Orchestrator.`,
     `Task type: ${decision.task_type}.`,
     decision.task_type === "coding" ? `You are the selected Back End/Coding Pipeline model for this turn.` : `You are the selected model for this turn.`,
@@ -3319,6 +3329,40 @@ function estimateTokens(value: string): number {
   return Math.max(1, Math.ceil(value.length / 4));
 }
 
+const CONVERSATION_CONTEXT_TURN_CHAR_CAP = 400;
+const CONVERSATION_CONTEXT_TOTAL_CHAR_CAP = 3000;
+
+/** Owner's principle: the pipeline must carry conversation context into every
+ *  model call, not just the raw current prompt — otherwise each turn is a
+ *  fresh one-shot with no memory of what was just discussed. Loads the last
+ *  `maxTurns` turns of the given conversation, formats them "User: ..." /
+ *  "Metis: ...", trims each turn to ~400 chars, and caps the whole block at
+ *  ~3000 chars (dropping oldest turns first) so it stays small enough to
+ *  coexist with the file dump / METIS.md block in a single stage prompt.
+ *  Returns null when there's no conversation id or no turns yet. */
+async function recentConversationContext(conversationId?: string, maxTurns = 6): Promise<string | null> {
+  if (!conversationId) return null;
+  const conversations = await readConversations();
+  const conversation = conversations.find((item) => item.id === conversationId);
+  if (!conversation || conversation.turns.length === 0) return null;
+
+  const recentTurns = conversation.turns.slice(-maxTurns);
+  const lines = recentTurns.map((turn) => {
+    const speaker = turn.role === "user" ? "User" : "Metis";
+    const content = turn.content.length > CONVERSATION_CONTEXT_TURN_CHAR_CAP ? `${turn.content.slice(0, CONVERSATION_CONTEXT_TURN_CHAR_CAP)}...` : turn.content;
+    return `${speaker}: ${content}`;
+  });
+
+  // Total cap: drop oldest lines first if still too big.
+  let block = lines.join("\n");
+  while (block.length > CONVERSATION_CONTEXT_TOTAL_CHAR_CAP && lines.length > 1) {
+    lines.shift();
+    block = lines.join("\n");
+  }
+  if (block.length > CONVERSATION_CONTEXT_TOTAL_CHAR_CAP) block = block.slice(0, CONVERSATION_CONTEXT_TOTAL_CHAR_CAP);
+  return block || null;
+}
+
 type StageModelRef = { provider: ProviderKey; model: string };
 // `gatewayPreference` (docs/FABLE_PLANS.md section 25) is the ordered route
 // preference for this stage's PRIMARY model only (a graph node's "Gateway" +
@@ -3621,12 +3665,16 @@ async function runPreviewRequest(args: {
   return run;
 }
 
-// "Fix the existing site" is an EDIT of the current project, never a rebuild:
-// scratch-building over a user's files is destructive. Explicit fresh-build
-// phrasing opts back out of edit mode.
-function isEditIntent(prompt: string): boolean {
-  if (/\b(from scratch|brand new|new (site|website|app|project|page)|start over|rebuild)\b/i.test(prompt)) return false;
-  return /\b(fix|repair|broken|adjust|tweak|update|change|edit|improve|restyle|refactor|modify|polish|clean ?up)\b/i.test(prompt);
+// Folder-truth gate (owner's principle: check the folder first, edit by
+// default): a non-empty project folder means EDIT unless the user explicitly
+// asks for a from-scratch rebuild. This replaces the old isEditIntent
+// keyword-sniffing gate, which only fired on edit-verb wording and defaulted
+// to a destructive scratch rebuild for anything else (e.g. "add a contact
+// page" used to trigger a full replan). Now the folder's actual contents
+// decide, and a fresh build against a non-empty folder gets a loud warning
+// instead of silently overwriting the user's work.
+function wantsFreshBuild(prompt: string): boolean {
+  return /\b(from scratch|brand new|start over|rebuild|replace (everything|it all)|completely new)\b/i.test(prompt);
 }
 
 const EDIT_CONTEXT_MAX_FILES = 12;
@@ -3671,6 +3719,18 @@ async function readExistingProjectFiles(root: string): Promise<GeneratedFile[]> 
   }
   await walk(resolvedRoot, 0);
   return collected;
+}
+
+/** Check-first summary line (owner's principle: an ongoing-work tool must
+ *  look at the folder before deciding create-vs-edit, not guess from prompt
+ *  wording). Called for EVERY build-branch run against a writable workspace,
+ *  before the create-vs-edit decision — "N files — index.html present" style,
+ *  or "empty folder" when nothing was found. */
+function projectCheckSummary(files: GeneratedFile[]): string {
+  if (files.length === 0) return "empty folder";
+  const hasIndexHtml = files.some((file) => /(^|\/)index\.html$/i.test(file.path));
+  const base = `${files.length} file${files.length === 1 ? "" : "s"}`;
+  return hasIndexHtml ? `${base} — index.html present` : base;
 }
 
 // Gate for the full multi-stage build pipeline. Router judgement
@@ -3873,6 +3933,7 @@ async function callStageWithFallback(
           provider: ref.provider,
           model: ref.model,
           promptPreview: prompt.slice(0, 200),
+          prompt: prompt.slice(0, 2000),
           status: "start"
         }
       });
@@ -4184,7 +4245,8 @@ async function runOrchestratedStages(
   override?: SessionModelOverride,
   projectPath?: string,
   metisFile?: { content: string; chars: number } | null,
-  permissionMode: PermissionMode = "auto"
+  permissionMode: PermissionMode = "auto",
+  conversationContext?: string | null
 ): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed }> {
   const metisBlock = metisFilePromptBlock(metisFile ?? null);
   const singleFile = wantsSingleFileFrontend(prompt);
@@ -4219,6 +4281,7 @@ async function runOrchestratedStages(
     let stagePrompt: string;
     if (stage.templateRole === "plan") {
       stagePrompt = `You are the PLANNING model in a build pipeline. The user wants:\n${prompt}\n\nWrite a short, concrete build plan: the pages/components, the data, and the interactivity. Be tight — no code yet, just the plan.\n\nNever ask the user for a brief, requirements, or say the project is empty. If details are missing, invent tasteful, specific choices yourself (name, copy, palette, content) and state them briefly — you are the creative lead. Do not end with a question asking permission to proceed; proceed.`;
+      if (conversationContext) stagePrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${stagePrompt}`;
     } else if (stage.templateRole === "frontend") {
       stagePrompt = `You are the FRONT-END model. Build the UI for this plan.\n\nPlan:\n${plan}\n\nReturn COMPLETE files, not snippets. Before each fenced code block, put the file path in backticks on its own line (e.g. \`index.html\` or \`public/index.html\`). Keep it clean and minimal — one short sentence of intro, then the files.\n\nAvoid the generic AI look — do not default to purple/violet gradients; choose a distinctive, coherent palette and typography that fit the subject.`;
       // Gallery visual RAG retrieval (docs/FABLE_PLANS.md section 4): the
@@ -4663,13 +4726,40 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       metisOperations.push(metisOp);
       emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Read METIS.md", operationIds: [metisOp.id] });
     }
-    // EDIT MODE: "fix/change/update the existing site" on a project that has
-    // files must edit those files — never replan a replacement from scratch
-    // (a scratch build here would overwrite the user's work).
-    const editContextFiles = isEditIntent(prompt) && writable ? await readExistingProjectFiles(writable.path) : [];
+    // CHECK-FIRST (owner's principle: an ongoing-work tool assumes an existing
+    // project and looks before deciding anything): every build-branch run
+    // against a writable workspace reads the folder FIRST, before create-vs-edit
+    // is decided, and surfaces that check as a visible operation — not just a
+    // silent internal read.
+    const projectCheckFiles = writable ? await readExistingProjectFiles(writable.path) : [];
+    if (writable) {
+      const checkOp: AgentOperation = {
+        id: randomUUID(),
+        kind: "context_load",
+        label: "Checked the project folder",
+        target: writable.path,
+        status: "complete",
+        charCount: projectCheckFiles.reduce((sum, file) => sum + file.content.length, 0),
+        permission: "filesystem.read",
+        detail: projectCheckSummary(projectCheckFiles)
+      };
+      metisOperations.push(checkOp);
+      emitStream(stream, { kind: "operation", operation: checkOp });
+      emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Checked the project folder", detail: projectCheckSummary(projectCheckFiles), operationIds: [checkOp.id] });
+    }
+    // Folder-truth gate: EDIT whenever the folder has files and the user isn't
+    // explicitly demanding a fresh build. A fresh-build request against a
+    // non-empty folder is allowed (the user may genuinely want a redo) but
+    // gets a loud warning first, since it overwrites same-named files.
+    const freshBuildRequested = wantsFreshBuild(prompt);
+    const editContextFiles = !freshBuildRequested && writable ? projectCheckFiles : [];
     const editMode = editContextFiles.length > 0;
+    if (freshBuildRequested && projectCheckFiles.length > 0) {
+      emitTimeline(stream, timelineText(`Building fresh into a non-empty folder — same-named files will be overwritten.`));
+    }
     let stages: OrchestrationStage[];
     let designSeed: Awaited<ReturnType<typeof runOrchestratedStages>>["designSeed"] | undefined;
+    const conversationContext = await recentConversationContext(input.conversationId);
     if (editMode) {
       emitTimeline(
         stream,
@@ -4692,7 +4782,8 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       const { stages: stageConfigs } = await resolveAgenticStages(prompt, input.modelOverride);
       const editConfig = stageConfigs.find((config) => config.templateRole === "frontend") ?? stageConfigs[0];
       const fileDump = editContextFiles.map((file) => `\`${file.path}\`\n\`\`\`\n${file.content}\n\`\`\``).join("\n\n");
-      let editPrompt = `You are EDITING an existing project. Do NOT redesign or rebuild it — preserve its current structure, style, and content except where the user's request requires changes.\n\nUser request:\n${prompt}\n\nCurrent project files:\n${fileDump}\n\nReturn ONLY the complete files you changed (full contents, not diffs) — and nothing you did not change. Before each fenced code block, put the file path in backticks on its own line. One short sentence describing the fix, then the files.`;
+      let editPrompt = `You are EDITING an existing project. Do NOT redesign or rebuild it — preserve its current structure, style, and content except where the user's request requires changes. You may ADD new files (e.g. a new page) alongside changed ones when the request calls for it.\n\nUser request:\n${prompt}\n\nCurrent project files:\n${fileDump}\n\nReturn the complete files you changed or added — and nothing else. Before each fenced code block, put the file path in backticks on its own line. One short sentence describing the change, then the files.`;
+      if (conversationContext) editPrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${editPrompt}`;
       if (metisFile) editPrompt = `${metisFilePromptBlock(metisFile)}\n\n${editPrompt}`;
       // Stage id "frontend" keeps extraction recovery's existing output lookup working.
       const editCallContext: StageCallContext = { stream, stageId: "frontend", stageLabel: "Edit existing project" };
@@ -4728,7 +4819,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         failed: editStage.failed
       });
     } else {
-      ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode));
+      ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode, conversationContext));
     }
     let files: GeneratedFile[] = [];
     let projectResult: ProjectToolResult | undefined;
@@ -4923,7 +5014,8 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // via createFrontendProject), and never overrides explicit user taste.
   const chatDesignSeed = includeProjectTools ? pickDesignSeed(prompt) : undefined;
   if (chatDesignSeed) emitTimeline(stream, timelineText(designSeedTimelineText(chatDesignSeed)));
-  const sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile);
+  const chatConversationContext = await recentConversationContext(input.conversationId);
+  const sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext);
   const overrideWarnings: string[] = [];
   let providerResult: ProviderInvokeResult;
   try {

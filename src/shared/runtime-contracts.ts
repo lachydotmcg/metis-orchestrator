@@ -541,6 +541,10 @@ export type SessionStreamEvent =
         provider: ProviderKey;
         model: string;
         promptPreview: string;
+        /** Fuller prompt text (capped ~2000 chars), carried only on the "start"
+         *  event so the side-chat card's expandable prompt bubble has substance
+         *  beyond the ~200-char promptPreview (docs/FABLE_PLANS.md §26). */
+        prompt?: string;
         status: "start" | "complete" | "failed";
         output?: string;
         detail?: string;
