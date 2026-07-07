@@ -452,6 +452,11 @@ const PROVIDERS: Record<ProviderId, { label: string; logo: string; tier: "cloud"
   nvidia: { label: "NVIDIA NIM", logo: "assets/providers/autorouter.png", tier: "cloud" },
   groq: { label: "Groq", logo: "assets/providers/autorouter.png", tier: "cloud" }
 };
+// nvidia/groq are GATEWAYS (API-key route providers), never standalone model
+// brands in the picker — a model reached through them is expressed as an
+// access route (docs/FABLE_PLANS.md §21/§25b), surfaced on the node Gateway
+// control, not as its own brand here.
+const GATEWAY_ONLY_BRANDS: ProviderId[] = ["nvidia", "groq"];
 const AUTOROUTER_LOGO = "assets/providers/autorouter.png";
 const HEAT_ALPHAS = ["0", "0.18", "0.38", "0.62", "1"];
 
@@ -494,8 +499,6 @@ const MODEL_LIBRARY: ModelRef[] = [
   { provider: "grok", model: "Grok 4" },
   { provider: "deepseek", model: "V3" },
   { provider: "deepseek", model: "R1" },
-  { provider: "nvidia", model: "DeepSeek V3.1 (NVIDIA)" },
-  { provider: "groq", model: "Llama 3.3 70B" },
   { provider: "qwen", model: "Qwen2.5 72B" },
   { provider: "qwen", model: "Qwen3 4B" },
   { provider: "glm", model: "GLM-4.6" }
@@ -2663,6 +2666,7 @@ function NewSessionWorkspace({
       { tier: "local", label: "Local", brands: [] }
     ];
     (Object.keys(PROVIDERS) as ProviderId[]).forEach((provider) => {
+      if (GATEWAY_ONLY_BRANDS.includes(provider)) return;
       const models = all.filter(
         (ref) => ref.provider === provider && (!query || ref.model.toLowerCase().includes(query) || PROVIDERS[provider].label.toLowerCase().includes(query))
       );
