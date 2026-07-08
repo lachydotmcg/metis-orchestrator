@@ -353,7 +353,52 @@ type AppSettings = {
   subscriptionMode: "bring-your-own-key" | "metis-subscription";
   defaultPreset: "balanced" | "local_first" | "best_quality" | "cheapest" | "private";
   rawPromptStorage: "local-only" | "hash-only";
+  /** Settings > Chat section (docs/FABLE_PLANS.md settings rebuild) — how much
+   *  of the routing/operation ceremony shows up in the side-chat stack. */
+  chatVerbosity: "minimal" | "normal" | "verbose";
+  /** Settings > Chat — whether new runs prefer `metisSession.runStream` over
+   *  the non-streaming `run` fallback when both are available. */
+  streamingEnabled: boolean;
 };
+
+/** Settings > Appearance — one root accent + its readable on-accent text
+ *  color, applied as CSS custom properties on <html> so every existing
+ *  `var(--accent)` usage across styles.css picks it up live, app-wide. */
+type AccentPreset = { id: string; label: string; hex: string; textHex: string };
+const ACCENT_PRESETS: AccentPreset[] = [
+  { id: "slate", label: "Slate", hex: "#aeb7c6", textHex: "#14161b" },
+  { id: "amber", label: "Amber", hex: "#e0a458", textHex: "#1c1206" },
+  { id: "violet", label: "Violet", hex: "#9c8cff", textHex: "#15111f" },
+  { id: "teal", label: "Teal", hex: "#5fb8ad", textHex: "#08201c" },
+  { id: "rose", label: "Rose", hex: "#d98a99", textHex: "#210b10" }
+];
+
+type AppearanceSettings = {
+  accent: string;
+  density: "comfortable" | "compact";
+  fontSize: "small" | "normal" | "large";
+};
+const DEFAULT_APPEARANCE: AppearanceSettings = { accent: "slate", density: "comfortable", fontSize: "normal" };
+const FONT_SCALE: Record<AppearanceSettings["fontSize"], string> = { small: "0.93", normal: "1", large: "1.08" };
+
+/** Applies a persisted Appearance choice to the document root so it takes
+ *  effect app-wide (not just while the Settings screen is mounted) — called
+ *  once from App() on load and again from SettingsWorkspace whenever the
+ *  owner changes a control. Reversible: "Reset to default" just re-runs this
+ *  with DEFAULT_APPEARANCE. */
+function applyAppearance(appearance: AppearanceSettings): void {
+  if (typeof document === "undefined") return;
+  const preset = ACCENT_PRESETS.find((item) => item.id === appearance.accent) ?? ACCENT_PRESETS[0];
+  const root = document.documentElement;
+  root.style.setProperty("--accent", preset.hex);
+  root.style.setProperty("--accent-text", preset.textHex);
+  root.classList.toggle("density-compact", appearance.density === "compact");
+  // The stylesheet uses fixed px sizes rather than rem, so a true
+  // font-size-only cascade isn't wired without a broader CSS pass — `zoom`
+  // (Electron/Chromium-only, safe here) gives the same real, reversible
+  // "small/normal/large" effect across the whole renderer.
+  document.body.style.zoom = FONT_SCALE[appearance.fontSize];
+}
 
 type ConversationTurn = {
   id: string;
@@ -645,7 +690,9 @@ const DEFAULT_SETTINGS: AppSettings = {
   language: "en",
   subscriptionMode: "bring-your-own-key",
   defaultPreset: "balanced",
-  rawPromptStorage: "local-only"
+  rawPromptStorage: "local-only",
+  chatVerbosity: "normal",
+  streamingEnabled: true
 };
 const PROVIDER_KEYS: ProviderKey[] = ["ollama", "anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
 const PROVIDER_LABELS: Record<ProviderKey, string> = {
@@ -1419,12 +1466,28 @@ export function App(): JSX.Element {
   useEffect(() => {
     void Promise.all([
       readAppStore("marketplaceState", DEFAULT_MARKETPLACE_STATE).then((value) => writeAppStore("marketplaceState", value)),
-      readAppStore("settings", DEFAULT_SETTINGS).then((value) => writeAppStore("settings", value))
+      readAppStore("settings", DEFAULT_SETTINGS).then((value) => writeAppStore("settings", value)),
+      // Settings > Appearance persists here (docs/FABLE_PLANS.md settings
+      // rebuild) — apply it once on every app load so a chosen accent/density/
+      // font-size takes effect immediately, not only while Settings is open.
+      readAppStore("appearance", DEFAULT_APPEARANCE).then((value) => {
+        const merged = { ...DEFAULT_APPEARANCE, ...value };
+        applyAppearance(merged);
+        return writeAppStore("appearance", merged);
+      })
     ]);
     if (window.metisConversations) {
       void window.metisConversations.list().then(setStoredConversations);
     }
   }, []);
+
+  /** Settings > MCP servers "Add more" — stages the Marketplace's MCP filter
+   *  in the shared `marketplaceState` store key before navigating, so the tab
+   *  opens straight onto the MCP category (MarketplaceWorkspace reads this
+   *  key itself on mount; no new bridge needed). */
+  function openMcpMarketplace(): void {
+    void writeAppStore("marketplaceState", { category: "mcp", query: "" } as MarketplaceState).then(() => setActiveNav("marketplace"));
+  }
 
   useEffect(() => {
     if (!benchmarkLoaded) {
@@ -1500,7 +1563,9 @@ export function App(): JSX.Element {
       {activeNav === "todo" ? <TodoWorkspace storedConversations={storedConversations} /> : null}
       {activeNav === "manager" ? <ManagerWorkspace onNavigate={setActiveNav} /> : null}
       {activeNav === "pulse" ? <PulseWorkspace /> : null}
-      {activeNav === "settings" ? <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} /> : null}
+      {activeNav === "settings" ? (
+        <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} onOpenMcpMarketplace={openMcpMarketplace} />
+      ) : null}
       {activeNav !== "session" && activeNav !== "graph" && activeNav !== "benchmark" && activeNav !== "gallery" && activeNav !== "marketplace" && activeNav !== "routines" && activeNav !== "todo" && activeNav !== "manager" && activeNav !== "pulse" && activeNav !== "settings" ? (
         <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} galleryVisuals={galleryVisuals} />
       ) : null}
@@ -10828,11 +10893,48 @@ function ManagerWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void })
   );
 }
 
-function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
-  const [settings, setSettings] = useAppStoreState("settings", DEFAULT_SETTINGS);
+/** Settings left-rail section keys — Claude-Code-specific tabs with no
+ *  backing bridge (Profile, Configuration, Personalization, Browser, Computer
+ *  use, Hooks, Git, Worktrees) were dropped; every section below renders real
+ *  content wired to an existing store key or window bridge. */
+type SettingsSection = "general" | "providers" | "appearance" | "chat" | "mcp" | "privacy" | "about";
+
+const SETTINGS_NAV: Array<{ group: string; icon: JSX.Element; label: string; section: SettingsSection }> = [
+  { group: "Personal", icon: <ShieldCheck size={15} />, label: "General", section: "general" },
+  { group: "Personal", icon: <Sparkles size={15} />, label: "Appearance", section: "appearance" },
+  { group: "Personal", icon: <MessageCircle size={15} />, label: "Chat", section: "chat" },
+  { group: "Integrations", icon: <Cable size={15} />, label: "Providers", section: "providers" },
+  { group: "Integrations", icon: <Plug size={15} />, label: "MCP servers", section: "mcp" },
+  { group: "System", icon: <Shield size={15} />, label: "Privacy & Data", section: "privacy" },
+  { group: "System", icon: <HelpCircle size={15} />, label: "About", section: "about" }
+];
+
+const SETTINGS_SECTION_META: Record<SettingsSection, { subtitle: string; title: string }> = {
+  general: { title: "General", subtitle: "Runtime defaults, policy bridge, permissions, marketplace registry, and audit trail." },
+  providers: { title: "Providers", subtitle: "Provider-level API keys and health checks used by every route." },
+  appearance: { title: "Appearance", subtitle: "Accent color, density, and text size — applied app-wide, not just here." },
+  chat: { title: "Chat", subtitle: "Route ceremony verbosity, streaming, and self-verification for new runs." },
+  mcp: { title: "MCP servers", subtitle: "Installed Model Context Protocol connections available to routes." },
+  privacy: { title: "Privacy & Data", subtitle: "What gets stored locally, audit retention, and data controls." },
+  about: { title: "About", subtitle: "App version, update check, and project links." }
+};
+
+function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => void; onOpenMcpMarketplace: () => void }): JSX.Element {
+  const [section, setSection] = useState<SettingsSection>("general");
+  const [navQuery, setNavQuery] = useState("");
+  const [rawSettings, setSettings] = useAppStoreState("settings", DEFAULT_SETTINGS);
+  // Backfills fields added to AppSettings after a store blob was already
+  // persisted on disk (useAppStoreState replaces wholesale, it doesn't deep-
+  // merge) — without this, an existing install upgrading to this build would
+  // see chatVerbosity/streamingEnabled render as an empty "Select" control.
+  const settings = useMemo(() => ({ ...DEFAULT_SETTINGS, ...rawSettings }), [rawSettings]);
+  const [rawAppearance, setAppearance] = useAppStoreState("appearance", DEFAULT_APPEARANCE);
+  const appearance = useMemo(() => ({ ...DEFAULT_APPEARANCE, ...rawAppearance }), [rawAppearance]);
   // "Is this done?" critic loop (docs/FABLE_PLANS.md §22) — a top-level store
   // key (not nested in AppSettings) since main.ts reads it directly by name.
   const [selfVerify, setSelfVerify] = useAppStoreState<"off" | "local" | "all">("selfVerify", "local");
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  const [updateBusy, setUpdateBusy] = useState(false);
   const [policyStatus, setPolicyStatus] = useState<PolicyStatus>(FALLBACK_POLICY_STATUS);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
@@ -10847,6 +10949,12 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null);
   const secretMap = useMemo(() => new Map(secrets.map((secret) => [secret.provider, secret])), [secrets]);
   const installedIds = useMemo(() => new Set(installedPackages.map((item) => item.id)), [installedPackages]);
+  const mcpPackages = useMemo(() => installedPackages.filter((item) => item.kind === "mcp"), [installedPackages]);
+  const filteredNav = useMemo(() => {
+    const query = navQuery.trim().toLowerCase();
+    return query ? SETTINGS_NAV.filter((item) => item.label.toLowerCase().includes(query)) : SETTINGS_NAV;
+  }, [navQuery]);
+  const navGroups = useMemo(() => Array.from(new Set(filteredNav.map((item) => item.group))), [filteredNav]);
 
   const refreshRuntime = useCallback(async () => {
     const [nextPolicy, nextProviders, nextSecrets, nextPermissions, nextAudit, nextRegistry, nextInstalled] = await Promise.all([
@@ -10885,6 +10993,36 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
   function updateSetting<K extends keyof AppSettings>(key: K, value: AppSettings[K]): void {
     setSettings((current) => ({ ...current, [key]: value }));
   }
+
+  // Re-apply live whenever the Appearance section changes anything (the App()
+  // mount effect covers the initial app-wide apply on load — this keeps it in
+  // sync while Settings stays open, e.g. after "Reset to default").
+  useEffect(() => {
+    applyAppearance(appearance);
+  }, [appearance]);
+
+  function updateAppearance<K extends keyof AppearanceSettings>(key: K, value: AppearanceSettings[K]): void {
+    setAppearance((current) => ({ ...current, [key]: value }));
+  }
+
+  function resetAppearance(): void {
+    setAppearance(DEFAULT_APPEARANCE);
+  }
+
+  const checkForUpdates = useCallback(async () => {
+    if (!window.metisUpdates) return;
+    setUpdateBusy(true);
+    try {
+      const result = await window.metisUpdates.check();
+      setUpdateCheck(result);
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void checkForUpdates();
+  }, [checkForUpdates]);
 
   async function saveSecret(provider: ProviderKey): Promise<void> {
     const value = secretDrafts[provider]?.trim();
@@ -10967,43 +11105,32 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
         </button>
         <label className="settings-search">
           <Search size={14} />
-          <input placeholder="Search settings..." />
+          <input placeholder="Search settings..." value={navQuery} onChange={(event) => setNavQuery(event.target.value)} />
         </label>
-        <SettingsNavGroup
-          title="Personal"
-          items={[
-            { label: "General", icon: <ShieldCheck size={15} />, active: true },
-            { label: "Profile", icon: <Bot size={15} /> },
-            { label: "Appearance", icon: <Sparkles size={15} /> },
-            { label: "Configuration", icon: <Wand2 size={15} /> },
-            { label: "Personalization", icon: <Star size={15} /> }
-          ]}
-        />
-        <SettingsNavGroup
-          title="Integrations"
-          items={[
-            { label: "MCP servers", icon: <Plug size={15} /> },
-            { label: "Browser", icon: <Monitor size={15} /> },
-            { label: "Computer use", icon: <Cpu size={15} /> }
-          ]}
-        />
-        <SettingsNavGroup
-          title="Coding"
-          items={[
-            { label: "Hooks", icon: <GitBranch size={15} /> },
-            { label: "Connections", icon: <Cable size={15} /> },
-            { label: "Git", icon: <GitBranch size={15} /> },
-            { label: "Worktrees", icon: <Folder size={15} /> }
-          ]}
-        />
+        {navGroups.map((group) => (
+          <SettingsNavGroup
+            key={group}
+            title={group}
+            items={filteredNav
+              .filter((item) => item.group === group)
+              .map((item) => ({
+                label: item.label,
+                icon: item.icon,
+                active: item.section === section,
+                onClick: () => setSection(item.section)
+              }))}
+          />
+        ))}
+        {filteredNav.length === 0 ? <p className="settings-nav-empty">No settings match "{navQuery}".</p> : null}
       </aside>
 
       <section className="settings-content">
         <header className="settings-title">
-          <h1>General</h1>
-          <p>Runtime defaults, provider keys, permissions, policy bridge, marketplace registry, and audit trail.</p>
+          <h1>{SETTINGS_SECTION_META[section].title}</h1>
+          <p>{SETTINGS_SECTION_META[section].subtitle}</p>
         </header>
 
+      {section === "general" ? (
       <section className="settings-grid">
         <article className="settings-panel policy-panel">
           <header>
@@ -11063,18 +11190,6 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
               />
             </label>
             <label className="settings-field">
-              <span>Prompt storage</span>
-              <CustomSelect
-                ariaLabel="Prompt storage"
-                value={settings.rawPromptStorage}
-                onChange={(value) => updateSetting("rawPromptStorage", value as AppSettings["rawPromptStorage"])}
-                options={[
-                  { value: "local-only", label: "Local raw prompts", hint: "Stored only on this machine" },
-                  { value: "hash-only", label: "Hash only", hint: "Keep a fingerprint, drop the text" }
-                ]}
-              />
-            </label>
-            <label className="settings-field">
               <span>API access</span>
               <CustomSelect
                 ariaLabel="API access"
@@ -11090,65 +11205,11 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
               <span>Language</span>
               <input value={settings.language} onChange={(event) => updateSetting("language", event.target.value)} />
             </label>
-            <label className="settings-field">
-              <span>Self-verification</span>
-              <CustomSelect
-                ariaLabel="Self-verification"
-                value={selfVerify}
-                onChange={(value) => setSelfVerify(value as "off" | "local" | "all")}
-                options={[
-                  { value: "off", label: "Off", hint: "Never critique stage output" },
-                  { value: "local", label: "Local models", hint: "Local tokens are free — critique those stages" },
-                  { value: "all", label: "All models", hint: "Also critique cloud model stages" }
-                ]}
-              />
-            </label>
           </div>
           <label className="settings-field wide">
             <span>Global instructions</span>
             <textarea value={settings.globalInstructions} placeholder="Optional instructions every route should know." onChange={(event) => updateSetting("globalInstructions", event.target.value)} />
           </label>
-        </article>
-
-        <article className="settings-panel providers-panel">
-          <header>
-            <span>
-              <small>Providers</small>
-              <h2>Provider-level keys</h2>
-            </span>
-            <span className="status-pill">{providers.filter((provider) => provider.configured).length}/{PROVIDER_KEYS.length}</span>
-          </header>
-          <div className="provider-list">
-            {PROVIDER_KEYS.map((provider) => {
-              const status = providers.find((item) => item.provider === provider);
-              const secret = secretMap.get(provider);
-              return (
-                <div className="provider-row" key={provider}>
-                  <span>
-                    <strong>{status?.label ?? PROVIDER_LABELS[provider]}</strong>
-                    <small>{status?.detail ?? "Waiting for Electron runtime."}</small>
-                  </span>
-                  {provider !== "ollama" ? (
-                    <input
-                      type="password"
-                      value={secretDrafts[provider] ?? ""}
-                      placeholder={secret?.hasSecret ? "Key saved" : "Paste API key"}
-                      onChange={(event) => setSecretDrafts((current) => ({ ...current, [provider]: event.target.value }))}
-                    />
-                  ) : null}
-                  <div className="provider-actions">
-                    <button type="button" onClick={() => void healthCheck(provider)} disabled={busy === `health-${provider}`}>Check</button>
-                    {provider !== "ollama" ? (
-                      <>
-                        <button type="button" onClick={() => void saveSecret(provider)} disabled={!secretDrafts[provider]?.trim() || busy === `secret-${provider}`}>Save</button>
-                        <button type="button" onClick={() => void clearSecret(provider)} disabled={!secret?.hasSecret || busy === `secret-${provider}`}>Clear</button>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
         </article>
 
         <article className="settings-panel permissions-panel">
@@ -11261,6 +11322,318 @@ function SettingsWorkspace({ onBack }: { onBack: () => void }): JSX.Element {
           </div>
         </article>
       </section>
+      ) : null}
+
+      {section === "providers" ? (
+      <section className="settings-grid">
+        <article className="settings-panel providers-panel">
+          <header>
+            <span>
+              <small>Providers</small>
+              <h2>Provider-level keys</h2>
+            </span>
+            <span className="status-pill">{providers.filter((provider) => provider.configured).length}/{PROVIDER_KEYS.length}</span>
+          </header>
+          <div className="provider-list">
+            {PROVIDER_KEYS.map((provider) => {
+              const status = providers.find((item) => item.provider === provider);
+              const secret = secretMap.get(provider);
+              return (
+                <div className="provider-row" key={provider}>
+                  <span>
+                    <strong>{status?.label ?? PROVIDER_LABELS[provider]}</strong>
+                    <small>{status?.detail ?? "Waiting for Electron runtime."}</small>
+                  </span>
+                  {provider !== "ollama" ? (
+                    <input
+                      type="password"
+                      value={secretDrafts[provider] ?? ""}
+                      placeholder={secret?.hasSecret ? "Key saved" : "Paste API key"}
+                      onChange={(event) => setSecretDrafts((current) => ({ ...current, [provider]: event.target.value }))}
+                    />
+                  ) : null}
+                  <div className="provider-actions">
+                    <button type="button" onClick={() => void healthCheck(provider)} disabled={busy === `health-${provider}`}>Check</button>
+                    {provider !== "ollama" ? (
+                      <>
+                        <button type="button" onClick={() => void saveSecret(provider)} disabled={!secretDrafts[provider]?.trim() || busy === `secret-${provider}`}>Save</button>
+                        <button type="button" onClick={() => void clearSecret(provider)} disabled={!secret?.hasSecret || busy === `secret-${provider}`}>Clear</button>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </article>
+      </section>
+      ) : null}
+
+      {section === "appearance" ? (
+      <section className="settings-grid">
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Theme</small>
+              <h2>Accent color</h2>
+            </span>
+          </header>
+          <div className="settings-field wide">
+            <div className="accent-swatches">
+              {ACCENT_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  type="button"
+                  className={`accent-swatch ${appearance.accent === preset.id ? "active" : ""}`}
+                  style={{ background: preset.hex }}
+                  aria-label={preset.label}
+                  aria-pressed={appearance.accent === preset.id}
+                  title={preset.label}
+                  onClick={() => updateAppearance("accent", preset.id)}
+                >
+                  {appearance.accent === preset.id ? <Check size={14} color={preset.textHex} /> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="settings-two">
+            <label className="settings-field">
+              <span>Density</span>
+              <CustomSelect
+                ariaLabel="Density"
+                value={appearance.density}
+                onChange={(value) => updateAppearance("density", value as AppearanceSettings["density"])}
+                options={[
+                  { value: "comfortable", label: "Comfortable", hint: "More breathing room" },
+                  { value: "compact", label: "Compact", hint: "Tighter rows and panels" }
+                ]}
+              />
+            </label>
+            <label className="settings-field">
+              <span>Text size</span>
+              <CustomSelect
+                ariaLabel="Text size"
+                value={appearance.fontSize}
+                onChange={(value) => updateAppearance("fontSize", value as AppearanceSettings["fontSize"])}
+                options={[
+                  { value: "small", label: "Small" },
+                  { value: "normal", label: "Normal" },
+                  { value: "large", label: "Large" }
+                ]}
+              />
+            </label>
+          </div>
+          <div className="settings-actions">
+            <button type="button" onClick={resetAppearance}>
+              <RotateCcw size={15} />
+              Reset to default
+            </button>
+          </div>
+        </article>
+      </section>
+      ) : null}
+
+      {section === "chat" ? (
+      <section className="settings-grid">
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Ceremony</small>
+              <h2>Route &amp; verification verbosity</h2>
+            </span>
+          </header>
+          <div className="settings-two">
+            <label className="settings-field">
+              <span>Route ceremony</span>
+              <CustomSelect
+                ariaLabel="Route ceremony"
+                value={settings.chatVerbosity}
+                onChange={(value) => updateSetting("chatVerbosity", value as AppSettings["chatVerbosity"])}
+                options={[
+                  { value: "minimal", label: "Minimal", hint: "Just the final answer" },
+                  { value: "normal", label: "Normal", hint: "Stage and operation cards" },
+                  { value: "verbose", label: "Verbose", hint: "Every side-chat call, unfiltered" }
+                ]}
+              />
+            </label>
+            <label className="settings-field">
+              <span>Self-verification</span>
+              <CustomSelect
+                ariaLabel="Self-verification"
+                value={selfVerify}
+                onChange={(value) => setSelfVerify(value as "off" | "local" | "all")}
+                options={[
+                  { value: "off", label: "Off", hint: "Never critique stage output" },
+                  { value: "local", label: "Local models", hint: "Local tokens are free — critique those stages" },
+                  { value: "all", label: "All models", hint: "Also critique cloud model stages" }
+                ]}
+              />
+            </label>
+          </div>
+          <label className="settings-field toggle-field">
+            <span>Streaming responses</span>
+            <button
+              type="button"
+              className={`toggle-switch ${settings.streamingEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={settings.streamingEnabled}
+              onClick={() => updateSetting("streamingEnabled", !settings.streamingEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">Prefers live `runStream` updates when the Electron bridge supports it; off falls back to a single non-streaming response per run.</p>
+        </article>
+      </section>
+      ) : null}
+
+      {section === "mcp" ? (
+      <section className="settings-grid">
+        <article className="settings-panel mcp-panel">
+          <header>
+            <span>
+              <small>Connections</small>
+              <h2>Installed MCP servers</h2>
+            </span>
+            <span className="status-pill">{mcpPackages.length} installed</span>
+          </header>
+          {mcpPackages.length === 0 ? (
+            <p>No MCP servers installed — add one from the Marketplace.</p>
+          ) : (
+            <div className="registry-list">
+              {mcpPackages.map((item) => (
+                <div className="registry-row registry-row-detailed" key={item.id}>
+                  <span>
+                    <strong>{item.name}</strong>
+                    <small>{item.publisher} · v{item.version}</small>
+                    {item.description ? <p className="registry-description">{item.description}</p> : null}
+                    {item.source_url ? <code>{item.source_url}</code> : null}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {!window.metisRegistry ? <p className="settings-warning">Electron registry bridge unavailable in this preview — showing local state only.</p> : null}
+          <div className="settings-actions">
+            <button type="button" onClick={onOpenMcpMarketplace}>
+              <Plug size={15} />
+              Add from Marketplace
+            </button>
+          </div>
+        </article>
+      </section>
+      ) : null}
+
+      {section === "privacy" ? (
+      <section className="settings-grid">
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Prompts</small>
+              <h2>Local storage</h2>
+            </span>
+          </header>
+          <label className="settings-field wide">
+            <span>Prompt storage</span>
+            <CustomSelect
+              ariaLabel="Prompt storage"
+              value={settings.rawPromptStorage}
+              onChange={(value) => updateSetting("rawPromptStorage", value as AppSettings["rawPromptStorage"])}
+              options={[
+                { value: "local-only", label: "Local raw prompts", hint: "Stored only on this machine" },
+                { value: "hash-only", label: "Hash only", hint: "Keep a fingerprint, drop the text" }
+              ]}
+            />
+          </label>
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Audit</small>
+              <h2>Retention</h2>
+            </span>
+          </header>
+          <p>The audit trail keeps the most recent events emitted by the policy bridge, permissions, and marketplace actions — there's no separate retention window yet, events just age out as new ones arrive.</p>
+          <div className="settings-actions">
+            <button type="button" onClick={() => setSection("general")}>
+              <ScrollText size={15} />
+              View audit in General
+            </button>
+          </div>
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Data controls</small>
+              <h2>Export &amp; wipe</h2>
+            </span>
+          </header>
+          <p>No bridge exposes a bulk conversation export or full-data wipe yet — only per-conversation delete/archive (from each conversation's own menu). These stay disabled rather than fake a working action.</p>
+          <div className="settings-actions">
+            <button type="button" disabled title="No export bridge available yet">
+              <Download size={15} />
+              Export all data
+            </button>
+            <button type="button" disabled title="No wipe bridge available yet">
+              <Trash2 size={15} />
+              Wipe local data
+            </button>
+          </div>
+        </article>
+      </section>
+      ) : null}
+
+      {section === "about" ? (
+      <section className="settings-grid">
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Version</small>
+              <h2>{updateCheck?.currentVersion ? `Metis Orchestrator v${updateCheck.currentVersion}` : "Metis Orchestrator"}</h2>
+            </span>
+          </header>
+          {!window.metisUpdates ? <p>Update bridge unavailable in this preview build.</p> : null}
+          {updateCheck?.updateAvailable ? (
+            <p className="settings-warning">v{updateCheck.latestVersion ?? "a newer version"} is available.</p>
+          ) : updateCheck ? (
+            <p>You're on the latest version.</p>
+          ) : null}
+          <div className="settings-actions">
+            <button type="button" onClick={() => void checkForUpdates()} disabled={updateBusy || !window.metisUpdates}>
+              <RefreshCw size={15} />
+              Check for updates
+            </button>
+            {updateCheck?.url ? (
+              <button type="button" onClick={() => openExternal(updateCheck.url!)}>
+                <ExternalLink size={15} />
+                Release notes
+              </button>
+            ) : null}
+          </div>
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Links</small>
+              <h2>Project</h2>
+            </span>
+          </header>
+          <div className="settings-actions">
+            <button type="button" onClick={() => openExternal(METIS_REPO_URL)}>
+              <Github size={15} />
+              GitHub repository
+            </button>
+            <button type="button" onClick={onOpenMcpMarketplace}>
+              <Plug size={15} />
+              Marketplace / MCP registry
+            </button>
+          </div>
+        </article>
+      </section>
+      ) : null}
       </section>
     </main>
   );
@@ -11270,14 +11643,14 @@ function SettingsNavGroup({
   items,
   title
 }: {
-  items: Array<{ active?: boolean; icon: JSX.Element; label: string }>;
+  items: Array<{ active?: boolean; icon: JSX.Element; label: string; onClick?: () => void }>;
   title: string;
 }): JSX.Element {
   return (
     <section className="settings-nav-group">
       <span>{title}</span>
       {items.map((item) => (
-        <button className={item.active ? "active" : ""} key={item.label} type="button">
+        <button className={item.active ? "active" : ""} key={item.label} type="button" onClick={item.onClick}>
           {item.icon}
           <strong>{item.label}</strong>
         </button>

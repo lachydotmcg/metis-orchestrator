@@ -16,6 +16,7 @@
   --muted: #8a8a8a;
   --faint: #6f6f6f;
   --accent: #aeb7c6;
+  --accent-text: #14161b; /* readable text/icon color on top of --accent (Settings > Appearance) */
   --green: #7f8ba0;
   --violet: #9c8cff;
   --node: #181818;
@@ -7468,6 +7469,135 @@ button.pulse-tile:hover {
 
 .settings-warning {
   color: #ffd8a3 !important;
+}
+
+/* ---- Settings > Search (nav filter empty state) ---- */
+
+.settings-nav-empty {
+  margin: 2px 8px 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+/* ---- Settings > Appearance ---- */
+
+.accent-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.accent-swatch {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 120ms ease;
+}
+
+.accent-swatch:hover {
+  transform: scale(1.08);
+}
+
+.accent-swatch.active {
+  border-color: var(--text);
+  box-shadow: 0 0 0 2px var(--bg), 0 0 0 3px var(--line);
+}
+
+/* ---- Settings > Chat (streaming toggle) ---- */
+
+.toggle-field {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.toggle-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 22px;
+  padding: 0;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.toggle-switch.on {
+  background: var(--accent, #7c8aff);
+  border-color: var(--accent, #7c8aff);
+}
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  background: white;
+  border-radius: 999px;
+  transition: left 150ms ease;
+}
+
+.toggle-switch.on .toggle-knob {
+  left: 18px;
+}
+
+/* ---- Settings > Appearance "Compact" density ----
+   Scoped to the panes that are guaranteed on-screen (Settings itself, the
+   main sidebar) rather than a full app-wide CSS pass. Real and reversible,
+   not exhaustive. */
+
+html.density-compact .settings-left {
+  gap: 6px;
+  padding: 8px 6px;
+}
+
+html.density-compact .settings-nav-group button {
+  min-height: 25px;
+}
+
+html.density-compact .settings-content {
+  padding: 60px 0 60px;
+}
+
+html.density-compact .settings-grid {
+  gap: 12px;
+}
+
+html.density-compact .settings-panel {
+  gap: 10px;
+}
+
+html.density-compact .settings-panel header {
+  padding: 10px 10px 0;
+}
+
+html.density-compact .settings-panel > p,
+html.density-compact .settings-panel > code,
+html.density-compact .settings-panel > .settings-field,
+html.density-compact .settings-panel > .settings-actions,
+html.density-compact .settings-panel > .settings-two,
+html.density-compact .settings-panel > .provider-list,
+html.density-compact .settings-panel > .permission-presets,
+html.density-compact .settings-panel > .grant-list,
+html.density-compact .settings-panel > .registry-list,
+html.density-compact .settings-panel > .audit-list {
+  margin-inline: 10px;
+}
+
+html.density-compact .nav-row {
+  min-height: 23px;
 }
 
 .home-composer-bar {
