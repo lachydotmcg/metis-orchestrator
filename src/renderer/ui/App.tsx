@@ -10370,16 +10370,28 @@ function ManagerChat(): JSX.Element {
  *  navigation and app restarts (see `managerWidgetPos` in useAppStoreState). */
 type ManagerWidgetPos = { x: number; y: number };
 
+/** Width/height of the floating Manager widget while expanded, persisted so it survives
+ *  navigation and app restarts (see `managerWidgetSize` in useAppStoreState). */
+type ManagerWidgetSize = { width: number; height: number };
+
 const MANAGER_WIDGET_WIDTH = 360;
 const MANAGER_WIDGET_HEIGHT = 520;
 const MANAGER_WIDGET_HEADER_HEIGHT = 44;
 const MANAGER_WIDGET_MARGIN = 16;
+const MANAGER_WIDGET_MIN_WIDTH = 300;
+const MANAGER_WIDGET_MIN_HEIGHT = 360;
+
+// Stable module-level fallback for useAppStoreState("managerWidgetSize", ...): an inline `{ width, height }`
+// literal would be a new object identity every render, and useAppStoreState's load effect depends on that
+// fallback reference, so it would re-fetch from the store (and could clobber an in-flight resize) on every
+// re-render. Matches DEFAULT_GRAPH_PHYSICS's reasoning above.
+const DEFAULT_MANAGER_WIDGET_SIZE: ManagerWidgetSize = { width: MANAGER_WIDGET_WIDTH, height: MANAGER_WIDGET_HEIGHT };
 
 /** Keeps the widget fully on-screen (header always reachable) no matter what
  *  it was last dragged to — reused both while dragging and after a resize. */
-function clampManagerWidgetPos(pos: ManagerWidgetPos, minimized: boolean): ManagerWidgetPos {
-  const height = minimized ? MANAGER_WIDGET_HEADER_HEIGHT : MANAGER_WIDGET_HEIGHT;
-  const maxX = Math.max(MANAGER_WIDGET_MARGIN, window.innerWidth - MANAGER_WIDGET_WIDTH - MANAGER_WIDGET_MARGIN);
+function clampManagerWidgetPos(pos: ManagerWidgetPos, minimized: boolean, size: ManagerWidgetSize): ManagerWidgetPos {
+  const height = minimized ? MANAGER_WIDGET_HEADER_HEIGHT : size.height;
+  const maxX = Math.max(MANAGER_WIDGET_MARGIN, window.innerWidth - size.width - MANAGER_WIDGET_MARGIN);
   const maxY = Math.max(MANAGER_WIDGET_MARGIN, window.innerHeight - height - MANAGER_WIDGET_MARGIN);
   return {
     x: Math.min(Math.max(pos.x, MANAGER_WIDGET_MARGIN), maxX),
@@ -10388,11 +10400,22 @@ function clampManagerWidgetPos(pos: ManagerWidgetPos, minimized: boolean): Manag
 }
 
 /** Sensible first-open anchor: bottom-right of the viewport, clamped like any other position. */
-function defaultManagerWidgetPos(): ManagerWidgetPos {
+function defaultManagerWidgetPos(size: ManagerWidgetSize): ManagerWidgetPos {
   return clampManagerWidgetPos(
-    { x: window.innerWidth - MANAGER_WIDGET_WIDTH - 24, y: window.innerHeight - MANAGER_WIDGET_HEIGHT - 24 },
-    false
+    { x: window.innerWidth - size.width - 24, y: window.innerHeight - size.height - 24 },
+    false,
+    size
   );
+}
+
+/** Keeps a resize within a sensible minimum and the viewport's available space. */
+function clampManagerWidgetSize(size: ManagerWidgetSize): ManagerWidgetSize {
+  const maxWidth = Math.max(MANAGER_WIDGET_MIN_WIDTH, window.innerWidth - MANAGER_WIDGET_MARGIN * 2);
+  const maxHeight = Math.max(MANAGER_WIDGET_MIN_HEIGHT, window.innerHeight - MANAGER_WIDGET_MARGIN * 2);
+  return {
+    width: Math.min(Math.max(size.width, MANAGER_WIDGET_MIN_WIDTH), maxWidth),
+    height: Math.min(Math.max(size.height, MANAGER_WIDGET_MIN_HEIGHT), maxHeight)
+  };
 }
 
 /** App-level floating Manager chat: a draggable, minimizable widget that hosts the exact same
@@ -10404,25 +10427,35 @@ function ManagerWidget(): JSX.Element {
   const [open, setOpen] = useAppStoreState<boolean>("managerWidgetOpen", false);
   const [minimized, setMinimized] = useAppStoreState<boolean>("managerWidgetMinimized", false);
   const [pos, setPos] = useAppStoreState<ManagerWidgetPos | null>("managerWidgetPos", null);
+  const [size, setSize] = useAppStoreState<ManagerWidgetSize>("managerWidgetSize", DEFAULT_MANAGER_WIDGET_SIZE);
   const [isDragging, setIsDragging] = useState(false);
+  const [isResizing, setIsResizing] = useState(false);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const resizeRef = useRef<{ pointerId: number; startX: number; startY: number; startWidth: number; startHeight: number } | null>(null);
 
-  const resolvedPos = pos ?? defaultManagerWidgetPos();
+  const resolvedPos = pos ?? defaultManagerWidgetPos(size);
 
-  // Re-clamp on resize so the widget never ends up stranded off-screen (e.g. after
+  // Re-clamp on window resize so the widget never ends up stranded off-screen (e.g. after
   // shrinking the window while it was parked near a since-vanished edge).
   useEffect(() => {
     function handleResize(): void {
-      setPos((current) => (current ? clampManagerWidgetPos(current, minimized) : current));
+      setPos((current) => (current ? clampManagerWidgetPos(current, minimized, size) : current));
     }
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
-  }, [minimized, setPos]);
+  }, [minimized, size, setPos]);
+
+  // Re-clamp the position whenever the persisted size changes (e.g. right after a corner-drag
+  // resize) so a widget that just grew can't spill off the right/bottom edge of the viewport.
+  useEffect(() => {
+    setPos((current) => (current ? clampManagerWidgetPos(current, minimized, size) : current));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [size.width, size.height]);
 
   function handleHeaderPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
     // Don't start a drag when the pointer lands on a header button (minimize/close).
     if ((event.target as HTMLElement).closest("button")) return;
-    const startPos = pos ?? defaultManagerWidgetPos();
+    const startPos = pos ?? defaultManagerWidgetPos(size);
     if (!pos) setPos(startPos);
     dragRef.current = {
       pointerId: event.pointerId,
@@ -10440,7 +10473,7 @@ function ManagerWidget(): JSX.Element {
     if (!drag || drag.pointerId !== event.pointerId) return;
     const nextX = drag.originX + (event.clientX - drag.startX);
     const nextY = drag.originY + (event.clientY - drag.startY);
-    setPos(clampManagerWidgetPos({ x: nextX, y: nextY }, minimized));
+    setPos(clampManagerWidgetPos({ x: nextX, y: nextY }, minimized, size));
   }
 
   function endDrag(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -10448,6 +10481,37 @@ function ManagerWidget(): JSX.Element {
     if (!drag || drag.pointerId !== event.pointerId) return;
     dragRef.current = null;
     setIsDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  function handleResizePointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    event.stopPropagation();
+    resizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      startWidth: size.width,
+      startHeight: size.height
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsResizing(true);
+  }
+
+  function handleResizePointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = resizeRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const nextWidth = drag.startWidth + (event.clientX - drag.startX);
+    const nextHeight = drag.startHeight + (event.clientY - drag.startY);
+    setSize(clampManagerWidgetSize({ width: nextWidth, height: nextHeight }));
+  }
+
+  function endResize(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = resizeRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    resizeRef.current = null;
+    setIsResizing(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId);
     }
@@ -10462,7 +10526,10 @@ function ManagerWidget(): JSX.Element {
   }
 
   return (
-    <div className={`manager-widget ${minimized ? "minimized" : ""}`} style={{ left: resolvedPos.x, top: resolvedPos.y }}>
+    <div
+      className={`manager-widget ${minimized ? "minimized" : ""}`}
+      style={{ left: resolvedPos.x, top: resolvedPos.y, width: size.width, height: minimized ? undefined : size.height }}
+    >
       <div
         className={`manager-widget-head ${isDragging ? "dragging" : ""}`}
         onPointerDown={handleHeaderPointerDown}
@@ -10491,6 +10558,16 @@ function ManagerWidget(): JSX.Element {
         <div className="manager-widget-body">
           <ManagerChat />
         </div>
+      ) : null}
+      {!minimized ? (
+        <div
+          className={`manager-widget-resize ${isResizing ? "resizing" : ""}`}
+          onPointerDown={handleResizePointerDown}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+          aria-hidden="true"
+        />
       ) : null}
     </div>
   );

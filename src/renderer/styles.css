@@ -5473,6 +5473,10 @@ details.artifact-row[open] summary {
   border: none;
   border-radius: 999px;
   box-shadow: 0 16px 34px rgb(0 0 0 / 0.5);
+  /* This is a floating overlay that can end up positioned anywhere on screen, including under
+     the frameless titlebar's OS drag strip (see `.titlebar` above) — without this, a click here
+     can get swallowed as a native window-drag instead of reaching the button. */
+  -webkit-app-region: no-drag;
 }
 
 .manager-fab:hover {
@@ -5484,17 +5488,30 @@ details.artifact-row[open] summary {
   z-index: 38;
   display: flex;
   flex-direction: column;
+  /* Default width/height come from the `managerWidgetSize` store (see ManagerWidget's inline
+     style) — these are just guards in case the inline style is ever absent. */
   width: 360px;
   height: 520px;
+  min-width: 300px;
+  min-height: 360px;
   background: var(--node);
   border: 1px solid var(--line);
   border-radius: 16px;
   box-shadow: 0 22px 48px rgb(0 0 0 / 0.55);
   overflow: hidden;
+  /* Root cause of "can't drag while minimized": this fixed-position widget can be parked
+     anywhere on screen, including overlapping the frameless titlebar's OS drag strip
+     (`.titlebar`, top 34px, `-webkit-app-region: drag`). That drag region is resolved by
+     screen geometry, not DOM stacking order, so without an explicit no-drag override here a
+     pointerdown over the widget there gets hijacked into a native window-drag before our own
+     handlers ever see it — most visible when minimized, since the collapsed header is small
+     enough to sit entirely inside that strip. */
+  -webkit-app-region: no-drag;
 }
 
 .manager-widget.minimized {
   height: auto;
+  min-height: 0;
 }
 
 .manager-widget-head {
@@ -5558,6 +5575,36 @@ details.artifact-row[open] summary {
   flex: 1;
   min-height: 0;
   padding: 10px;
+}
+
+.manager-widget-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+  z-index: 2;
+}
+
+.manager-widget-resize::after {
+  content: "";
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--line);
+  border-bottom: 2px solid var(--line);
+  border-radius: 0 0 2px 0;
+  opacity: 0.7;
+}
+
+.manager-widget-resize:hover::after,
+.manager-widget-resize.resizing::after {
+  border-color: var(--soft);
+  opacity: 1;
 }
 
 .manager-widget-body .manager-chat {
@@ -9732,7 +9779,7 @@ a:focus-visible,
 .marketplace-hero-search {
   flex-direction: column;
   align-items: center;
-  margin-top: -10px;
+  margin-top: 4px;
 }
 
 .marketplace-tabs button {
@@ -10133,7 +10180,7 @@ a:focus-visible,
 
 .marketplace-framing-hint {
   max-width: 720px;
-  margin: -6px auto 0;
+  margin: 6px auto 18px;
   padding: 0 4px;
   color: var(--faint);
   font-size: 12px;
