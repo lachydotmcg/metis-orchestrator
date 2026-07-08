@@ -5304,6 +5304,115 @@ details.artifact-row[open] summary {
   font-size: 11px;
 }
 
+/* ---- Floating Manager widget (app-level, overlays every nav view) ---- */
+
+.manager-fab {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 38;
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  color: #0c0d10;
+  background: var(--accent);
+  border: none;
+  border-radius: 999px;
+  box-shadow: 0 16px 34px rgb(0 0 0 / 0.5);
+}
+
+.manager-fab:hover {
+  background: var(--soft);
+}
+
+.manager-widget {
+  position: fixed;
+  z-index: 38;
+  display: flex;
+  flex-direction: column;
+  width: 360px;
+  height: 520px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 22px 48px rgb(0 0 0 / 0.55);
+  overflow: hidden;
+}
+
+.manager-widget.minimized {
+  height: auto;
+}
+
+.manager-widget-head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 44px;
+  padding: 0 10px 0 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  cursor: grab;
+  touch-action: none;
+  outline: none;
+  user-select: none;
+}
+
+.manager-widget-head.dragging {
+  cursor: grabbing;
+}
+
+.manager-widget.minimized .manager-widget-head {
+  border-bottom: none;
+}
+
+.manager-widget-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manager-widget-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 2px;
+}
+
+.manager-widget-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: 7px;
+}
+
+.manager-widget-btn:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.manager-widget-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+}
+
+.manager-widget-body .manager-chat {
+  flex: 1;
+  border: none;
+  border-radius: 0;
+}
+
 .manager-side {
   display: flex;
   flex: 0 0 320px;

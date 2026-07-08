@@ -1449,6 +1449,7 @@ export function App(): JSX.Element {
         <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} />
       ) : null}
       </div>
+      <ManagerWidget />
     </div>
   );
 }
@@ -9509,6 +9510,136 @@ function ManagerChat(): JSX.Element {
         </button>
       </div>
       {!available ? <p className="manager-chat-note">Manager needs the desktop app to chat live — this preview can still show the composer.</p> : null}
+    </div>
+  );
+}
+
+/** Top-left position of the floating Manager widget, persisted so it survives
+ *  navigation and app restarts (see `managerWidgetPos` in useAppStoreState). */
+type ManagerWidgetPos = { x: number; y: number };
+
+const MANAGER_WIDGET_WIDTH = 360;
+const MANAGER_WIDGET_HEIGHT = 520;
+const MANAGER_WIDGET_HEADER_HEIGHT = 44;
+const MANAGER_WIDGET_MARGIN = 16;
+
+/** Keeps the widget fully on-screen (header always reachable) no matter what
+ *  it was last dragged to — reused both while dragging and after a resize. */
+function clampManagerWidgetPos(pos: ManagerWidgetPos, minimized: boolean): ManagerWidgetPos {
+  const height = minimized ? MANAGER_WIDGET_HEADER_HEIGHT : MANAGER_WIDGET_HEIGHT;
+  const maxX = Math.max(MANAGER_WIDGET_MARGIN, window.innerWidth - MANAGER_WIDGET_WIDTH - MANAGER_WIDGET_MARGIN);
+  const maxY = Math.max(MANAGER_WIDGET_MARGIN, window.innerHeight - height - MANAGER_WIDGET_MARGIN);
+  return {
+    x: Math.min(Math.max(pos.x, MANAGER_WIDGET_MARGIN), maxX),
+    y: Math.min(Math.max(pos.y, MANAGER_WIDGET_MARGIN), maxY)
+  };
+}
+
+/** Sensible first-open anchor: bottom-right of the viewport, clamped like any other position. */
+function defaultManagerWidgetPos(): ManagerWidgetPos {
+  return clampManagerWidgetPos(
+    { x: window.innerWidth - MANAGER_WIDGET_WIDTH - 24, y: window.innerHeight - MANAGER_WIDGET_HEIGHT - 24 },
+    false
+  );
+}
+
+/** App-level floating Manager chat: a draggable, minimizable widget that hosts the exact same
+ *  <ManagerChat /> component the Manager tab uses, so both share the `managerChat` store key and
+ *  history. Mounted once at the App root (outside the per-view <main> content) so it overlays every
+ *  nav view. Its own open/minimized/position state persists via useAppStoreState so it survives
+ *  navigation and app restarts (docs/FABLE_PLANS.md — floating widget round of work). */
+function ManagerWidget(): JSX.Element {
+  const [open, setOpen] = useAppStoreState<boolean>("managerWidgetOpen", false);
+  const [minimized, setMinimized] = useAppStoreState<boolean>("managerWidgetMinimized", false);
+  const [pos, setPos] = useAppStoreState<ManagerWidgetPos | null>("managerWidgetPos", null);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
+
+  const resolvedPos = pos ?? defaultManagerWidgetPos();
+
+  // Re-clamp on resize so the widget never ends up stranded off-screen (e.g. after
+  // shrinking the window while it was parked near a since-vanished edge).
+  useEffect(() => {
+    function handleResize(): void {
+      setPos((current) => (current ? clampManagerWidgetPos(current, minimized) : current));
+    }
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [minimized, setPos]);
+
+  function handleHeaderPointerDown(event: ReactPointerEvent<HTMLDivElement>): void {
+    // Don't start a drag when the pointer lands on a header button (minimize/close).
+    if ((event.target as HTMLElement).closest("button")) return;
+    const startPos = pos ?? defaultManagerWidgetPos();
+    if (!pos) setPos(startPos);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: startPos.x,
+      originY: startPos.y
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsDragging(true);
+  }
+
+  function handleHeaderPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const nextX = drag.originX + (event.clientX - drag.startX);
+    const nextY = drag.originY + (event.clientY - drag.startY);
+    setPos(clampManagerWidgetPos({ x: nextX, y: nextY }, minimized));
+  }
+
+  function endDrag(event: ReactPointerEvent<HTMLDivElement>): void {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    setIsDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  }
+
+  if (!open) {
+    return (
+      <button type="button" className="manager-fab" aria-label="Open Manager chat" onClick={() => setOpen(true)}>
+        <Bot size={20} />
+      </button>
+    );
+  }
+
+  return (
+    <div className={`manager-widget ${minimized ? "minimized" : ""}`} style={{ left: resolvedPos.x, top: resolvedPos.y }}>
+      <div
+        className={`manager-widget-head ${isDragging ? "dragging" : ""}`}
+        onPointerDown={handleHeaderPointerDown}
+        onPointerMove={handleHeaderPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
+        <span className="manager-widget-title">
+          <Bot size={14} /> Manager
+        </span>
+        <div className="manager-widget-actions">
+          <button
+            type="button"
+            className="manager-widget-btn"
+            aria-label={minimized ? "Expand Manager widget" : "Minimize Manager widget"}
+            onClick={() => setMinimized((current) => !current)}
+          >
+            {minimized ? <Maximize2 size={13} /> : <Minus size={13} />}
+          </button>
+          <button type="button" className="manager-widget-btn" aria-label="Close Manager widget" onClick={() => setOpen(false)}>
+            <X size={13} />
+          </button>
+        </div>
+      </div>
+      {!minimized ? (
+        <div className="manager-widget-body">
+          <ManagerChat />
+        </div>
+      ) : null}
     </div>
   );
 }
