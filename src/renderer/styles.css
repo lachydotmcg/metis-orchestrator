@@ -1701,6 +1701,7 @@ p {
 /* ---- Graph View ---- */
 
 .memory-workspace {
+  position: relative;
   display: flex;
   align-items: stretch;
   min-width: 0;
@@ -2175,15 +2176,16 @@ p {
    Slim right-side panel, styled like .preview-rail — sits inside .memory-workspace next to the
    canvas/tree so it doesn't cover the toolbar or file tree. ---- */
 
+/* Opening a document REPLACES the whole graph view (owner: "clicking on a document should
+   completely replace the graph view, not a side bar") — a full-cover overlay over the workspace. */
 .memory-doc-panel {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  flex: 0 0 40%;
-  min-width: 320px;
-  max-width: 560px;
   height: 100%;
   background: var(--surface-2);
-  border-left: 1px solid var(--line);
 }
 
 .memory-doc-panel-header {
@@ -2316,6 +2318,13 @@ p {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Full-cover doc view: keep the read column readable, not stretched edge to edge. */
+.memory-doc-panel-body .markdown,
+.memory-doc-panel-body > pre {
+  max-width: 900px;
+  margin-inline: auto;
 }
 
 .memory-doc-panel-editor {

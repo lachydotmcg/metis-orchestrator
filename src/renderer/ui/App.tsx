@@ -6787,6 +6787,21 @@ function MemoryGraphWorkspace({
   }, [projectFileGroups, treeSearchQuery, pinnedOnly, pinnedNotes]);
   const isFilteringFiles = Boolean(treeSearchQuery.trim()) || pinnedOnly;
 
+  // Conversations share the same directory area as documents (owner: "everything inside the usual
+  // notes area, no extra directory ... conversations can have the chat [icon]"). Real conversation
+  // nodes carry a conversationId; clicking one opens it. Filtered by the same search/pin controls.
+  const conversationNodes = useMemo(() => {
+    const query = treeSearchQuery.trim().toLowerCase();
+    const pinnedSet = new Set(pinnedNotes);
+    return allNodes.filter(
+      (node) =>
+        node.type === "conversation" &&
+        Boolean(node.conversationId) &&
+        (!pinnedOnly || pinnedSet.has(node.conversationId as string)) &&
+        (!query || node.label.toLowerCase().includes(query))
+    );
+  }, [allNodes, treeSearchQuery, pinnedOnly, pinnedNotes]);
+
   function togglePinnedNote(note: string): void {
     setPinnedNotes((current) => (current.includes(note) ? current.filter((n) => n !== note) : [...current, note]));
   }
@@ -7226,7 +7241,7 @@ function MemoryGraphWorkspace({
         {treeCollapsed ? (
           <button className="panel-rail-toggle memory-panel-widget" type="button" onClick={() => setTreeCollapsed(false)}>
             <ChevronLeft size={16} />
-            <span>Files</span>
+            <span>Directory</span>
           </button>
         ) : null}
       </section>
@@ -7353,39 +7368,63 @@ function MemoryGraphWorkspace({
                 type="text"
                 value={treeSearchQuery}
                 onChange={(e) => setTreeSearchQuery(e.target.value)}
-                placeholder="Search files…"
+                placeholder="Search…"
                 autoFocus
               />
             </div>
           ) : null}
+          {/* One unified directory (owner: "everything inside the usual notes area, no extra
+              directory"): project documents (file glyph, click opens the full-view doc) and
+              conversations (chat glyph, click opens the conversation), distinguished only by icon. */}
           <div className="memory-tree-list">
-            {!projectWorkspace || !projectSnapshot ? (
-              <p className="memory-tree-empty">Select a project folder to see its files.</p>
-            ) : projectFileGroups.length === 0 ? (
-              <p className="memory-tree-empty">No matching files in this project.</p>
-            ) : visibleFileGroups.length === 0 ? (
-              <p className="memory-tree-empty">{pinnedOnly ? "No pinned files yet." : "No files match."}</p>
-            ) : (
-              visibleFileGroups.map((group) => (
-                <ProjectFileTreeGroup
-                  key={group.folder}
-                  group={group}
-                  expanded={expanded}
-                  onToggle={toggleFolder}
-                  forceOpen={isFilteringFiles}
-                  pinnedNotes={pinnedNotes}
-                  onTogglePin={togglePinnedNote}
-                  onOpen={openDocForNode}
-                />
-              ))
-            )}
-            {graphTree.length > 0 ? (
-              <div className="memory-tree-notes-section">
-                <div className="memory-tree-section-label">Notes</div>
-                {graphTree.map((folder) => (
-                  <MemoryTreeFolder key={folder.name} depth={0} expanded={expanded} folder={folder} onPick={selectByLabel} onToggle={toggleFolder} />
-                ))}
-              </div>
+            {visibleFileGroups.map((group) => (
+              <ProjectFileTreeGroup
+                key={group.folder}
+                group={group}
+                expanded={expanded}
+                onToggle={toggleFolder}
+                forceOpen={isFilteringFiles}
+                pinnedNotes={pinnedNotes}
+                onTogglePin={togglePinnedNote}
+                onOpen={openDocForNode}
+              />
+            ))}
+            {conversationNodes.map((node) => {
+              const pinKey = node.conversationId ?? node.id;
+              const isPinned = pinnedNotes.includes(pinKey);
+              return (
+                <div key={node.id} className="memory-tree-row note">
+                  <button
+                    type="button"
+                    className="memory-tree-note-label"
+                    onClick={() => node.conversationId && onConversationOpen?.(node.conversationId)}
+                    title={node.detail ?? node.label}
+                  >
+                    <MessageCircle size={12} />
+                    <span>{node.label}</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`memory-tree-pin ${isPinned ? "pinned" : ""}`}
+                    aria-label={isPinned ? `Unpin ${node.label}` : `Pin ${node.label}`}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      togglePinnedNote(pinKey);
+                    }}
+                  >
+                    <Pin size={11} />
+                  </button>
+                </div>
+              );
+            })}
+            {visibleFileGroups.length === 0 && conversationNodes.length === 0 ? (
+              <p className="memory-tree-empty">
+                {!projectWorkspace || !projectSnapshot
+                  ? "Select a project folder to see its documents, or start a conversation."
+                  : isFilteringFiles
+                    ? "Nothing matches your filter."
+                    : "No documents or conversations yet."}
+              </p>
             ) : null}
           </div>
         </aside>
