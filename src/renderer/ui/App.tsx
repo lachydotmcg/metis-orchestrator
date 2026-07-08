@@ -828,20 +828,6 @@ const FALLBACK_MARKETPLACE_PACKAGES: RegistryPackage[] = [
   }
 ];
 
-const MEMORY_TREE: MemoryFolder[] = [
-  {
-    name: "agent-memory",
-    children: [
-      { name: "ad-helpdesk", notes: ["2026-05-24", "2026-05-31", "2026-06-21"] },
-      { name: "ai-learning", notes: ["local-file-agent-setup-guide", "goals"] },
-      { name: "lachys-web-dev", notes: ["deploy-checklist", "Lachys Web Dev", "Club Window Services"] },
-      { name: "metis", notes: ["benchmark-suite-planning", "routing-policy-contract", "findings-ceiling-effect"] },
-      { name: "metis-orchestrator", notes: ["orchestration-ui", "graph-view", "marketplace"] },
-      { name: "portfolio", notes: ["Lachlan GitHub profile", "mcp-backdoor-essay"] }
-    ]
-  }
-];
-
 const MEMORY_GRAPH_NODES: MemoryGraphNode[] = [
   { id: "home", label: "Home", type: "home", pos: { x: 0, y: 0 }, size: 42, detail: "root memory index" },
   { id: "lachys-web-dev", label: "Lachys Web Dev", type: "project", pos: { x: 210, y: -210 }, size: 36, detail: "project workspace" },
@@ -6751,7 +6737,10 @@ function MemoryGraphWorkspace({
 
   // Welcome cluster: if there's truly no live data (no runtime conversations, no packages), the static
   // MEMORY_GRAPH_NODES/LINKS above already act as the seeded "welcome" cluster, so the view is never blank.
-  const graphTree = useMemo(() => (runtimeGraph.tree ? [...MEMORY_TREE, runtimeGraph.tree] : MEMORY_TREE), [runtimeGraph.tree]);
+  // Directory folder tree = REAL data only (the runtime conversation tree, grouped by project). The
+  // old hardcoded MEMORY_TREE demo folders were removed — they showed placeholder notes that could
+  // never open (owner asked to rip out the fake demo tree).
+  const graphTree = useMemo(() => (runtimeGraph.tree ? [runtimeGraph.tree] : []), [runtimeGraph.tree]);
 
   // Directory panel (owner: "the right-hand directory items still do not open documents") — groups
   // the REAL project files (same list the canvas draws as project-file-* nodes) by folder so the
@@ -7411,6 +7400,13 @@ function MemoryGraphWorkspace({
                 leafKind={leafKind}
               />
             ))}
+            {visibleFileGroups.length === 0 && graphTree.length === 0 ? (
+              <p className="memory-tree-empty">
+                {!projectWorkspace || !projectSnapshot
+                  ? "Select a project folder to see its documents. Your conversations show here too."
+                  : "No documents or conversations yet."}
+              </p>
+            ) : null}
           </div>
         </aside>
       ) : null}
