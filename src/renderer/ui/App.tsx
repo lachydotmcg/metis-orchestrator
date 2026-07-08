@@ -6787,20 +6787,27 @@ function MemoryGraphWorkspace({
   }, [projectFileGroups, treeSearchQuery, pinnedOnly, pinnedNotes]);
   const isFilteringFiles = Boolean(treeSearchQuery.trim()) || pinnedOnly;
 
-  // Conversations share the same directory area as documents (owner: "everything inside the usual
-  // notes area, no extra directory ... conversations can have the chat [icon]"). Real conversation
-  // nodes carry a conversationId; clicking one opens it. Filtered by the same search/pin controls.
-  const conversationNodes = useMemo(() => {
-    const query = treeSearchQuery.trim().toLowerCase();
-    const pinnedSet = new Set(pinnedNotes);
-    return allNodes.filter(
-      (node) =>
-        node.type === "conversation" &&
-        Boolean(node.conversationId) &&
-        (!pinnedOnly || pinnedSet.has(node.conversationId as string)) &&
-        (!query || node.label.toLowerCase().includes(query))
-    );
-  }, [allNodes, treeSearchQuery, pinnedOnly, pinnedNotes]);
+  // The directory keeps its folder structure (owner: "I didn't mean remove everything from the
+  // directory"), but each leaf now resolves to what it actually is so it shows the right glyph and
+  // OPENS the right thing (documents get the doc glyph + full-view; conversations get the chat glyph).
+  function leafKind(label: string): "doc" | "conversation" | "note" {
+    if (allNodes.some((node) => node.type === "conversation" && node.label === label && node.conversationId)) return "conversation";
+    if (projectFileNodes.some((node) => node.label === label || node.detail === label)) return "doc";
+    return "note";
+  }
+  function openTreeLeaf(label: string): void {
+    const conversation = allNodes.find((node) => node.type === "conversation" && node.label === label && node.conversationId);
+    if (conversation?.conversationId) {
+      onConversationOpen?.(conversation.conversationId);
+      return;
+    }
+    const doc = projectFileNodes.find((node) => node.label === label || node.detail === label);
+    if (doc) {
+      openDocForNode(doc);
+      return;
+    }
+    selectByLabel(label);
+  }
 
   function togglePinnedNote(note: string): void {
     setPinnedNotes((current) => (current.includes(note) ? current.filter((n) => n !== note) : [...current, note]));
@@ -7373,9 +7380,10 @@ function MemoryGraphWorkspace({
               />
             </div>
           ) : null}
-          {/* One unified directory (owner: "everything inside the usual notes area, no extra
-              directory"): project documents (file glyph, click opens the full-view doc) and
-              conversations (chat glyph, click opens the conversation), distinguished only by icon. */}
+          {/* One directory area (owner: no separate Files-vs-Notes split, but nothing removed):
+              the current project's documents grouped by folder, then the folder tree of notes and
+              conversations. Every leaf resolves to a doc glyph (opens full-view) or a chat glyph
+              (opens the conversation); unmatched notes still select on the canvas. */}
           <div className="memory-tree-list">
             {visibleFileGroups.map((group) => (
               <ProjectFileTreeGroup
@@ -7389,43 +7397,20 @@ function MemoryGraphWorkspace({
                 onOpen={openDocForNode}
               />
             ))}
-            {conversationNodes.map((node) => {
-              const pinKey = node.conversationId ?? node.id;
-              const isPinned = pinnedNotes.includes(pinKey);
-              return (
-                <div key={node.id} className="memory-tree-row note">
-                  <button
-                    type="button"
-                    className="memory-tree-note-label"
-                    onClick={() => node.conversationId && onConversationOpen?.(node.conversationId)}
-                    title={node.detail ?? node.label}
-                  >
-                    <MessageCircle size={12} />
-                    <span>{node.label}</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`memory-tree-pin ${isPinned ? "pinned" : ""}`}
-                    aria-label={isPinned ? `Unpin ${node.label}` : `Pin ${node.label}`}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      togglePinnedNote(pinKey);
-                    }}
-                  >
-                    <Pin size={11} />
-                  </button>
-                </div>
-              );
-            })}
-            {visibleFileGroups.length === 0 && conversationNodes.length === 0 ? (
-              <p className="memory-tree-empty">
-                {!projectWorkspace || !projectSnapshot
-                  ? "Select a project folder to see its documents, or start a conversation."
-                  : isFilteringFiles
-                    ? "Nothing matches your filter."
-                    : "No documents or conversations yet."}
-              </p>
-            ) : null}
+            {graphTree.map((folder) => (
+              <MemoryTreeFolder
+                key={folder.name}
+                depth={0}
+                expanded={expanded}
+                folder={folder}
+                onPick={openTreeLeaf}
+                onToggle={toggleFolder}
+                forceOpen={isFilteringFiles}
+                pinnedNotes={pinnedNotes}
+                onTogglePin={togglePinnedNote}
+                leafKind={leafKind}
+              />
+            ))}
           </div>
         </aside>
       ) : null}
@@ -7501,7 +7486,8 @@ function MemoryTreeFolder({
   onToggle,
   forceOpen,
   pinnedNotes,
-  onTogglePin
+  onTogglePin,
+  leafKind
 }: {
   depth: number;
   expanded: Record<string, boolean>;
@@ -7513,6 +7499,9 @@ function MemoryTreeFolder({
   forceOpen?: boolean;
   pinnedNotes?: string[];
   onTogglePin?: (note: string) => void;
+  // Owner: "documents can have that document svg icon ... conversations can have the chat [icon]".
+  // Resolves each leaf to what it actually is so the row shows the right glyph and opens the right thing.
+  leafKind?: (label: string) => "doc" | "conversation" | "note";
 }): JSX.Element {
   const isOpen = forceOpen || Boolean(expanded[folder.name]);
   return (
@@ -7534,11 +7523,15 @@ function MemoryTreeFolder({
               forceOpen={forceOpen}
               pinnedNotes={pinnedNotes}
               onTogglePin={onTogglePin}
+              leafKind={leafKind}
             />
           ))}
-          {folder.notes?.map((note) => (
+          {folder.notes?.map((note) => {
+            const kind = leafKind ? leafKind(note) : "note";
+            return (
             <div key={note} className="memory-tree-row note" style={{ paddingLeft: `${(depth + 1) * 14 + 20}px` }}>
               <button type="button" className="memory-tree-note-label" onClick={() => onPick(note)}>
+                {kind === "doc" ? <FileText size={12} /> : kind === "conversation" ? <MessageCircle size={12} /> : null}
                 <span>{note}</span>
               </button>
               {onTogglePin ? (
@@ -7555,7 +7548,8 @@ function MemoryTreeFolder({
                 </button>
               ) : null}
             </div>
-          ))}
+            );
+          })}
         </>
       ) : null}
     </div>
