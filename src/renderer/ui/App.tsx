@@ -8664,6 +8664,12 @@ const TODO_PRIORITY_LABEL: Record<TodoPriority, string> = {
   idea: "Idea",
   none: "No priority"
 };
+const TODO_PRIORITY_SHORT: Record<TodoPriority, string> = {
+  high: "High",
+  medium: "Med",
+  idea: "Idea",
+  none: ""
+};
 
 function todoId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -8897,10 +8903,24 @@ function TodoWorkspace({ storedConversations }: { storedConversations: Conversat
                     moveCard(col.id, card.id);
                   }}
                 >
-                  <button type="button" className="todo-check" aria-label={card.done ? "Mark not done" : "Mark done"} onClick={() => updateCard(col.id, card.id, { done: !card.done })}>
-                    {card.done ? <CheckCircle2 size={15} /> : <Circle size={15} />}
-                  </button>
-                  <span className="todo-card-title">{card.title}</span>
+                  <div className="todo-card-labels">
+                    <button
+                      type="button"
+                      className={`todo-label ${card.priority === "none" ? "todo-label-empty" : `todo-label-${card.priority}`}`}
+                      aria-label={TODO_PRIORITY_LABEL[card.priority]}
+                      title={`${TODO_PRIORITY_LABEL[card.priority]} (click to change)`}
+                      onClick={() => cyclePriority(col.id, card)}
+                    >
+                      {card.priority === "none" ? "+ Label" : TODO_PRIORITY_SHORT[card.priority]}
+                    </button>
+                  </div>
+                  <div className="todo-card-main">
+                    <button type="button" className="todo-check" aria-label={card.done ? "Mark not done" : "Mark done"} onClick={() => updateCard(col.id, card.id, { done: !card.done })}>
+                      {card.done ? <CheckCircle2 size={15} /> : <Circle size={15} />}
+                    </button>
+                    <span className="todo-card-title">{card.title}</span>
+                  </div>
+                  <div className="todo-card-footer">
                   <span className="todo-assignee-wrap">
                     <button
                       type="button"
@@ -8972,10 +8992,10 @@ function TodoWorkspace({ storedConversations }: { storedConversations: Conversat
                       </>
                     ) : null}
                   </span>
-                  <button type="button" className="todo-prio" aria-label={TODO_PRIORITY_LABEL[card.priority]} title={`${TODO_PRIORITY_LABEL[card.priority]} (click to change)`} onClick={() => cyclePriority(col.id, card)} />
                   <button type="button" className="todo-card-del" aria-label="Delete task" onClick={() => deleteCard(col.id, card.id)}>
                     <X size={13} />
                   </button>
+                  </div>
                 </article>
                 );
               })}

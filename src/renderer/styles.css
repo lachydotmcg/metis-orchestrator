@@ -4760,9 +4760,9 @@ details.artifact-row[open] summary {
 
 .todo-card {
   display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  padding: 10px 10px 10px 12px;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px 8px 11px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-left: 3px solid transparent;
@@ -4791,6 +4791,68 @@ details.artifact-row[open] summary {
 
 .todo-card.p-idea {
   border-left-color: #56b6e0;
+}
+
+.todo-card-labels {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.todo-label {
+  display: inline-flex;
+  align-items: center;
+  height: 18px;
+  padding: 0 8px;
+  color: #201a12;
+  background: var(--faint);
+  border: 0;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: filter 120ms ease, opacity 120ms ease, border-color 120ms ease;
+}
+
+.todo-label:hover {
+  filter: brightness(1.12);
+}
+
+.todo-label-high {
+  background: #e0556a;
+}
+
+.todo-label-medium {
+  background: #e0a23a;
+}
+
+.todo-label-idea {
+  background: #56b6e0;
+}
+
+.todo-label-empty {
+  padding: 0 7px;
+  color: var(--faint);
+  background: transparent;
+  border: 1px dashed rgb(255 255 255 / 0.14);
+  opacity: 0.55;
+}
+
+.todo-label-empty:hover {
+  color: var(--muted);
+  border-color: rgb(255 255 255 / 0.28);
+  filter: none;
+  opacity: 1;
+}
+
+.todo-card-main {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  align-items: flex-start;
+  min-height: 0;
 }
 
 .todo-check {
@@ -4825,28 +4887,12 @@ details.artifact-row[open] summary {
   text-decoration: line-through;
 }
 
-.todo-prio {
+.todo-card-footer {
+  display: flex;
   flex: 0 0 auto;
-  width: 11px;
-  height: 11px;
-  margin-top: 3px;
-  padding: 0;
-  background: var(--faint);
-  border: 0;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.todo-card.p-high .todo-prio {
-  background: #e0556a;
-}
-
-.todo-card.p-medium .todo-prio {
-  background: #e0a23a;
-}
-
-.todo-card.p-idea .todo-prio {
-  background: #56b6e0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
 }
 
 .todo-card-del {
