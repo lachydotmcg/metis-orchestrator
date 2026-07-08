@@ -3668,11 +3668,12 @@ function SessionComposer({
                   {addModelOpen ? (
                     <div className="router-add-form">
                       <input value={draftModelName} placeholder="Model name (e.g. GPT-5.6)" onChange={(event) => setDraftModelName(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") addCustomModel(); }} />
-                      <select value={draftModelProvider} onChange={(event) => setDraftModelProvider(event.target.value as ProviderId)}>
-                        {(Object.keys(PROVIDERS) as ProviderId[]).map((provider) => (
-                          <option key={provider} value={provider}>{PROVIDERS[provider].label}</option>
-                        ))}
-                      </select>
+                      <CustomSelect
+                        ariaLabel="Model provider"
+                        value={draftModelProvider}
+                        onChange={(value) => setDraftModelProvider(value as ProviderId)}
+                        options={(Object.keys(PROVIDERS) as ProviderId[]).map((provider) => ({ value: provider, label: PROVIDERS[provider].label }))}
+                      />
                       <div className="router-add-actions">
                         <button type="button" onClick={addCustomModel}>Add</button>
                         <button type="button" className="ghost" onClick={() => setAddModelOpen(false)}>Cancel</button>
@@ -8488,17 +8489,16 @@ function TodoWorkspace({ storedConversations }: { storedConversations: Conversat
               </button>
             ))}
             {storedConversations.length ? (
-              <select
+              <CustomSelect
                 className="todo-filter-conversation"
-                aria-label="Filter by conversation"
+                ariaLabel="Filter by conversation"
                 value={filter.kind === "conversation" ? filter.id ?? "" : ""}
-                onChange={(event) => (event.target.value ? setFilter({ kind: "conversation", id: event.target.value }) : setFilter({ kind: "all" }))}
-              >
-                <option value="">This conversation…</option>
-                {storedConversations.map((conversation) => (
-                  <option key={conversation.id} value={conversation.id}>{conversation.title}</option>
-                ))}
-              </select>
+                onChange={(value) => (value ? setFilter({ kind: "conversation", id: value }) : setFilter({ kind: "all" }))}
+                options={[
+                  { value: "", label: "By conversation…" },
+                  ...storedConversations.map((conversation) => ({ value: conversation.id, label: conversation.title }))
+                ]}
+              />
             ) : null}
           </div>
           <button type="button" className="todo-add-col" onClick={() => mutate((cols) => [...cols, { id: todoId(), title: "New list", cards: [] }])}>

@@ -4476,7 +4476,7 @@ details.artifact-row[open] summary {
   flex-direction: column;
   width: 286px;
   max-height: 100%;
-  background: rgb(255 255 255 / 0.02);
+  background: rgb(255 255 255 / 0.035);
   border: 1px solid var(--line);
   border-radius: 12px;
   transition: border-color 140ms ease, box-shadow 140ms ease;
@@ -4492,7 +4492,8 @@ details.artifact-row[open] summary {
   gap: 8px;
   align-items: center;
   flex: 0 0 auto;
-  padding: 10px 10px 8px;
+  padding: 11px 10px 9px;
+  border-bottom: 1px solid rgb(255 255 255 / 0.06);
 }
 
 .todo-col-head input {
@@ -4504,8 +4505,9 @@ details.artifact-row[open] summary {
   border: 0;
   border-radius: 6px;
   font: inherit;
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: 0.005em;
   outline: none;
 }
 
@@ -4514,9 +4516,13 @@ details.artifact-row[open] summary {
 }
 
 .todo-count {
-  min-width: 18px;
+  min-width: 20px;
+  padding: 1px 7px;
   color: var(--muted);
+  background: rgb(255 255 255 / 0.06);
+  border-radius: 999px;
   font-size: 11px;
+  font-weight: 650;
   text-align: center;
 }
 
@@ -4546,9 +4552,9 @@ details.artifact-row[open] summary {
   display: flex;
   flex: 1;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
   min-height: 42px;
-  padding: 0 8px 8px;
+  padding: 9px 8px 8px;
   overflow-y: auto;
   scrollbar-color: #3a3a3a transparent;
   scrollbar-width: thin;
@@ -4565,20 +4571,21 @@ details.artifact-row[open] summary {
 
 .todo-card {
   display: flex;
-  gap: 8px;
+  gap: 9px;
   align-items: flex-start;
-  padding: 9px 9px 9px 11px;
+  padding: 10px 10px 10px 12px;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-left: 3px solid transparent;
   border-radius: 8px;
   cursor: grab;
-  transition: border-color 120ms ease, box-shadow 120ms ease, opacity 140ms ease;
+  transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease, opacity 140ms ease;
 }
 
 .todo-card:hover {
-  border-color: #3a3a3a;
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.28);
+  border-color: #454545;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.32);
+  transform: translateY(-1px);
 }
 
 .todo-card.dragging {
@@ -4684,8 +4691,9 @@ details.artifact-row[open] summary {
 
 .todo-board-page .todo-filter-chips {
   display: flex;
-  gap: 5px;
+  gap: 6px;
   align-items: center;
+  height: 28px;
 }
 
 .todo-board-page .todo-filter-chip {
@@ -4712,8 +4720,13 @@ details.artifact-row[open] summary {
 }
 
 .todo-board-page .todo-filter-conversation {
+  width: auto;
+  min-width: 150px;
+}
+
+.todo-board-page .todo-filter-conversation .custom-select-trigger {
   min-height: 28px;
-  padding: 0 8px;
+  padding: 0 10px;
   color: var(--muted);
   background: transparent;
   border: 1px solid var(--line);
@@ -4722,8 +4735,17 @@ details.artifact-row[open] summary {
   font-weight: 550;
 }
 
-.todo-board-page .todo-filter-conversation:hover {
+.todo-board-page .todo-filter-conversation .custom-select-trigger:hover {
   color: var(--text);
+  background: var(--hover);
+}
+
+.todo-board-page .todo-filter-conversation.open .custom-select-trigger {
+  color: var(--text);
+}
+
+.todo-board-page .todo-filter-conversation .custom-select-menu {
+  min-width: 200px;
 }
 
 .todo-board-page .todo-assignee-wrap {
@@ -4735,12 +4757,13 @@ details.artifact-row[open] summary {
   display: inline-flex;
   gap: 5px;
   align-items: center;
-  max-width: 96px;
-  height: 20px;
-  padding: 0 7px;
-  color: var(--muted);
-  background: transparent;
-  border: 1px solid transparent;
+  max-width: 100px;
+  height: 21px;
+  margin-top: 1px;
+  padding: 0 8px;
+  color: var(--soft);
+  background: rgb(255 255 255 / 0.05);
+  border: 1px solid rgb(255 255 255 / 0.08);
   border-radius: 999px;
   font-size: 11px;
   font-weight: 550;
@@ -4763,6 +4786,7 @@ details.artifact-row[open] summary {
   width: 7px;
   height: 7px;
   border-radius: 50%;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.14);
 }
 
 .todo-board-page .todo-assignee-label {
