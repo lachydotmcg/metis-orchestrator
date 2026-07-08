@@ -1787,7 +1787,8 @@ async function refreshPulseFeed(sourceUrl?: string): Promise<PulseFeed> {
       community: Array.isArray(payload.community)
         ? payload.community.map((item) => coerceRegistryPackage(item)).filter((pkg): pkg is RegistryPackage => Boolean(pkg))
         : [],
-      news: Array.isArray(payload.news) ? (payload.news as PulseFeed["news"]) : []
+      news: Array.isArray(payload.news) ? (payload.news as PulseFeed["news"]) : [],
+      discordInvite: payload.discordInvite
     };
     await writeStoreValue("pulseFeed", state);
     return state;
@@ -1802,7 +1803,8 @@ async function refreshPulseFeed(sourceUrl?: string): Promise<PulseFeed> {
       changelog: cached?.changelog ?? [],
       community: cached?.community ?? [],
       news: cached?.news ?? [],
-      updated: cached?.updated
+      updated: cached?.updated,
+      discordInvite: cached?.discordInvite
     };
     await writeStoreValue("pulseFeed", state);
     return state;

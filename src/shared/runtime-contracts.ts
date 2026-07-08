@@ -298,6 +298,10 @@ export interface PulseNewsEntry {
   title: string;
   url: string;
   blurb?: string;
+  /** Optional hero/tile image URL — image-backed tiles get a dark scrim + overlaid title. */
+  image?: string;
+  /** Optional small uppercase category chip (e.g. "RELEASE", "COMMUNITY"). Defaults to "FEATURED"/"NEWS". */
+  tag?: string;
 }
 
 /** `featured.json` from the live community registry — Pulse tab content
@@ -311,6 +315,8 @@ export interface PulseFeed {
   changelog: PulseChangelogEntry[];
   community: RegistryPackage[];
   news: PulseNewsEntry[];
+  /** Optional Discord invite URL for the static "Join the community!" bento tile. */
+  discordInvite?: string;
 }
 
 export interface PolicyStatus {

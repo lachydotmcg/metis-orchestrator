@@ -61,6 +61,7 @@ import {
   Maximize2,
   Menu,
   Mic,
+  MessageCircle,
   Minus,
   Monitor,
   MoreHorizontal,
@@ -1599,12 +1600,24 @@ function PulseWorkspace(): JSX.Element {
 
   const hasAny = pulse.changelog.length > 0 || pulse.community.length > 0 || pulse.news.length > 0;
 
+  // Featured hero = first news entry; falls back to the first community package so the
+  // bento never opens on an empty hero when only community data is present.
+  const heroEntry = pulse.news[0];
+  const heroCommunity = heroEntry ? undefined : pulse.community[0];
+  const hero: { title: string; blurb?: string; image?: string; tag?: string } | null = heroEntry
+    ? { title: heroEntry.title, blurb: heroEntry.blurb, image: heroEntry.image, tag: heroEntry.tag }
+    : heroCommunity
+    ? { title: heroCommunity.name, blurb: heroCommunity.description, image: heroCommunity.images?.[0], tag: "COMMUNITY" }
+    : null;
+  const restNews = heroEntry ? pulse.news.slice(1) : pulse.news;
+  const restCommunity = heroCommunity ? pulse.community.slice(1) : pulse.community;
+
   return (
     <main className="product-workspace pulse-workspace" aria-label="Pulse">
       <div className="pulse-workspace-column">
         <header className="pulse-workspace-head">
           <h1>Pulse</h1>
-          <p>{pulse.status === "offline" ? "Showing the cached feed — offline" : "Changelog, community projects, and news"}</p>
+          <p>{pulse.status === "offline" ? "Showing the cached feed — offline" : "News, community projects, and what's new"}</p>
           <button type="button" className="pulse-workspace-refresh" onClick={refresh} disabled={loading}>
             {loading ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
             <span>Refresh</span>
@@ -1613,57 +1626,105 @@ function PulseWorkspace(): JSX.Element {
 
         {!hasAny && !loading ? <p className="pulse-empty">Nothing new yet.</p> : null}
 
-        {pulse.changelog.length ? (
-          <section className="pulse-workspace-section">
-            <h2>Changelog</h2>
-            <div className="pulse-timeline">
-              {pulse.changelog.map((entry) => (
-                <article className="pulse-timeline-entry" key={`${entry.date}-${entry.title}`}>
-                  <div className="pulse-timeline-rail">
-                    <span className="pulse-timeline-date">{entry.date}</span>
-                    <span className="pulse-timeline-dot" aria-hidden="true" />
-                  </div>
-                  <div className="pulse-timeline-body">
-                    <strong>{entry.title}</strong>
-                    <p>{entry.blurb}</p>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-        ) : null}
+        <div className="pulse-bento">
+          {hero
+            ? (() => {
+                const clickable = Boolean(heroEntry?.url);
+                const className = `pulse-tile pulse-tile-hero${hero.image ? " image" : ""}`;
+                const style: CSSProperties | undefined = hero.image ? { backgroundImage: `url(${hero.image})` } : undefined;
+                const body = (
+                  <>
+                    {hero.image ? <div className="pulse-scrim" aria-hidden="true" /> : null}
+                    <div className="pulse-tile-body">
+                      <span className="pulse-tag">{hero.tag ?? "FEATURED"}</span>
+                      <h2>{hero.title}</h2>
+                      {hero.blurb ? <p>{hero.blurb}</p> : null}
+                    </div>
+                  </>
+                );
+                return clickable ? (
+                  <button type="button" className={className} style={style} onClick={() => openExternal(heroEntry!.url)}>
+                    {body}
+                  </button>
+                ) : (
+                  <article className={className} style={style}>
+                    {body}
+                  </article>
+                );
+              })()
+            : null}
 
-        {pulse.community.length ? (
-          <section className="pulse-workspace-section">
-            <h2>Community</h2>
-            <div className="pulse-community-grid">
-              {pulse.community.map((item) => (
-                <article className="pulse-community-card" key={item.id}>
-                  <strong>{item.name}</strong>
-                  <p>{item.description}</p>
-                  <small>{item.publisher}</small>
-                </article>
-              ))}
-            </div>
-          </section>
-        ) : null}
+          {restNews.map((entry) => (
+            <button
+              key={entry.url}
+              type="button"
+              className={`pulse-tile pulse-tile-news${entry.image ? " image" : ""}`}
+              style={entry.image ? { backgroundImage: `url(${entry.image})` } : undefined}
+              onClick={() => openExternal(entry.url)}
+            >
+              {entry.image ? <div className="pulse-scrim" aria-hidden="true" /> : null}
+              <div className="pulse-tile-body">
+                <span className="pulse-tag">{entry.tag ?? "NEWS"}</span>
+                <h3>{entry.title}</h3>
+                {entry.blurb ? <p>{entry.blurb}</p> : null}
+                {!entry.image ? <ExternalLink size={14} className="pulse-tile-link-icon" aria-hidden="true" /> : null}
+              </div>
+            </button>
+          ))}
 
-        {pulse.news.length ? (
-          <section className="pulse-workspace-section">
-            <h2>News</h2>
-            <div className="pulse-news-list">
-              {pulse.news.map((entry) => (
-                <button className="pulse-news-row" key={entry.url} type="button" onClick={() => openExternal(entry.url)}>
-                  <span>
-                    <strong>{entry.title}</strong>
-                    {entry.blurb ? <small>{entry.blurb}</small> : null}
-                  </span>
-                  <ExternalLink size={14} />
-                </button>
-              ))}
+          {restCommunity.map((item) => (
+            <article className="pulse-tile pulse-tile-community" key={item.id}>
+              <span className="pulse-tag">BUILT WITH METIS</span>
+              {item.images?.[0] ? (
+                <div className="pulse-tile-art" style={{ backgroundImage: `url(${item.images[0]})` }} aria-hidden="true" />
+              ) : item.ascii_art?.length ? (
+                <pre className="pulse-tile-ascii">{item.ascii_art.join("\n")}</pre>
+              ) : null}
+              <div className="pulse-tile-body">
+                <strong>{item.name}</strong>
+                <p>{item.description}</p>
+                <small>{item.publisher}</small>
+              </div>
+            </article>
+          ))}
+
+          {pulse.changelog.length ? (
+            <article className="pulse-tile pulse-tile-changelog">
+              <span className="pulse-tag">WHAT'S NEW</span>
+              <ul className="pulse-changelog-list">
+                {pulse.changelog.slice(0, 3).map((entry) => (
+                  <li key={`${entry.date}-${entry.title}`}>
+                    <span className="pulse-changelog-date">{entry.date}</span>
+                    <span className="pulse-changelog-title">{entry.title}</span>
+                  </li>
+                ))}
+              </ul>
+            </article>
+          ) : null}
+
+          <button
+            type="button"
+            className="pulse-tile pulse-tile-discord"
+            onClick={() => openExternal(pulse.discordInvite ?? "https://discord.gg/")}
+          >
+            <span className="pulse-discord-icon">
+              <img
+                src="assets/discord.png"
+                alt="Discord"
+                onError={(event) => {
+                  event.currentTarget.style.display = "none";
+                  const fallback = event.currentTarget.nextElementSibling;
+                  if (fallback) fallback.classList.remove("hidden");
+                }}
+              />
+              <MessageCircle size={28} className="pulse-discord-fallback hidden" aria-hidden="true" />
+            </span>
+            <div className="pulse-tile-body">
+              <strong>Join the community!</strong>
+              <p>Chat with other builders, share pipelines, and get help on Discord.</p>
             </div>
-          </section>
-        ) : null}
+          </button>
+        </div>
       </div>
     </main>
   );
