@@ -6797,6 +6797,18 @@ function MemoryGraphWorkspace({
     }
     selectByLabel(label);
   }
+  // Add/open a folder to browse (owner: "I need to be able to add folders"). selectFolder points the
+  // active project at the chosen folder; refreshing then loads that folder's documents into the
+  // directory + canvas. Guarded for the browser preview where the bridge is absent.
+  async function addFolderToGraph(): Promise<void> {
+    if (!window.metisProject) return;
+    try {
+      await window.metisProject.selectFolder();
+      refreshRuntimeGraph();
+    } catch {
+      /* folder picker cancelled */
+    }
+  }
 
   function togglePinnedNote(note: string): void {
     setPinnedNotes((current) => (current.includes(note) ? current.filter((n) => n !== note) : [...current, note]));
@@ -7197,6 +7209,17 @@ function MemoryGraphWorkspace({
           <button type="button" aria-label="Refresh runtime memory" onClick={refreshRuntimeGraph}>
             <RotateCcw size={15} />
           </button>
+          {/* Always-present directory toggle so the panel can always be reopened (owner: "when I
+              collapse the window I cant reopen the graph window") — the floating pill was easy to miss. */}
+          <button
+            type="button"
+            aria-label={treeCollapsed ? "Show directory" : "Hide directory"}
+            title={treeCollapsed ? "Show directory" : "Hide directory"}
+            className={treeCollapsed ? "" : "active"}
+            onClick={() => setTreeCollapsed((v) => !v)}
+          >
+            {treeCollapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}
+          </button>
         </div>
         <div className="memory-title">Graph View</div>
         {focusRoot ? (
@@ -7335,6 +7358,14 @@ function MemoryGraphWorkspace({
         <aside className="memory-tree" aria-label="Note folders">
           <header className="memory-tree-head">
             <div className="memory-tree-actions">
+              <button
+                type="button"
+                aria-label="Add folder"
+                title="Open a folder to browse its documents"
+                onClick={() => void addFolderToGraph()}
+              >
+                <Plus size={16} />
+              </button>
               <button
                 type="button"
                 aria-label="Search files"
