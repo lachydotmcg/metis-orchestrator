@@ -633,6 +633,20 @@ export interface LabPipelineEdge {
   status: "complete" | "warning" | "error";
 }
 
+export interface OllamaListResult {
+  reachable: boolean;
+  installed: string[]; // model tags from /api/tags, e.g. "qwen3:8b"
+}
+
+export interface OllamaPullProgress {
+  model: string;
+  status: string; // Ollama's status string ("pulling manifest", "downloading", "verifying", "success", ...)
+  completed?: number; // bytes downloaded so far (when Ollama reports it)
+  total?: number; // total bytes (when Ollama reports it)
+  done: boolean; // terminal event (success OR error)
+  error?: string; // set when the pull failed
+}
+
 export interface LabExperimentRoute {
   pipelineName: string;
   taskType: RouteDecision["task_type"];

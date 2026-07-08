@@ -43,6 +43,8 @@ import type {
   GraphPipelineConfig,
   ModelAccessRoute,
   ModelCatalogState,
+  OllamaListResult,
+  OllamaPullProgress,
   PulseFeed,
   RegistryPackage,
   RegistryPackageKind,
@@ -5883,6 +5885,97 @@ async function detectOllamaVisionModel(): Promise<string | null> {
   }
 }
 
+/** Lists installed Ollama models via `/api/tags`. Never throws — any failure
+ *  (Ollama not running, network error, bad JSON) is reported as unreachable
+ *  rather than propagated (docs/FABLE_PLANS.md §17/§18). */
+async function listOllamaModels(): Promise<OllamaListResult> {
+  try {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
+    if (!response.ok) return { reachable: false, installed: [] };
+    const payload = (await response.json()) as { models?: Array<{ name?: string }> };
+    const installed = (payload.models ?? []).map((entry) => entry.name).filter((name): name is string => Boolean(name));
+    return { reachable: true, installed };
+  } catch {
+    return { reachable: false, installed: [] };
+  }
+}
+
+/** Pulls (installs) an Ollama model, streaming NDJSON progress lines from
+ *  `/api/pull` back to the renderer via `metis-ollama:pull-progress`. Buffers
+ *  partial lines across chunk boundaries since a chunk may split a JSON
+ *  object mid-line. Never throws out of this function — all failure paths
+ *  emit a terminal `{ done: true, error }` event and resolve with `{ ok: false }`
+ *  (docs/FABLE_PLANS.md §17/§18). */
+async function pullOllamaModel(
+  modelName: string,
+  emitProgress: (progress: OllamaPullProgress) => void
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/pull`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: modelName, stream: true })
+    });
+    if (!response.ok || !response.body) {
+      const error = `Ollama pull request failed (${response.status})`;
+      emitProgress({ model: modelName, status: "error", done: true, error });
+      return { ok: false, error };
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    const handleLine = (line: string): { stop: boolean; error?: string } => {
+      const trimmed = line.trim();
+      if (!trimmed) return { stop: false };
+      let parsed: { status?: string; completed?: number; total?: number; error?: string };
+      try {
+        parsed = JSON.parse(trimmed);
+      } catch {
+        return { stop: false };
+      }
+      if (parsed.error) {
+        emitProgress({ model: modelName, status: "error", done: true, error: parsed.error });
+        return { stop: true, error: parsed.error };
+      }
+      emitProgress({
+        model: modelName,
+        status: parsed.status ?? "",
+        completed: parsed.completed,
+        total: parsed.total,
+        done: false
+      });
+      return { stop: false };
+    };
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let newlineIndex = buffer.indexOf("\n");
+      while (newlineIndex !== -1) {
+        const line = buffer.slice(0, newlineIndex);
+        buffer = buffer.slice(newlineIndex + 1);
+        const result = handleLine(line);
+        if (result.stop) return { ok: false, error: result.error };
+        newlineIndex = buffer.indexOf("\n");
+      }
+    }
+    if (buffer.trim()) {
+      const result = handleLine(buffer);
+      if (result.stop) return { ok: false, error: result.error };
+    }
+
+    emitProgress({ model: modelName, status: "success", done: true });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    emitProgress({ model: modelName, status: "error", done: true, error: message });
+    return { ok: false, error: message };
+  }
+}
+
 /** Rasterizes a `data:image/svg+xml,...` (URL-encoded, NOT base64) data URL to a PNG
  *  nativeImage via a hidden, off-screen BrowserWindow capture. Electron's `nativeImage`
  *  cannot decode SVG at all (createFromDataURL silently yields an empty image for it),
@@ -6398,6 +6491,14 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-registry:uninstall", (_event, id: string) => uninstallPackage(id));
   ipcMain.handle("metis-catalog:models", () => listModelCatalog());
   ipcMain.handle("metis-pulse:feed", () => listPulseFeed());
+  ipcMain.handle("metis-ollama:list", () => listOllamaModels());
+  ipcMain.handle("metis-ollama:pull", async (event, modelName: string) => {
+    return pullOllamaModel(modelName, (progress) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("metis-ollama:pull-progress", progress);
+      }
+    });
+  });
   ipcMain.handle("metis-routines:list", () => listRoutines());
   ipcMain.handle("metis-routines:save", (_event, input: Routine) => saveRoutine(input));
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));

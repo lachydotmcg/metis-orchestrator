@@ -6,6 +6,8 @@ import type {
   LabExperimentResult,
   MetisFileReadResult,
   ModelCatalogState,
+  OllamaListResult,
+  OllamaPullProgress,
   PermissionGrant,
   PermissionRequest,
   PermissionVerdict,
@@ -124,6 +126,11 @@ declare global {
       save: (routine: Routine) => Promise<Routine>;
       delete: (id: string) => Promise<Routine[]>;
       runNow: (id: string) => Promise<Routine | undefined>;
+    };
+    metisOllama?: {
+      list(): Promise<OllamaListResult>;
+      pull(model: string): Promise<{ ok: boolean; error?: string }>;
+      onPullProgress(cb: (progress: OllamaPullProgress) => void): () => void;
     };
     metisGallery?: {
       analyzeBoard: (boardId: string) => Promise<StyleCard[]>;

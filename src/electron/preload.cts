@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConversationRecord,
   MetisFileReadResult,
+  OllamaPullProgress,
   PermissionRequest,
   PermissionVerdict,
   PolicyDecisionInput,
@@ -129,6 +130,16 @@ contextBridge.exposeInMainWorld("metisRoutines", {
   save: (routine: Routine) => ipcRenderer.invoke("metis-routines:save", routine) as Promise<Routine>,
   delete: (id: string) => ipcRenderer.invoke("metis-routines:delete", id) as Promise<Routine[]>,
   runNow: (id: string) => ipcRenderer.invoke("metis-routines:run-now", id) as Promise<Routine | undefined>
+});
+
+contextBridge.exposeInMainWorld("metisOllama", {
+  list: () => ipcRenderer.invoke("metis-ollama:list"),
+  pull: (model: string) => ipcRenderer.invoke("metis-ollama:pull", model),
+  onPullProgress: (cb: (progress: OllamaPullProgress) => void) => {
+    const listener = (_event: unknown, payload: OllamaPullProgress) => cb(payload);
+    ipcRenderer.on("metis-ollama:pull-progress", listener);
+    return () => ipcRenderer.removeListener("metis-ollama:pull-progress", listener);
+  }
 });
 
 contextBridge.exposeInMainWorld("metisGallery", {
