@@ -116,6 +116,16 @@ p {
   background: var(--hover);
 }
 
+.titlebar-icon:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+}
+
+.titlebar-icon:disabled:hover {
+  color: var(--faint);
+  background: transparent;
+}
+
 .titlebar-update-badge {
   display: inline-flex;
   gap: 5px;
@@ -1163,6 +1173,16 @@ p {
 .account-menu button:hover {
   color: white;
   background: var(--hover);
+}
+
+.account-menu button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.account-menu button:disabled:hover {
+  color: var(--soft);
+  background: transparent;
 }
 
 .account-menu button:hover svg {

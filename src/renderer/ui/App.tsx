@@ -1632,7 +1632,7 @@ function Titlebar({
         <button className="titlebar-icon" type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={onToggleCollapse}>
           <Menu size={17} />
         </button>
-        <button className="titlebar-icon" type="button" aria-label="Search">
+        <button className="titlebar-icon" type="button" aria-label="Search" title="Global search — coming soon" disabled>
           <Search size={16} />
         </button>
         <button className="titlebar-icon" type="button" aria-label="Pulse" onClick={handleOpenPulse}>
@@ -2240,12 +2240,12 @@ function Sidebar({
                   <span>Settings</span>
                   <em>Ctrl ,</em>
                 </button>
-                <button type="button" role="menuitem">
+                <button type="button" role="menuitem" title="Coming soon" disabled>
                   <Globe size={15} />
                   <span>Language</span>
                   <ChevronRight size={14} className="account-menu-caret" />
                 </button>
-                <button type="button" role="menuitem">
+                <button type="button" role="menuitem" onClick={() => openExternal(`${METIS_REPO_URL}/issues`)}>
                   <HelpCircle size={15} />
                   <span>Get help</span>
                 </button>
@@ -2255,13 +2255,20 @@ function Sidebar({
                   <Github size={15} />
                   <span>GitHub repo</span>
                 </button>
-                <button type="button" role="menuitem">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setAccountOpen(false);
+                    onSelect("pulse");
+                  }}
+                >
                   <ScrollText size={15} />
                   <span>View changelog</span>
                 </button>
               </div>
               <div className="account-menu-group">
-                <button type="button" role="menuitem">
+                <button type="button" role="menuitem" title="Coming soon" disabled>
                   <LogOut size={15} />
                   <span>Log out</span>
                 </button>
@@ -3781,7 +3788,7 @@ function SessionComposer({
             className="composer-file-input"
             onChange={handleAttachFiles}
           />
-          <button className="tool-btn" type="button" aria-label="Voice input">
+          <button className="tool-btn" type="button" aria-label="Voice input" title="Voice input — coming soon" disabled>
             <Mic size={16} />
           </button>
         </div>
