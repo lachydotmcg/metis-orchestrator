@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConversationRecord,
+  ManagerChatMessage,
+  ManagerChatResult,
   MetisFileReadResult,
   MetisFileWriteResult,
   OllamaPullProgress,
@@ -142,6 +144,10 @@ contextBridge.exposeInMainWorld("metisOllama", {
     ipcRenderer.on("metis-ollama:pull-progress", listener);
     return () => ipcRenderer.removeListener("metis-ollama:pull-progress", listener);
   }
+});
+
+contextBridge.exposeInMainWorld("metisManager", {
+  chat: (history: ManagerChatMessage[]) => ipcRenderer.invoke("metis-manager:chat", history) as Promise<ManagerChatResult>
 });
 
 contextBridge.exposeInMainWorld("metisGallery", {

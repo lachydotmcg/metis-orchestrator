@@ -61,7 +61,9 @@ import type {
   SecretStatus,
   Routine,
   StyleCard,
-  UserQuestionRequest
+  UserQuestionRequest,
+  ManagerChatMessage,
+  ManagerChatResult
 } from "../shared/runtime-contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -4774,6 +4776,108 @@ function repairChainFor(override?: SessionModelOverride): StageModelRef[] {
   return [pinned, ...base.filter((ref) => ref.provider !== pinned.provider || ref.model !== pinned.model)];
 }
 
+// --- Manager chat (docs/FABLE_PLANS.md — Manager tab round 1: real chat with
+// context on the owner's projects and to-do board) ---
+
+/** Minimal shape read back out of the `todoBoard` store key — deliberately
+ *  loose (not the renderer's full TodoBoard type) since main.ts only ever
+ *  summarizes counts here and must not throw on a shape it doesn't fully own. */
+type ManagerTodoCard = { done?: boolean; assignee?: { kind?: string } };
+type ManagerTodoColumn = { id?: string; title?: string; cards?: ManagerTodoCard[] };
+type ManagerTodoBoard = { columns?: ManagerTodoColumn[] };
+
+function managerChatChain(): StageModelRef[] {
+  const claude: StageModelRef = { provider: "anthropic", model: providerInfo.anthropic.defaultModel ?? "claude-sonnet-4-6" };
+  const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-chat" };
+  return [claude, deepseek, localStageRef()];
+}
+
+/** Builds the live-context block injected into the Manager system prompt:
+ *  known projects (the selected workspace + any added resources) and an
+ *  outstanding-work summary from the shared `todoBoard` store key (same
+ *  board the To-Do view and the suggestion-lane Manager read). There is no
+ *  goals store yet, so that slot is left explicitly empty rather than
+ *  inventing content the owner never gave us. */
+async function buildManagerContext(): Promise<string> {
+  const [workspace, resources, board] = await Promise.all([
+    readProjectWorkspace(),
+    listProjectResources(),
+    readStoreValue<ManagerTodoBoard>("todoBoard", { columns: [] })
+  ]);
+  const projectNames = Array.from(
+    new Set([...(workspace ? [workspace.name] : []), ...resources.map((resource) => resource.name)])
+  );
+
+  const columns = board.columns ?? [];
+  const columnSummary = columns
+    .map((column) => {
+      const cards = column.cards ?? [];
+      const open = cards.filter((card) => !card.done);
+      return `${column.title ?? "Untitled"}: ${open.length} open of ${cards.length}`;
+    })
+    .join("; ");
+
+  const assigneeCounts = new Map<string, number>();
+  for (const column of columns) {
+    for (const card of column.cards ?? []) {
+      if (card.done) continue;
+      const kind = card.assignee?.kind ?? "unassigned";
+      assigneeCounts.set(kind, (assigneeCounts.get(kind) ?? 0) + 1);
+    }
+  }
+  const assigneeSummary = Array.from(assigneeCounts.entries())
+    .map(([kind, count]) => `${kind}: ${count}`)
+    .join(", ");
+
+  return [
+    `Known projects: ${projectNames.length ? projectNames.join(", ") : "none set up yet — no project workspace or resources are configured."}`,
+    `To-do board by column — ${columnSummary || "no columns on the board yet."}`,
+    `Open work by owner — ${assigneeSummary || "nothing open right now."}`,
+    `Goals: no goals store exists yet, so nothing is injected here — don't invent goals; ask the owner if it matters.`
+  ].join("\n");
+}
+
+function managerSystemPrompt(context: string): string {
+  return [
+    `You are Metis Manager, a concise, action-oriented assistant embedded in the Manager tab of Metis Orchestrator.`,
+    `You help the owner run his projects: you know what projects exist and what's on his to-do board, and you help him plan, prioritize, and think through his work.`,
+    `Live context:`,
+    context,
+    `You can advise, help plan, and reference specific projects or todos by name when it's useful. Deeper actions (firing prompts into a project's folder, editing the orchestration graph) are coming in a later update — for now, give concrete, specific guidance, and when it's relevant, suggest specific todos he could add or tackle next.`,
+    `Be concise and direct. Do not pad with filler, do not ask permission before giving your answer, and do not narrate your own reasoning process — just help.`
+  ].join("\n\n");
+}
+
+/** Non-streaming Manager chat turn: builds live context, calls the model chain
+ *  (Claude -> DeepSeek -> local Ollama, so it works whichever keys are set),
+ *  and never throws — any failure comes back as `{ reply: "", error }` so the
+ *  renderer can show a plain message instead of crashing. */
+async function runManagerChat(history: ManagerChatMessage[]): Promise<ManagerChatResult> {
+  try {
+    const context = await buildManagerContext();
+    const system = managerSystemPrompt(context);
+    const transcript = (history ?? [])
+      .slice(-20)
+      .map((turn) => `${turn.role === "user" ? "Owner" : "Manager"}: ${turn.content}`)
+      .join("\n\n");
+    const prompt = [system, "", "Conversation so far:", transcript || "(no prior turns)", "", "Manager:"].join("\n");
+    const result = await callStageWithFallback(managerChatChain(), prompt);
+    if (result.failed || !result.output.trim()) {
+      const detail = result.notes.join(" ") || "No model in the chain produced a reply.";
+      await appendAudit("warning", "manager.chat", "Manager chat turn failed.", { notes: result.notes });
+      return { reply: "", error: detail };
+    }
+    await appendAudit("info", "manager.chat", "Manager replied to a chat turn.", {
+      provider: result.ref.provider,
+      model: result.ref.model
+    });
+    return { reply: result.output };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { reply: "", error: message };
+  }
+}
+
 /** When verification fails after a build, feed the failures back into a repair
  *  model, rewrite the corrected files, and re-verify — up to REPAIR_PASS_LIMIT. */
 async function runRepairPasses(args: {
@@ -6553,6 +6657,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-routines:save", (_event, input: Routine) => saveRoutine(input));
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));
   ipcMain.handle("metis-routines:run-now", (_event, id: string) => runRoutineNow(id));
+  ipcMain.handle("metis-manager:chat", (_event, history: ManagerChatMessage[]) => runManagerChat(history));
   ipcMain.handle("metis-gallery:analyze-board", (_event, boardId: string) => analyzeGalleryBoard(boardId));
   ipcMain.handle("metis-gallery:cards", () => listStyleCards());
   ipcMain.handle("metis-gallery:update-card", (_event, imageId: string, boardId: string, patch: StoredStyleCardPatch) => updateStyleCard(imageId, boardId, patch));

@@ -103,6 +103,19 @@ export interface ProjectWorkspaceResource {
   addedAt: string;
 }
 
+/** One turn in the Manager tab's chat with "Metis Manager" (docs/FABLE_PLANS.md
+ *  Manager chat round 1) — persisted verbatim under the `managerChat` store key
+ *  and sent back to main on every turn so it can rebuild the conversation prompt. */
+export interface ManagerChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ManagerChatResult {
+  reply: string;
+  error?: string;
+}
+
 export interface ProjectSnapshotFile {
   path: string;
   kind: "file" | "directory";

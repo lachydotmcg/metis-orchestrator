@@ -78,6 +78,8 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  PanelRightClose,
+  PanelRightOpen,
   ScrollText,
   Search,
   Settings,
@@ -104,6 +106,7 @@ import type {
   ConversationTurnRecord,
   GraphPipelineConfig,
   GraphPipelineStage,
+  ManagerChatMessage,
   ModelCatalogState,
   OllamaListResult,
   OllamaPullProgress,
@@ -9395,11 +9398,127 @@ type ManagerSuggestion = { id: string; text: string; actionLabel: string; action
  *  (ollama) are never unkeyed in the sense this suggestion means. */
 const MANAGER_KEYABLE_PROVIDERS: ProviderKey[] = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
 
+const EMPTY_MANAGER_CHAT: ManagerChatMessage[] = [];
+
+/** The Manager tab's primary surface: a real chat with "Metis Manager", backed
+ *  by the metis-manager:chat IPC (main.ts builds live project/todo context and
+ *  calls the same provider-invocation machinery the main chat uses). Kept as
+ *  its own component — not inlined into ManagerWorkspace — so a future
+ *  floating widget (a separate round of work) can mount this exact component
+ *  instead of duplicating the chat logic. Persists to the shared `managerChat`
+ *  store key so the conversation survives navigation and app restarts. */
+function ManagerChat(): JSX.Element {
+  const [messages, setMessages] = useAppStoreState<ManagerChatMessage[]>("managerChat", EMPTY_MANAGER_CHAT);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const available = Boolean(window.metisManager);
+
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages.length, sending]);
+
+  async function send(): Promise<void> {
+    const text = draft.trim();
+    if (!text || sending || !available) return;
+    const next = [...messages, { role: "user" as const, content: text }];
+    setMessages(next);
+    setDraft("");
+    setSending(true);
+    setError(null);
+    try {
+      const result = await window.metisManager!.chat(next);
+      if (result.reply) setMessages((current) => [...current, { role: "assistant" as const, content: result.reply }]);
+      if (result.error) setError(result.error);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSending(false);
+    }
+  }
+
+  function clearChat(): void {
+    setMessages([]);
+    setError(null);
+  }
+
+  return (
+    <div className="manager-chat">
+      <div className="manager-chat-head">
+        <span className="manager-chat-title">
+          <Sparkles size={14} /> Chat with Manager
+        </span>
+        <button type="button" className="ghost manager-chat-clear" onClick={clearChat} disabled={messages.length === 0 && !error}>
+          <RotateCcw size={12} /> New chat
+        </button>
+      </div>
+      <div className="manager-chat-list" ref={listRef}>
+        {messages.length === 0 ? (
+          <p className="manager-chat-empty">Ask about your projects, todos, or what to tackle next.</p>
+        ) : (
+          messages.map((message, index) => (
+            <div key={index} className={`message-row ${message.role === "user" ? "user-message" : "assistant-message"}`}>
+              {message.role === "user" ? (
+                <div className="user-bubble">
+                  <p>{message.content}</p>
+                </div>
+              ) : (
+                <div className="manager-chat-reply">
+                  <Markdown>{message.content}</Markdown>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+        {sending ? (
+          <div className="message-row assistant-message">
+            <div className="manager-chat-reply">
+              <span className="thinking-dots" aria-label="Manager is thinking">
+                <span />
+                <span />
+                <span />
+              </span>
+            </div>
+          </div>
+        ) : null}
+      </div>
+      {error ? <p className="manager-chat-error">{error}</p> : null}
+      <div className="manager-chat-composer">
+        <textarea
+          value={draft}
+          rows={2}
+          placeholder={available ? "Message the Manager…" : "Manager needs the desktop app."}
+          disabled={!available || sending}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              void send();
+            }
+          }}
+        />
+        <button
+          type="button"
+          className="manager-chat-send"
+          aria-label="Send"
+          disabled={!available || sending || !draft.trim()}
+          onClick={() => void send()}
+        >
+          <ArrowUp size={16} />
+        </button>
+      </div>
+      {!available ? <p className="manager-chat-note">Manager needs the desktop app to chat live — this preview can still show the composer.</p> : null}
+    </div>
+  );
+}
+
 function ManagerWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX.Element {
   const [board, setBoard] = useAppStoreState("todoBoard", DEFAULT_TODO_BOARD);
   const [dismissed, setDismissed] = useAppStoreState<string[]>("managerDismissedSuggestions", []);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  const [sidePanelOpen, setSidePanelOpen] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -9511,88 +9630,99 @@ function ManagerWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void })
 
   return (
     <main className="product-workspace manager-workspace" aria-label="Manager agent">
-      <section className="manager-shell">
-        <header className="manager-head">
-          <small>Built-in assistant layer</small>
-          <h1>Manager</h1>
-          <p>Watches your work — the to-do board, provider setup, and recent run activity — and surfaces suggestions here. It never acts on its own; every action below is one you approve.</p>
-        </header>
+      <header className="manager-head">
+        <small>Built-in assistant layer</small>
+        <h1>Manager</h1>
+        <p>A chat with Metis Manager — it knows your projects and to-do board, and helps you plan and prioritize. Anything it notices along the way (unowned work, missing keys, recent failures) shows up in the panel alongside.</p>
+      </header>
 
-        <section className="manager-section">
-          <h2>Suggestions</h2>
-          {suggestions.length === 0 ? (
-            <p className="manager-empty">All clear — nothing needs your attention.</p>
-          ) : (
-            <div className="manager-suggestions">
-              {suggestions.map((suggestion) => (
-                <div key={suggestion.id} className={`manager-suggestion ${suggestion.tone === "warn" ? "warn" : ""}`}>
-                  <span className="manager-suggestion-text">{suggestion.text}</span>
-                  <div className="manager-suggestion-actions">
-                    <button type="button" className="ghost" onClick={suggestion.action}>
-                      {suggestion.actionLabel}
-                    </button>
-                    <button type="button" className="manager-suggestion-dismiss" aria-label="Dismiss suggestion" title="Dismiss" onClick={() => dismissSuggestion(suggestion.id)}>
-                      <X size={13} />
-                    </button>
+      <div className="manager-body">
+        <ManagerChat />
+
+        <aside className={`manager-side ${sidePanelOpen ? "open" : "collapsed"}`} aria-label="What I noticed">
+          <button type="button" className="manager-side-toggle" onClick={() => setSidePanelOpen((value) => !value)} aria-expanded={sidePanelOpen}>
+            {sidePanelOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
+            <span>What I noticed{suggestions.length ? ` (${suggestions.length})` : ""}</span>
+          </button>
+          {sidePanelOpen ? (
+            <div className="manager-side-body">
+              <section className="manager-section">
+                <h2>Suggestions</h2>
+                {suggestions.length === 0 ? (
+                  <p className="manager-empty">All clear — nothing needs your attention.</p>
+                ) : (
+                  <div className="manager-suggestions">
+                    {suggestions.map((suggestion) => (
+                      <div key={suggestion.id} className={`manager-suggestion ${suggestion.tone === "warn" ? "warn" : ""}`}>
+                        <span className="manager-suggestion-text">{suggestion.text}</span>
+                        <div className="manager-suggestion-actions">
+                          <button type="button" className="ghost" onClick={suggestion.action}>
+                            {suggestion.actionLabel}
+                          </button>
+                          <button type="button" className="manager-suggestion-dismiss" aria-label="Dismiss suggestion" title="Dismiss" onClick={() => dismissSuggestion(suggestion.id)}>
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
+                )}
+              </section>
+
+              <section className="manager-section">
+                <h2>My queue</h2>
+                {myQueue.length === 0 ? (
+                  <p className="manager-empty">Nothing assigned to the Manager right now.</p>
+                ) : (
+                  <div className="manager-queue">
+                    {myQueue.map(({ card, colId, colTitle }) => (
+                      <div key={card.id} className={`manager-queue-row p-${card.priority} ${card.done ? "done" : ""}`}>
+                        <button type="button" className="todo-check" aria-label={card.done ? "Mark not done" : "Mark done"} onClick={() => toggleCardDone(colId, card.id)}>
+                          {card.done ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+                        </button>
+                        <span className="manager-queue-title">{card.title}</span>
+                        <span className="manager-queue-source">{colTitle}</span>
+                        <span className="manager-queue-prio" title={TODO_PRIORITY_LABEL[card.priority]} />
+                        <button type="button" className="ghost" onClick={() => setCardAssignee(colId, card.id, { kind: "fable" })}>
+                          Hand to you
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <section className="manager-section">
+                <h2>Board at a glance</h2>
+                <div className="manager-glance">
+                  <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                    <strong>{glance.you}</strong>
+                    <span>You</span>
+                  </button>
+                  <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                    <strong>{glance.manager}</strong>
+                    <span>Manager</span>
+                  </button>
+                  <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                    <strong>{glance.unassigned}</strong>
+                    <span>Unassigned</span>
+                  </button>
+                  <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                    <strong>{glance.agents}</strong>
+                    <span>Agents</span>
+                  </button>
                 </div>
-              ))}
+              </section>
             </div>
-          )}
-        </section>
-
-        <div className="manager-columns">
-          <section className="manager-section">
-            <h2>My queue</h2>
-            {myQueue.length === 0 ? (
-              <p className="manager-empty">Nothing assigned to the Manager right now.</p>
-            ) : (
-              <div className="manager-queue">
-                {myQueue.map(({ card, colId, colTitle }) => (
-                  <div key={card.id} className={`manager-queue-row p-${card.priority} ${card.done ? "done" : ""}`}>
-                    <button type="button" className="todo-check" aria-label={card.done ? "Mark not done" : "Mark done"} onClick={() => toggleCardDone(colId, card.id)}>
-                      {card.done ? <CheckCircle2 size={14} /> : <Circle size={14} />}
-                    </button>
-                    <span className="manager-queue-title">{card.title}</span>
-                    <span className="manager-queue-source">{colTitle}</span>
-                    <span className="manager-queue-prio" title={TODO_PRIORITY_LABEL[card.priority]} />
-                    <button type="button" className="ghost" onClick={() => setCardAssignee(colId, card.id, { kind: "fable" })}>
-                      Hand to you
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-
-          <section className="manager-section">
-            <h2>Board at a glance</h2>
-            <div className="manager-glance">
-              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
-                <strong>{glance.you}</strong>
-                <span>You</span>
-              </button>
-              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
-                <strong>{glance.manager}</strong>
-                <span>Manager</span>
-              </button>
-              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
-                <strong>{glance.unassigned}</strong>
-                <span>Unassigned</span>
-              </button>
-              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
-                <strong>{glance.agents}</strong>
-                <span>Agents</span>
-              </button>
-            </div>
-          </section>
-        </div>
-      </section>
-      {/* v1 Manager actions are all local: mutating the shared todoBoard store and in-app
-          navigation, never a model or API call. A future model-driven Manager (auto-triage,
-          drafting replies, running commands) must route those actions through the existing
-          permission ceremony (gatePermission / permission_request) so the assistant stays
-          suggestion-first and permission-gated by design, not just in this UI. */}
+          ) : null}
+        </aside>
+      </div>
+      {/* v1 Manager suggestion actions are all local: mutating the shared todoBoard store and
+          in-app navigation, never a model or API call. The chat turn above is the first
+          model-driven Manager action; deeper ones (auto-triage, drafting replies, running
+          commands) must route through the existing permission ceremony (gatePermission /
+          permission_request) so the assistant stays permission-gated by design, not just in
+          this UI. */}
     </main>
   );
 }

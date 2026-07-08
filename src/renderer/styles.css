@@ -5145,21 +5145,212 @@ details.artifact-row[open] summary {
 
 /* ---- Manager: suggestion-first assistant sharing the To-Do board (FABLE_PLANS §11) ---- */
 .manager-workspace {
-  align-items: flex-start;
-  justify-content: center;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   padding: 24px;
-  overflow-y: auto;
-}
-
-.manager-shell {
-  display: grid;
-  gap: 18px;
-  width: min(860px, 100%);
+  overflow: hidden;
 }
 
 .manager-head {
   display: grid;
+  flex-shrink: 0;
   gap: 6px;
+  width: min(1100px, 100%);
+  margin: 0 auto;
+}
+
+/* Chat is the primary surface; the "what I noticed" panel rides alongside,
+ * collapsible to a thin rail so it never competes with the conversation. */
+.manager-body {
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  width: min(1100px, 100%);
+  min-height: 0;
+  margin: 0 auto;
+  flex: 1;
+}
+
+.manager-chat {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.manager-chat-head {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.manager-chat-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--soft);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.manager-chat-clear {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+}
+
+.manager-chat-clear:disabled {
+  color: var(--faint);
+  cursor: default;
+  opacity: 0.6;
+}
+
+.manager-chat-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 16px;
+  overflow-y: auto;
+}
+
+.manager-chat-empty {
+  margin: auto;
+  color: var(--muted);
+  font-size: 12.5px;
+  text-align: center;
+}
+
+.manager-chat-reply {
+  max-width: 640px;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.manager-chat-error {
+  flex-shrink: 0;
+  margin: 0 14px;
+  padding: 8px 10px;
+  color: #e0556a;
+  font-size: 12px;
+  background: rgba(224, 85, 106, 0.08);
+  border: 1px solid rgba(224, 85, 106, 0.25);
+  border-radius: 8px;
+}
+
+.manager-chat-composer {
+  display: flex;
+  flex-shrink: 0;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--line);
+}
+
+.manager-chat-composer textarea {
+  flex: 1;
+  padding: 9px 11px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: none;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.manager-chat-composer textarea:disabled {
+  color: var(--faint);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.manager-chat-send {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  color: #14140f;
+  background: var(--accent);
+  border: none;
+  border-radius: 10px;
+}
+
+.manager-chat-send:disabled {
+  color: var(--muted);
+  background: var(--faint);
+  cursor: not-allowed;
+}
+
+.manager-chat-note {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0 14px 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.manager-side {
+  display: flex;
+  flex: 0 0 320px;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  transition: flex-basis 0.15s ease;
+}
+
+.manager-side.collapsed {
+  flex-basis: 42px;
+}
+
+.manager-side.collapsed .manager-side-toggle {
+  padding: 12px;
+}
+
+.manager-side.collapsed .manager-side-toggle span {
+  display: none;
+}
+
+.manager-side-toggle {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px;
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  border-bottom: 1px solid transparent;
+}
+
+.manager-side.open .manager-side-toggle {
+  border-bottom-color: var(--line);
+}
+
+.manager-side-body {
+  display: grid;
+  gap: 18px;
+  padding: 14px;
+  overflow-y: auto;
 }
 
 .manager-head small {

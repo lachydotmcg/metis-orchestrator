@@ -4,6 +4,8 @@ import type {
   CatalogModel,
   ConversationRecord,
   LabExperimentResult,
+  ManagerChatMessage,
+  ManagerChatResult,
   MetisFileReadResult,
   MetisFileWriteResult,
   ModelCatalogState,
@@ -133,6 +135,9 @@ declare global {
       list(): Promise<OllamaListResult>;
       pull(model: string): Promise<{ ok: boolean; error?: string }>;
       onPullProgress(cb: (progress: OllamaPullProgress) => void): () => void;
+    };
+    metisManager?: {
+      chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;
     };
     metisGallery?: {
       analyzeBoard: (boardId: string) => Promise<StyleCard[]>;
