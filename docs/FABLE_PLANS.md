@@ -1,18 +1,29 @@
 # Fable Plans — feature designs for Metis Orchestrator
 
-> ## ▶ POST-COMPACT / NEW-SESSION HANDOFF (updated 2026-07-04 evening)
+> ## ▶ POST-COMPACT / NEW-SESSION HANDOFF (updated 2026-07-08; latest commit 5e14c1c)
 > Read this first, then the numbered sections as needed. Working arrangement: **Fable diagnoses/
-> plans/verifies; Sonnet subagents implement.** Every subagent brief MUST include: "do the work
+> plans/verifies; Sonnet subagents implement.** Every subagent brief MUST include: "do all work
 > yourself — Agent tool forbidden" and "never git stash/checkout/restore/reset/commit". Coordinator
-> commits + pushes after EVERY verified round (quote-free commit messages — PS 5.1 mangles quotes).
-> Build check: `npm run build`. Repo pushes to github.com/lachydotmcg/metis-orchestrator; registry
-> clone lives in the session scratchpad (re-clone github.com/lachydotmcg/metis-registry if absent).
-> Memory file `metis-orchestrator.md` has the full history; this doc has the designs.
-> **Open work, in order:** (1) §23b gallery tweaks below; (2) §24 permission modes + in-run
-> prompts + AskUserQuestion; (3) verify §21 models×routes landed (agent was in flight at handoff —
-> check git log for a models×routes commit; if absent, re-dispatch per §21); (4) push registry
-> catalog v2 with access[] arrays if not done; (5) parallel sessions live test (code present,
-> untested); (6) §16 knowledge banks; (7) onboarding tutorial; (8) §19 phase 2 key pools.
+> commits + pushes after EVERY verified round (quote-free commit messages — PS 5.1 mangles quotes,
+> including double quotes inside a here-string). Build check: `npm run build`. Repo pushes to
+> github.com/lachydotmcg/metis-orchestrator; registry clone lives in the session scratchpad
+> (re-clone github.com/lachydotmcg/metis-registry if absent). Memory file `metis-orchestrator.md`
+> has the full history; this doc has the designs.
+> **Shipped 2026-07-08 (loop drill):** gateways-not-models (nvidia/groq out of the model picker,
+> gateway plumbing intact), edit-routing reliability (conversational edits on a non-empty folder
+> force the non-destructive edit branch), To-Do central feed with per-card assignees
+> (You/Manager/conversation/agent) + filter, Manager AI (suggestion-first chips + My Queue over the
+> shared todoBoard, §11), and the Pulse GX-Corner bento (§8, hero/news/community/what's-new/Discord
+> tiles; Lachy still to supply the Discord png + invite).
+> **Open work, in order:** (1) §16 Knowledge Banks — embeddings via Ollama, retrieval + "grounded on
+> N chunks" lines, Graph View as the front-end (doc viewer + file nodes are the first brick); (2)
+> onboarding tutorial (§17/§18) — benchmark picks the best models for the hardware, one Install
+> button pulls models + prerequisite skills; (3) §19 phase 2 key pools — multi-key per provider,
+> per-account quota; (4) managed agents phase B (§3) — sub-agent fan-out into the side-chat surface
+> + file-claim ledger; (5) §20 leftovers — grouped-chip grammar for retrieval / "Ran N agents"; (6)
+> smaller: /orchestration autocomplete hint, Marketplace/Settings registry-view unification, gemma
+> vision caption pass. Also still un-run: parallel-sessions LIVE test (code present; needs a full
+> `npm run dev` Electron session — build → switch conversations → return).
 
 Written 2026-07-02 by Claude Fable 5. Division of labour: this doc is the thinking; Opus/Sonnet
 sessions action individual sections. Each section is self-contained enough to hand to a cold agent.
