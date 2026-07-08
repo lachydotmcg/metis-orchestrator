@@ -105,6 +105,8 @@ import type {
   GraphPipelineConfig,
   GraphPipelineStage,
   ModelCatalogState,
+  OllamaListResult,
+  OllamaPullProgress,
   PermissionGrant,
   PermissionMode,
   PermissionScope,
@@ -571,15 +573,15 @@ const GPUS: Gpu[] = [
   { id: "cpu", label: "CPU only", vram: 0, note: "system RAM" }
 ];
 
-type LocalModel = { name: string; params: string; vram: number; quant: string; tps: number; role: string; provider?: ProviderId };
+type LocalModel = { name: string; params: string; vram: number; quant: string; tps: number; role: string; provider?: ProviderId; ollamaTag?: string };
 const LOCAL_MODELS: LocalModel[] = [
-  { name: "Qwen2.5 7B", params: "7B", vram: 6, quant: "Q4_K_M", tps: 52, role: "fast router / general", provider: "qwen" },
-  { name: "Llama 3.1 8B", params: "8B", vram: 6.5, quant: "Q4_K_M", tps: 47, role: "general chat" },
-  { name: "GLM-4 9B", params: "9B", vram: 7, quant: "Q4_K_M", tps: 41, role: "chat / agentic", provider: "glm" },
-  { name: "DeepSeek-R1 Distill 14B", params: "14B", vram: 10, quant: "Q4_K_M", tps: 28, role: "reasoning", provider: "deepseek" },
-  { name: "Qwen2.5 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 18, role: "strong coding", provider: "qwen" },
+  { name: "Qwen2.5 7B", params: "7B", vram: 6, quant: "Q4_K_M", tps: 52, role: "fast router / general", provider: "qwen", ollamaTag: "qwen2.5:7b" },
+  { name: "Llama 3.1 8B", params: "8B", vram: 6.5, quant: "Q4_K_M", tps: 47, role: "general chat", ollamaTag: "llama3.1:8b" },
+  { name: "GLM-4 9B", params: "9B", vram: 7, quant: "Q4_K_M", tps: 41, role: "chat / agentic", provider: "glm", ollamaTag: "glm4:9b" },
+  { name: "DeepSeek-R1 Distill 14B", params: "14B", vram: 10, quant: "Q4_K_M", tps: 28, role: "reasoning", provider: "deepseek", ollamaTag: "deepseek-r1:14b" },
+  { name: "Qwen2.5 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 18, role: "strong coding", provider: "qwen", ollamaTag: "qwen2.5:32b" },
   { name: "Ornith 1.0 35B", params: "35B", vram: 22, quant: "Q4_K_M", tps: 16, role: "RL-tuned coding agent" },
-  { name: "Qwen2.5 72B", params: "72B", vram: 42, quant: "Q4_K_M", tps: 9, role: "near-frontier local", provider: "qwen" }
+  { name: "Qwen2.5 72B", params: "72B", vram: 42, quant: "Q4_K_M", tps: 9, role: "near-frontier local", provider: "qwen", ollamaTag: "qwen2.5:72b" }
 ];
 
 type Fit = "great" | "tight" | "over" | "cpu";
@@ -6990,6 +6992,74 @@ function BenchmarkWorkspace({
   const router = greatFits[0] ?? usableFits[0] ?? scored[0];
   const workhorse = usableFits[usableFits.length - 1] ?? router;
 
+  const [ollamaInfo, setOllamaInfo] = useState<OllamaListResult | null>(null);
+  const [pullProgress, setPullProgress] = useState<Record<string, OllamaPullProgress>>({});
+
+  useEffect(() => {
+    if (!window.metisOllama) return;
+    let alive = true;
+    void window.metisOllama.list().then((info) => {
+      if (alive) setOllamaInfo(info);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.metisOllama) return;
+    return window.metisOllama.onPullProgress((progress) => {
+      setPullProgress((current) => ({ ...current, [progress.model]: progress }));
+      if (progress.done && !progress.error) {
+        setOllamaInfo((current) =>
+          current ? { ...current, installed: current.installed.includes(progress.model) ? current.installed : [...current.installed, progress.model] } : current
+        );
+      }
+    });
+  }, []);
+
+  const installTargets = useMemo(() => {
+    const tags = [router.ollamaTag, workhorse.ollamaTag].filter((tag): tag is string => Boolean(tag));
+    return Array.from(new Set(tags)).map((tag) => {
+      const source = tag === router.ollamaTag ? router : workhorse;
+      return { tag, name: source.name };
+    });
+  }, [router, workhorse]);
+
+  const manualModels = useMemo(() => {
+    const names = new Set<string>();
+    if (!router.ollamaTag) names.add(router.name);
+    if (!workhorse.ollamaTag) names.add(workhorse.name);
+    return Array.from(names);
+  }, [router, workhorse]);
+
+  function targetStatus(tag: string): "installed" | "downloading" | "error" | "pending" {
+    if (ollamaInfo?.installed.includes(tag)) return "installed";
+    const progress = pullProgress[tag];
+    if (progress) {
+      if (progress.error) return "error";
+      if (progress.done) return "installed";
+      return "downloading";
+    }
+    return "pending";
+  }
+
+  const ollamaReachable = Boolean(window.metisOllama) && ollamaInfo?.reachable !== false;
+  const anyDownloading = installTargets.some((target) => targetStatus(target.tag) === "downloading");
+  const allInstalled = installTargets.length > 0 && installTargets.every((target) => targetStatus(target.tag) === "installed");
+
+  function pullTag(tag: string): void {
+    if (!window.metisOllama) return;
+    setPullProgress((current) => ({ ...current, [tag]: { model: tag, status: "pulling manifest", done: false } }));
+    void window.metisOllama.pull(tag);
+  }
+
+  function installRecommendedSetup(): void {
+    for (const target of installTargets) {
+      if (targetStatus(target.tag) !== "installed") pullTag(target.tag);
+    }
+  }
+
   function applySetup(): void {
     setWizard((current) => ({
       ...current,
@@ -7127,6 +7197,105 @@ function BenchmarkWorkspace({
               <span className={`fit-badge ${model.fit}`}>{fitLabel(model.fit)}</span>
             </div>
           ))}
+        </div>
+      </section>
+
+      <section className="bench-panel bench-install">
+        <header className="bench-panel-head">
+          <span><Download size={15} /> Install recommended models</span>
+          {ollamaReachable && allInstalled ? <em className="auto-tag">Ready</em> : null}
+        </header>
+        <p className="bench-note">
+          Pulls the router and workhorse above straight from Ollama, with live progress. &ldquo;Use this setup&rdquo; already completes setup either way &mdash; installing just gets the models onto disk.
+        </p>
+
+        {!ollamaReachable ? (
+          <p className="bench-note install-unavailable">
+            <ShieldAlert size={14} /> Ollama not detected &mdash; start Ollama (or install it) to pull models from here.
+          </p>
+        ) : (
+          <>
+            <div className="install-rows">
+              {installTargets.map((target) => {
+                const status = targetStatus(target.tag);
+                const progress = pullProgress[target.tag];
+                const pct = progress?.completed && progress?.total ? Math.min(100, Math.round((progress.completed / progress.total) * 100)) : null;
+                return (
+                  <div key={target.tag} className={`install-row ${status}`}>
+                    <span className="install-model">
+                      <strong>{target.name}</strong>
+                      <small>{target.tag}</small>
+                    </span>
+                    <span className="install-state">
+                      {status === "installed" ? (
+                        <span className="install-installed">
+                          <CheckCircle2 size={14} /> Installed
+                        </span>
+                      ) : status === "downloading" ? (
+                        <span className="install-progress">
+                          <span className="install-bar-shell">
+                            <span className={pct === null ? "install-bar indeterminate" : "install-bar"} style={pct === null ? undefined : { width: `${pct}%` }} />
+                          </span>
+                          <small>
+                            {progress?.status ?? "downloading"}
+                            {pct !== null ? ` · ${pct}%` : ""}
+                          </small>
+                        </span>
+                      ) : status === "error" ? (
+                        <span className="install-error">
+                          <ShieldAlert size={13} /> {progress?.error ?? "Pull failed"}
+                          <button type="button" className="ghost-action install-retry" onClick={() => pullTag(target.tag)}>
+                            <RefreshCw size={12} /> Retry
+                          </button>
+                        </span>
+                      ) : (
+                        <small className="install-pending">Not installed</small>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+              {manualModels.map((name) => (
+                <div key={name} className="install-row manual">
+                  <span className="install-model">
+                    <strong>{name}</strong>
+                    <small>no public Ollama tag</small>
+                  </span>
+                  <span className="install-state">
+                    <small className="install-pending">Manual install</small>
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="bench-actions">
+              {allInstalled ? (
+                <span className="install-installed install-done">
+                  <CheckCircle2 size={16} /> All models installed
+                </span>
+              ) : (
+                <button
+                  className="primary-action"
+                  type="button"
+                  onClick={installRecommendedSetup}
+                  disabled={anyDownloading || installTargets.length === 0}
+                >
+                  {anyDownloading ? <Loader2 size={16} className="spin" /> : <Download size={16} />} Install recommended setup
+                </button>
+              )}
+            </div>
+          </>
+        )}
+
+        <div className="install-skills">
+          <small className="install-skills-label">Recommended skills</small>
+          <div className="chip-row">
+            {["Planning", "Agentic Tasks", "UI Design"].map((skill) => (
+              <span key={skill} className="preset-chip">
+                {skill}
+              </span>
+            ))}
+          </div>
+          <p className="bench-note">Manage skill installs in the Marketplace.</p>
         </div>
       </section>
 
