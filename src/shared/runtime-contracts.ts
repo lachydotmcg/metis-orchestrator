@@ -366,10 +366,22 @@ export interface PolicyDecisionResult {
   warnings: string[];
 }
 
+/** Raw image bytes for a single attachment, threaded from SessionAttachment
+ *  through to a provider invoke. `data` is RAW base64 (no data: prefix). Only
+ *  vision-capable providers (anthropic/openai/gemini/ollama) actually use
+ *  this — everyone else silently ignores it (see invokeCloudProvider). */
+export interface ProviderImageInput {
+  data: string;
+  mimeType: string;
+}
+
 export interface ProviderInvokeInput {
   provider: ProviderKey;
   model: string;
   prompt: string;
+  /** Optional reference images for this single call. Undefined/empty means
+   *  byte-identical behaviour to before this field existed. */
+  images?: ProviderImageInput[];
 }
 
 export interface ProviderInvokeResult {
@@ -417,6 +429,17 @@ export interface SessionModelOverride {
   label?: string;
 }
 
+/** A user-attached reference image for a session run. `dataBase64` is RAW
+ *  base64 (no `data:<mime>;base64,` prefix) — the composer attach UI (a
+ *  separate follow-up round) is responsible for stripping it before sending.
+ *  main.ts defensively strips a prefix anyway if one slips through. */
+export interface SessionAttachment {
+  id?: string;
+  name: string;
+  mimeType: string;
+  dataBase64: string;
+}
+
 export interface SessionRunInput {
   prompt: string;
   conversationId?: string;
@@ -429,6 +452,10 @@ export interface SessionRunInput {
   rawPromptStorage?: "local-only" | "hash-only";
   /** When set, bypass Metis Policy routing and call this model directly. */
   modelOverride?: SessionModelOverride;
+  /** Reference images for this run (front-end build stage, edit stage, and
+   *  plain chat). Undefined/empty means byte-identical behaviour to before
+   *  this field existed. */
+  attachments?: SessionAttachment[];
 }
 
 export interface ProjectArtifact {

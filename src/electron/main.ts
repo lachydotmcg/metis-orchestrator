@@ -26,6 +26,7 @@ import type {
   OrchestrationStage,
   PolicyDecisionResult,
   PolicyStatus,
+  ProviderImageInput,
   ProviderInvokeInput,
   ProviderInvokeResult,
   ProviderKey,
@@ -58,6 +59,7 @@ import type {
   SessionPipelineStatus,
   SessionRun,
   SessionRunInput,
+  SessionAttachment,
   SecretStatus,
   Routine,
   StyleCard,
@@ -589,6 +591,51 @@ function createThinkTagStreamSplitter(onOutput: (delta: string) => void, onThoug
   };
 }
 
+// --- Session attachments -> provider images (backend half only; composer
+// attach UI is a separate follow-up round, docs/FABLE_PLANS.md attachments
+// note). Strictly additive: every consumer downstream gates on images.length
+// > 0, so a run with no attachments is byte-identical to before this existed. ---
+const MAX_ATTACHMENT_IMAGES = 4;
+// ~4MB of base64 text per image — generous enough for a real reference photo
+// while stopping a mistakenly-huge upload from ballooning a single request.
+const MAX_ATTACHMENT_BASE64_CHARS = 4 * 1024 * 1024;
+
+/** Normalises SessionRunInput.attachments into provider-ready image payloads.
+ *  Defensively strips a `data:<mime>;base64,` prefix even though the contract
+ *  promises raw base64 — belt and suspenders for whatever the future composer
+ *  UI actually sends. Caps the count and per-image size, and never throws: a
+ *  malformed attachment is just dropped rather than failing the run. */
+function normaliseAttachmentImages(attachments?: SessionAttachment[]): ProviderImageInput[] {
+  if (!attachments || attachments.length === 0) return [];
+  const images: ProviderImageInput[] = [];
+  try {
+    for (const attachment of attachments) {
+      if (images.length >= MAX_ATTACHMENT_IMAGES) break;
+      try {
+        if (!attachment || typeof attachment.dataBase64 !== "string" || !attachment.dataBase64) continue;
+        const match = attachment.dataBase64.match(/^data:([^;,]+)(?:;[^,]*)?,(.*)$/s);
+        const data = match ? match[2] : attachment.dataBase64;
+        const mimeType = (match ? match[1] : attachment.mimeType) || "application/octet-stream";
+        if (!data || data.length > MAX_ATTACHMENT_BASE64_CHARS) continue;
+        images.push({ data, mimeType });
+      } catch {
+        // Malformed single attachment — drop it, never break the whole run.
+      }
+    }
+  } catch {
+    return [];
+  }
+  return images;
+}
+
+/** Short note appended to a stage/chat prompt so the model knows a reference
+ *  image is attached, even for providers that end up not receiving the bytes
+ *  (e.g. deepseek) — they at least know a reference exists. */
+function attachmentNoteFor(count: number): string {
+  if (count <= 0) return "";
+  return `\n\nThe user attached ${count} reference image${count === 1 ? "" : "s"} as a visual reference; match their style/layout where relevant.`;
+}
+
 async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStreamController): Promise<ProviderInvokeResult> {
   validateProvider(input.provider);
   if (input.provider === "ollama") {
@@ -599,7 +646,15 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
       const response = await fetch("http://127.0.0.1:11434/api/generate", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: input.model, prompt: input.prompt, stream: false })
+        body: JSON.stringify({
+          model: input.model,
+          prompt: input.prompt,
+          stream: false,
+          // Same shape as the proven gallery vision call (captionViaGenerateEndpoint
+          // below): top-level `images: [<base64>, ...]`. Ollama silently ignores
+          // this on non-vision models, so it's safe to always include when present.
+          ...(input.images && input.images.length > 0 ? { images: input.images.map((image) => image.data) } : {})
+        })
       });
       if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}`);
       const payload = (await response.json()) as {
@@ -708,7 +763,12 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
   const response = await fetch("http://127.0.0.1:11434/api/generate", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: input.model, prompt: input.prompt, stream: true })
+    body: JSON.stringify({
+      model: input.model,
+      prompt: input.prompt,
+      stream: true,
+      ...(input.images && input.images.length > 0 ? { images: input.images.map((image) => image.data) } : {})
+    })
   });
   if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}`);
   if (!response.body) throw new Error("Ollama did not return a readable stream.");
@@ -789,6 +849,28 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
 
 async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number } }> {
   if (input.provider === "anthropic") {
+    // Vision guard: build an image+text content-block message when images are
+    // present; any formatting failure falls back to the plain text-only body
+    // so an attachment can never break a chat/build call.
+    let anthropicMessages: unknown = [{ role: "user", content: input.prompt }];
+    if (input.images && input.images.length > 0) {
+      try {
+        anthropicMessages = [
+          {
+            role: "user",
+            content: [
+              ...input.images.map((image) => ({
+                type: "image",
+                source: { type: "base64", media_type: image.mimeType, data: image.data }
+              })),
+              { type: "text", text: input.prompt }
+            ]
+          }
+        ];
+      } catch {
+        anthropicMessages = [{ role: "user", content: input.prompt }];
+      }
+    }
     const response = await fetchJson<{
       content?: Array<{ text?: string }>;
       usage?: { input_tokens?: number; output_tokens?: number };
@@ -802,7 +884,7 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       body: JSON.stringify({
         model: input.model,
         max_tokens: 6000,
-        messages: [{ role: "user", content: input.prompt }]
+        messages: anthropicMessages
       })
     });
     const text = response.content?.map((part) => part.text).filter(Boolean).join("\n").trim() || "Anthropic returned an empty response.";
@@ -814,6 +896,29 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
   }
 
   if (input.provider === "openai") {
+    // Vision guard: the Responses API takes a string `input` for plain text,
+    // but a structured input array with input_text/input_image parts when
+    // images are attached. Any formatting failure falls back to the original
+    // plain-string body.
+    let openaiInput: unknown = input.prompt;
+    if (input.images && input.images.length > 0) {
+      try {
+        openaiInput = [
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: input.prompt },
+              ...input.images.map((image) => ({
+                type: "input_image",
+                image_url: `data:${image.mimeType};base64,${image.data}`
+              }))
+            ]
+          }
+        ];
+      } catch {
+        openaiInput = input.prompt;
+      }
+    }
     const response = await fetchJson<{
       output_text?: string;
       output?: Array<{ content?: Array<{ text?: string; type?: string }> }>;
@@ -826,7 +931,7 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       },
       body: JSON.stringify({
         model: input.model,
-        input: input.prompt
+        input: openaiInput
       })
     });
     const text =
@@ -842,6 +947,19 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
 
   if (input.provider === "gemini") {
     const model = encodeURIComponent(input.model);
+    // Vision guard: append inlineData parts alongside the text part when
+    // images are present; any formatting failure falls back to text-only parts.
+    let geminiParts: unknown[] = [{ text: input.prompt }];
+    if (input.images && input.images.length > 0) {
+      try {
+        geminiParts = [
+          { text: input.prompt },
+          ...input.images.map((image) => ({ inlineData: { mimeType: image.mimeType, data: image.data } }))
+        ];
+      } catch {
+        geminiParts = [{ text: input.prompt }];
+      }
+    }
     const response = await fetchJson<{
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
       usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
@@ -849,7 +967,7 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: input.prompt }] }]
+        contents: [{ role: "user", parts: geminiParts }]
       })
     });
     const text =
@@ -4227,7 +4345,8 @@ async function callStageWithFallback(
   rawChain: StageModelRef[],
   prompt: string,
   primaryPreference?: ProviderKey[],
-  callContext?: StageCallContext
+  callContext?: StageCallContext,
+  images?: ProviderImageInput[]
 ): Promise<{ ref: StageModelRef; output: string; notes: string[]; failed: boolean }> {
   const notes: string[] = [];
   // Route-before-model fallback (docs/FABLE_PLANS.md §21, extended by §25's
@@ -4275,7 +4394,7 @@ async function callStageWithFallback(
       });
     }
     try {
-      const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt });
+      const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt, images });
       if (result.source === "placeholder" || !result.output.trim()) {
         const note = `${stageModelLabel(ref)} unavailable${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
         notes.push(note);
@@ -4430,6 +4549,7 @@ async function runCriticLoop(args: {
   stream?: SessionStreamController;
   gatewayPreference?: ProviderKey[];
   stageId?: string;
+  images?: ProviderImageInput[];
 }): Promise<{ output: string; criticPasses: number }> {
   const isLocalStage = args.ref.provider === "ollama";
   if (!(await shouldSelfVerifyStage(args.ref))) return { output: args.output, criticPasses: 0 };
@@ -4456,7 +4576,8 @@ async function runCriticLoop(args: {
       args.chain,
       continuationPrompt,
       args.gatewayPreference,
-      args.stageId ? { stream: args.stream, stageId: args.stageId, stageLabel: args.stageLabel } : undefined
+      args.stageId ? { stream: args.stream, stageId: args.stageId, stageLabel: args.stageLabel } : undefined,
+      args.images
     );
     if (!attempt.failed && attempt.output.trim()) {
       currentOutput = stripThinkBlocks(attempt.output);
@@ -4582,7 +4703,8 @@ async function runOrchestratedStages(
   projectPath?: string,
   metisFile?: { content: string; chars: number } | null,
   permissionMode: PermissionMode = "auto",
-  conversationContext?: string | null
+  conversationContext?: string | null,
+  images?: ProviderImageInput[]
 ): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed }> {
   const metisBlock = metisFilePromptBlock(metisFile ?? null);
   const singleFile = wantsSingleFileFrontend(prompt);
@@ -4640,6 +4762,13 @@ async function runOrchestratedStages(
     if (stage.templateRole === "frontend" && singleFile) {
       stagePrompt = `You are the FRONT-END model. Build the UI for this plan.\n\nPlan:\n${plan}\n\nReturn EXACTLY ONE complete file: \`index.html\`. Put the file path \`index.html\` on its own line before the fenced code block. All CSS must be inside a <style> tag. All JavaScript must be inside a <script> tag. Do not reference local files such as styles.css, script.js, package.json, server.js, images, or assets. No backend. One short sentence of intro, then the one file.\n\nAvoid the generic AI look — do not default to purple/violet gradients; choose a distinctive, coherent palette and typography that fit the subject.`;
     }
+    // Reference-image attachments: only the front-end stage gets images (never
+    // plan/functionality) — see docs comment on runOrchestratedStages' images
+    // param. No-op when there are no attachments.
+    const stageImages = stage.templateRole === "frontend" && images && images.length > 0 ? images : undefined;
+    if (stageImages) {
+      stagePrompt += attachmentNoteFor(stageImages.length);
+    }
     // Mid-run steering: absorb directives posted while earlier stages were running.
     const newDirectives = takePendingDirectives(projectPath, stage.id);
     for (const directive of newDirectives) {
@@ -4673,7 +4802,7 @@ async function runOrchestratedStages(
       emitTimeline(stream, timelineText("Checking whether the build needs functionality or support files."));
     }
     const stageCallContext: StageCallContext = { stream, stageId: stage.id, stageLabel: stage.label };
-    let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.gatewayPreference, stageCallContext);
+    let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.gatewayPreference, stageCallContext, stageImages);
     // Scan for an AskUserQuestion tag; if present, pause for an answer, strip
     // the tag, append the answer to the stage prompt, and re-run once.
     const askedQuestion = extractAskUserTag(attempt.output);
@@ -4683,7 +4812,7 @@ async function runOrchestratedStages(
         emitTimeline(stream, timelineText(`No answer in time — I picked "${answer}" and kept going.`));
       }
       const continuationPrompt = `${stagePrompt}\n\nYou previously asked: "${askedQuestion.question}"\nUser answered: ${answer}\n\nContinue with the full stage output now (do not ask again).`;
-      attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.gatewayPreference, stageCallContext);
+      attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.gatewayPreference, stageCallContext, stageImages);
     }
     await appendAudit(attempt.failed ? "error" : "info", "session.stage", `Stage ${stage.label} via ${stageModelLabel(attempt.ref)}.`, {
       stage: stage.id,
@@ -4709,7 +4838,8 @@ async function runOrchestratedStages(
         output: cleanOutput,
         stream,
         gatewayPreference: stage.gatewayPreference,
-        stageId: stage.id
+        stageId: stage.id,
+        images: stageImages
       });
       cleanOutput = criticResult.output;
       criticPasses = criticResult.criticPasses;
@@ -5074,6 +5204,12 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const orchestrationCommandWithoutTarget = orchestrationCommand !== null && orchestrationCommand.remainder.length === 0;
   const prompt = orchestrationCommand ? orchestrationCommand.remainder || originalPrompt : originalPrompt;
 
+  // Reference-image attachments (backend half only — composer attach UI is a
+  // separate follow-up round). Normalisation never throws and is capped, so
+  // this line can never affect a run that has no attachments: `images` is
+  // simply an empty array, and every consumer below gates on images.length > 0.
+  const images = normaliseAttachmentImages(input.attachments);
+
   if (orchestrationCommandWithoutTarget) {
     // "/orchestration" with nothing after it — nothing to build yet. Answer
     // as an ordinary chat turn asking what to build, rather than forcing an
@@ -5236,9 +5372,12 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         emitStream(stream, { kind: "operation", operation: editKnowledge.operation });
         emitTimeline(stream, { id: randomUUID(), kind: "operations", title: editKnowledge.operation.label, operationIds: [editKnowledge.operation.id] });
       }
+      if (images.length > 0) {
+        editPrompt += attachmentNoteFor(images.length);
+      }
       // Stage id "frontend" keeps extraction recovery's existing output lookup working.
       const editCallContext: StageCallContext = { stream, stageId: "frontend", stageLabel: "Edit existing project" };
-      const attempt = await callStageWithFallback(editConfig.chain, editPrompt, editConfig.gatewayPreference, editCallContext);
+      const attempt = await callStageWithFallback(editConfig.chain, editPrompt, editConfig.gatewayPreference, editCallContext, images.length > 0 ? images : undefined);
       const cleanOutput = stripThinkBlocks(attempt.output);
       const editStage: OrchestrationStage = {
         id: "frontend",
@@ -5270,7 +5409,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         failed: editStage.failed
       });
     } else {
-      ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode, conversationContext));
+      ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode, conversationContext, images.length > 0 ? images : undefined));
     }
     let files: GeneratedFile[] = [];
     let projectResult: ProjectToolResult | undefined;
@@ -5472,11 +5611,15 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     emitStream(stream, { kind: "operation", operation: chatKnowledge.operation });
     emitTimeline(stream, { id: randomUUID(), kind: "operations", title: chatKnowledge.operation.label, operationIds: [chatKnowledge.operation.id] });
   }
-  const sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block);
+  let sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block);
+  if (images.length > 0) {
+    sessionPrompt += attachmentNoteFor(images.length);
+  }
+  const chatImages = images.length > 0 ? images : undefined;
   const overrideWarnings: string[] = [];
   let providerResult: ProviderInvokeResult;
   try {
-    providerResult = await invokeProvider({ provider, model, prompt: sessionPrompt }, stream);
+    providerResult = await invokeProvider({ provider, model, prompt: sessionPrompt, images: chatImages }, stream);
   } catch (error) {
     if (!override) throw error;
     // A pinned model can be a hand-typed custom entry — fall back to the provider default instead of failing the run.
@@ -5485,7 +5628,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       `Failed to call ${overrideDisplayLabel(override)} (${error instanceof Error ? error.message : String(error)}), falling back to ${providerInfo[provider].label} (${fallbackModel}).`
     );
     emitTimeline(stream, timelineText(`Couldn’t reach ${overrideDisplayLabel(override)} — falling back to ${providerInfo[provider].label} (${fallbackModel}).`));
-    providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt }, stream);
+    providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt, images: chatImages }, stream);
   }
   if (showRouteCeremony) emitTimeline(stream, timelineText("The selected model responded. I’m recording the trace and any follow-up project tools."));
   steps[2] = completeStep(steps[2], providerResult.auditId);
