@@ -1711,7 +1711,7 @@ function PulseWorkspace(): JSX.Element {
           >
             <span className="pulse-discord-icon">
               <img
-                src="assets/discord.png"
+                src="assets/providers/discord.png"
                 alt="Discord"
                 onError={(event) => {
                   event.currentTarget.style.display = "none";
