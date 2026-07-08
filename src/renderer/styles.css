@@ -1734,8 +1734,76 @@ p {
 }
 
 .memory-tree-row.note {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   color: var(--soft);
   font-size: 13px;
+}
+
+.memory-tree-note-label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  min-width: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+}
+
+.memory-tree-pin {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: #6c6c6c;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  opacity: 0;
+}
+
+.memory-tree-row.note:hover .memory-tree-pin,
+.memory-tree-pin.pinned {
+  opacity: 1;
+}
+
+.memory-tree-pin:hover {
+  color: white;
+  background: #3a3a3a;
+}
+
+.memory-tree-pin.pinned {
+  color: var(--accent, #e69a4b);
+}
+
+.memory-tree-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  color: #8f8f8f;
+  border-bottom: 1px solid #303030;
+}
+
+.memory-tree-search input {
+  flex: 1;
+  min-width: 0;
+  color: #e6e6e6;
+  font-size: 13px;
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.memory-tree-empty {
+  padding: 10px 4px;
+  color: #7c7c7c;
+  font-size: 12.5px;
 }
 
 .memory-tree-row svg {
@@ -2234,10 +2302,16 @@ p {
   background: #353535;
 }
 
-.graph-settings-popover {
+/* Bug fix (owner: "settings button does nothing"): .perm-popover's base rule (top/bottom/left/
+   width, declared later in this file) was winning the cascade over this same-specificity
+   single-class override, so the popover rendered with both top:44px AND bottom:44px plus
+   left:0/width:284px — collapsing it to a near-zero-height sliver positioned off-anchor instead
+   of the intended dropdown. Scoping the selector to the anchor raises specificity so this override
+   always wins regardless of declaration order. */
+.memory-settings-anchor .graph-settings-popover {
   top: 44px;
   bottom: auto;
-  left: auto;
+  left: 0;
   width: 240px;
 }
 
