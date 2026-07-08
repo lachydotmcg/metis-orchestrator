@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConversationRecord,
   MetisFileReadResult,
+  MetisFileWriteResult,
   OllamaPullProgress,
   PermissionRequest,
   PermissionVerdict,
@@ -83,7 +84,8 @@ contextBridge.exposeInMainWorld("metisProject", {
 });
 
 contextBridge.exposeInMainWorld("metisFiles", {
-  read: (path: string) => ipcRenderer.invoke("metis-files:read", path) as Promise<MetisFileReadResult>
+  read: (path: string) => ipcRenderer.invoke("metis-files:read", path) as Promise<MetisFileReadResult>,
+  write: (path: string, content: string) => ipcRenderer.invoke("metis-files:write", path, content) as Promise<MetisFileWriteResult>
 });
 
 contextBridge.exposeInMainWorld("metisSecrets", {

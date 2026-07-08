@@ -5,6 +5,7 @@ import type {
   ConversationRecord,
   LabExperimentResult,
   MetisFileReadResult,
+  MetisFileWriteResult,
   ModelCatalogState,
   OllamaListResult,
   OllamaPullProgress,
@@ -88,6 +89,7 @@ declare global {
     };
     metisFiles?: {
       read: (path: string) => Promise<MetisFileReadResult>;
+      write: (path: string, content: string) => Promise<MetisFileWriteResult>;
     };
     metisSecrets?: {
       list: () => Promise<SecretStatus[]>;

@@ -2082,6 +2082,74 @@ p {
   background: var(--hover);
 }
 
+.memory-doc-panel-edit,
+.memory-doc-panel-cancel {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-left: auto;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.memory-doc-panel-cancel {
+  width: auto;
+  padding: 0 8px;
+}
+
+.memory-doc-panel-edit:hover:not(:disabled),
+.memory-doc-panel-cancel:hover:not(:disabled) {
+  color: white;
+  background: var(--hover);
+}
+
+.memory-doc-panel-edit:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.memory-doc-panel-save {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  color: var(--surface);
+  background: var(--accent, #e8e8e8);
+  border: 0;
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.memory-doc-panel-save:disabled {
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.memory-doc-panel-status {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  align-items: center;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.memory-doc-panel-status-saved {
+  color: #8fce9a;
+}
+
 .memory-doc-panel-body {
   min-height: 0;
   padding: 14px 16px;
@@ -2102,6 +2170,38 @@ p {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.memory-doc-panel-editor {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 10px 12px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+  resize: none;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.memory-doc-panel-editor:focus {
+  border-color: var(--muted);
+}
+
+.memory-doc-panel-warning {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  color: #e0b35c;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
 }
 
 .memory-doc-panel-empty {

@@ -32,6 +32,7 @@ import type {
   ProviderStatus,
   DesignSeed,
   MetisFileReadResult,
+  MetisFileWriteResult,
   ProjectArtifact,
   ProjectSnapshot,
   ProjectSnapshotFile,
@@ -1323,7 +1324,13 @@ const METIS_FILE_READ_MAX_BYTES = 200_000;
  *  or inside a granted project resource (filesystem.read grant from addProjectResource) —
  *  anything else is rejected before touching disk. Caps content to keep IPC payloads small and
  *  appends a truncation note rather than silently cutting content off. */
-async function readMetisFile(rawPath: string): Promise<MetisFileReadResult> {
+/** Shared security guard for the Graph View document viewer's file IPCs (read + write):
+ *  resolves the path and checks it sits inside either the currently-granted project workspace
+ *  (via resolveWritableProjectWorkspace's grant shape — filesystem.write on "project-tools") or
+ *  inside a granted project resource (filesystem.read grant from addProjectResource). Both
+ *  readMetisFile and writeMetisFile call this exact same check so the write path can never be
+ *  looser than read. Returns the resolved absolute target on success, throws otherwise. */
+async function assertMetisFilePathAllowed(rawPath: string): Promise<string> {
   if (!rawPath || typeof rawPath !== "string") throw new Error("A file path is required.");
   const target = resolve(rawPath);
 
@@ -1355,6 +1362,12 @@ async function readMetisFile(rawPath: string): Promise<MetisFileReadResult> {
     throw new Error("This file is outside the permitted project workspace or resources.");
   }
 
+  return target;
+}
+
+async function readMetisFile(rawPath: string): Promise<MetisFileReadResult> {
+  const target = await assertMetisFilePathAllowed(rawPath);
+
   let fileStat;
   try {
     fileStat = await stat(target);
@@ -1367,7 +1380,37 @@ async function readMetisFile(rawPath: string): Promise<MetisFileReadResult> {
   const truncated = raw.length > METIS_FILE_READ_MAX_BYTES;
   const content = truncated ? `${raw.slice(0, METIS_FILE_READ_MAX_BYTES)}\n\n[truncated — file exceeds ${METIS_FILE_READ_MAX_BYTES.toLocaleString()} characters]` : raw;
 
-  return { path: target, name: basename(target), content };
+  return { path: target, name: basename(target), content, truncated };
+}
+
+/** Writes back the Graph View document viewer's editable panel (Obsidian-style edit/save).
+ *  SECURITY: runs the identical permitted-root check as readMetisFile via
+ *  assertMetisFilePathAllowed — a file that isn't readable through the graph viewer can't be
+ *  written through it either. Caps content to the same size limit as read (so a save can never
+ *  smuggle in more than the viewer could ever show), rejects writing over a directory, and never
+ *  throws out of the IPC handler — failures come back as `{ ok: false, error }` so the renderer
+ *  can show them inline instead of an unhandled rejection. */
+async function writeMetisFile(rawPath: string, content: string): Promise<MetisFileWriteResult> {
+  try {
+    if (typeof content !== "string") return { ok: false, error: "No content to save." };
+    if (content.length > METIS_FILE_READ_MAX_BYTES) {
+      return { ok: false, error: `File exceeds the ${METIS_FILE_READ_MAX_BYTES.toLocaleString()}-character edit limit.` };
+    }
+    const target = await assertMetisFilePathAllowed(rawPath);
+
+    try {
+      const existing = await stat(target);
+      if (!existing.isFile()) return { ok: false, error: "Not a file." };
+    } catch {
+      // File not existing yet is fine — write will create it inside a permitted root.
+    }
+
+    await writeFile(target, content, "utf8");
+    await appendAudit("info", "files.write", `Saved edits to ${basename(target)}.`, { path: target, chars: content.length });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 const METIS_FILE_MAX_CHARS = 6000;
@@ -6457,6 +6500,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-project:add-folder", () => addProjectResource("folder"));
   ipcMain.handle("metis-project:remove-resource", (_event, id: string) => removeProjectResource(id));
   ipcMain.handle("metis-files:read", (_event, path: string) => readMetisFile(path));
+  ipcMain.handle("metis-files:write", (_event, path: string, content: string) => writeMetisFile(path, content));
   ipcMain.on("metis-window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());
   ipcMain.on("metis-window:toggle-maximize", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);

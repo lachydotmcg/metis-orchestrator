@@ -6314,9 +6314,17 @@ function MemoryGraphWorkspace({
   // Document viewer (owner: "view the documents when I click on a node") — file-node click opens
   // this instead of a conversation. Kept separate from `selected` so the detail card and doc panel
   // can coexist without fighting over one piece of state.
-  const [openDoc, setOpenDoc] = useState<{ path: string; name: string; content: string } | null>(null);
+  const [openDoc, setOpenDoc] = useState<{ path: string; name: string; content: string; truncated: boolean } | null>(null);
   const [docLoading, setDocLoading] = useState(false);
   const [docError, setDocError] = useState<string | null>(null);
+  // Obsidian-style edit/save for the doc panel (owner: "make it editable"). `docEditing` toggles
+  // the panel between the read-only pre/markdown view and a textarea over `docDraft`. Save status
+  // is a transient banner, not persisted — it just confirms the write landed.
+  const [docEditing, setDocEditing] = useState(false);
+  const [docDraft, setDocDraft] = useState("");
+  const [docSaving, setDocSaving] = useState(false);
+  const [docSaveStatus, setDocSaveStatus] = useState<"saved" | "error" | null>(null);
+  const [docSaveError, setDocSaveError] = useState<string | null>(null);
   const [physics, setPhysics, physicsLoaded] = useAppStoreState<GraphPhysicsSettings>("graphPhysics", DEFAULT_GRAPH_PHYSICS);
   const [colorByProject, setColorByProject] = useAppStoreState<boolean>("graphColorByProject", false);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({
@@ -6663,6 +6671,9 @@ function MemoryGraphWorkspace({
   function openDocForNode(node: MemoryGraphNode): void {
     setSelected(node.id);
     setDocError(null);
+    setDocEditing(false);
+    setDocSaveStatus(null);
+    setDocSaveError(null);
     if (!window.metisFiles) {
       setOpenDoc(null);
       setDocError("unavailable in preview");
@@ -6681,6 +6692,47 @@ function MemoryGraphWorkspace({
         setDocError(error instanceof Error ? error.message : String(error));
       })
       .finally(() => setDocLoading(false));
+  }
+
+  // Enters edit mode over the currently-loaded doc. Guarded at the call site (button hidden) for
+  // the no-bridge preview case and for truncated reads, where saving would clobber the untruncated
+  // rest of the file on disk.
+  function beginDocEdit(): void {
+    if (!openDoc) return;
+    setDocDraft(openDoc.content);
+    setDocEditing(true);
+    setDocSaveStatus(null);
+    setDocSaveError(null);
+  }
+
+  function cancelDocEdit(): void {
+    setDocEditing(false);
+    setDocSaveStatus(null);
+    setDocSaveError(null);
+  }
+
+  function saveDocEdit(): void {
+    if (!openDoc || !window.metisFiles) return;
+    setDocSaving(true);
+    setDocSaveStatus(null);
+    setDocSaveError(null);
+    void window.metisFiles
+      .write(openDoc.path, docDraft)
+      .then((result) => {
+        if (result.ok) {
+          setOpenDoc({ ...openDoc, content: docDraft });
+          setDocEditing(false);
+          setDocSaveStatus("saved");
+        } else {
+          setDocSaveStatus("error");
+          setDocSaveError(result.error ?? "Save failed.");
+        }
+      })
+      .catch((error) => {
+        setDocSaveStatus("error");
+        setDocSaveError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => setDocSaving(false));
   }
 
   function onCanvasClick(event: ReactPointerEvent<HTMLElement>): void {
@@ -6837,6 +6889,46 @@ function MemoryGraphWorkspace({
           <header className="memory-doc-panel-header">
             <FileText size={15} />
             <span className="memory-doc-panel-title">{openDoc?.name ?? "Document"}</span>
+            {docSaveStatus === "saved" ? (
+              <span className="memory-doc-panel-status memory-doc-panel-status-saved">
+                <Check size={12} /> Saved
+              </span>
+            ) : null}
+            {openDoc && window.metisFiles && !docEditing ? (
+              <button
+                type="button"
+                className="memory-doc-panel-edit"
+                aria-label="Edit document"
+                title={openDoc.truncated ? "Editing is disabled for truncated files" : "Edit document"}
+                disabled={openDoc.truncated}
+                onClick={beginDocEdit}
+              >
+                <Pencil size={14} />
+              </button>
+            ) : null}
+            {docEditing ? (
+              <>
+                <button
+                  type="button"
+                  className="memory-doc-panel-cancel"
+                  aria-label="Cancel edit"
+                  disabled={docSaving}
+                  onClick={cancelDocEdit}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="memory-doc-panel-save"
+                  aria-label="Save document"
+                  disabled={docSaving || docDraft === openDoc?.content}
+                  onClick={saveDocEdit}
+                >
+                  {docSaving ? <Loader2 size={13} className="spin" /> : <Save size={13} />}
+                  Save
+                </button>
+              </>
+            ) : null}
             <button
               type="button"
               className="memory-doc-panel-close"
@@ -6844,6 +6936,9 @@ function MemoryGraphWorkspace({
               onClick={() => {
                 setOpenDoc(null);
                 setDocError(null);
+                setDocEditing(false);
+                setDocSaveStatus(null);
+                setDocSaveError(null);
               }}
             >
               <X size={15} />
@@ -6855,7 +6950,20 @@ function MemoryGraphWorkspace({
             ) : docError ? (
               <p className="memory-doc-panel-empty">{docError}</p>
             ) : openDoc ? (
-              extnameLower(openDoc.path) === ".md" ? (
+              docEditing ? (
+                <>
+                  {openDoc.truncated ? (
+                    <p className="memory-doc-panel-warning">This view was truncated — editing is disabled to avoid overwriting the rest of the file.</p>
+                  ) : null}
+                  {docSaveStatus === "error" ? <p className="memory-doc-panel-warning">{docSaveError}</p> : null}
+                  <textarea
+                    className="memory-doc-panel-editor"
+                    value={docDraft}
+                    onChange={(event) => setDocDraft(event.target.value)}
+                    spellCheck={false}
+                  />
+                </>
+              ) : extnameLower(openDoc.path) === ".md" ? (
                 <Markdown>{openDoc.content}</Markdown>
               ) : (
                 <pre>{openDoc.content}</pre>

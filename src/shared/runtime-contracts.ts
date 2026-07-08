@@ -131,6 +131,17 @@ export interface MetisFileReadResult {
   path: string;
   name: string;
   content: string;
+  /** True when `content` was cut off at the read cap — the panel disables Save in this case so
+   *  an edit can never silently clobber the untruncated rest of the file on disk. */
+  truncated: boolean;
+}
+
+/** Result of writing back an edited file from the Graph View document viewer
+ *  (`metis-files:write` in main.ts). Never throws — failures come back as `ok: false` with a
+ *  human-readable `error` so the renderer can show them inline instead of an unhandled rejection. */
+export interface MetisFileWriteResult {
+  ok: boolean;
+  error?: string;
 }
 
 export interface ProjectContextSnippet {
