@@ -8391,6 +8391,7 @@ function MarketplaceWorkspace(): JSX.Element {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [githubStats, setGithubStats] = useState<Record<string, GithubRepoStats | null>>({});
   const [readmeCache, setReadmeCache] = useState<Record<string, string | null>>({});
+  const [publishOpen, setPublishOpen] = useState(false);
   const installedIds = useMemo(() => new Set(installedPackages.map((item) => item.id)), [installedPackages]);
   const starredSet = useMemo(() => new Set(starredPackages), [starredPackages]);
 
@@ -8534,12 +8535,20 @@ function MarketplaceWorkspace(): JSX.Element {
           <h1>Find skills, MCPs, and presets</h1>
         </div>
         <div className="hero-actions">
+          <button type="button" className="ghost-action publish-open-button" onClick={() => setPublishOpen(true)}>
+            <Upload size={15} />
+            Publish a package
+          </button>
           <button type="button" className="ghost-action" onClick={() => void handleRefreshButton()} disabled={loading}>
             {loading ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
             Refresh
           </button>
         </div>
       </section>
+      <p className="marketplace-framing-hint">
+        Installing shares nothing — it only adds a skill, MCP, or preset to your own orchestration. <strong>Publishing</strong> shares it with everyone via a registry pull request.
+      </p>
+      {publishOpen ? <PublishWizard onClose={() => setPublishOpen(false)} /> : null}
       <section className="marketplace-hero marketplace-hero-search">
         <label className="marketplace-search">
           <Search size={18} />
@@ -8732,6 +8741,415 @@ function MarketplaceDetailView({
 
       <section className="marketplace-detail-readme">{readme ? <Markdown>{readme}</Markdown> : <p className="marketplace-empty">No README available for this package.</p>}</section>
     </main>
+  );
+}
+
+/** Registry GitHub identity (docs: the marketplace registry is human-merged PRs, no backend —
+ *  see METIS_REGISTRY_BASE_URL in electron/main.ts, which reads from the same repo). Publishing
+ *  therefore means: generate a valid manifest.json + optional payload file, then hand the user a
+ *  pre-filled GitHub "create new file" URL so committing it opens a PR. There is no upload API. */
+const METIS_REGISTRY_OWNER = "lachydotmcg";
+const METIS_REGISTRY_NAME = "metis-registry";
+const METIS_REGISTRY_HTML_URL = `https://github.com/${METIS_REGISTRY_OWNER}/${METIS_REGISTRY_NAME}`;
+
+type PublishKind = "skill" | "mcp" | "preset";
+
+const PUBLISH_PERMISSION_SCOPES: PermissionScope[] = [
+  "filesystem.read",
+  "filesystem.write",
+  "network.provider",
+  "network.web",
+  "process.spawn",
+  "mcp.invoke",
+  "notifications.send"
+];
+
+/** Same slug rule main.ts/the registry expects for a package id: lowercase letters, digits,
+ *  dots and dashes only, no leading/trailing separator. `<publisher>.<slug-of-name>` is just a
+ *  convention the wizard suggests, not enforced — the id field stays freely editable. */
+function slugifyPublishToken(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9.]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+}
+
+function suggestPackageId(publisher: string, name: string): string {
+  const pub = slugifyPublishToken(publisher);
+  const slug = slugifyPublishToken(name);
+  if (pub && slug) return `${pub}.${slug}`;
+  return pub || slug;
+}
+
+const PACKAGE_ID_PATTERN = /^[a-z0-9]+(?:[.-][a-z0-9]+)*$/;
+
+type PublishDraft = {
+  kind: PublishKind;
+  id: string;
+  idTouched: boolean;
+  name: string;
+  version: string;
+  publisher: string;
+  description: string;
+  tagsInput: string;
+  permissions: PermissionScope[];
+  sourceUrl: string;
+  pastedContent: string;
+  usePastedContent: boolean;
+  asciiArt: string;
+};
+
+function emptyPublishDraft(publisher: string): PublishDraft {
+  return {
+    kind: "skill",
+    id: "",
+    idTouched: false,
+    name: "",
+    version: "1.0.0",
+    publisher,
+    description: "",
+    tagsInput: "",
+    permissions: [],
+    sourceUrl: "",
+    pastedContent: "",
+    usePastedContent: false,
+    asciiArt: ""
+  };
+}
+
+/** Registry-relative payload path for whatever accompanies the manifest (skill content, or the
+ *  serialized preset graph) — mirrors packages/<id>/manifest.json's sibling-file convention. */
+function publishPayloadPath(draft: PublishDraft): string {
+  return draft.kind === "preset" ? `packages/${draft.id}/preset.json` : `packages/${draft.id}/SKILL.md`;
+}
+
+function buildPublishManifest(draft: PublishDraft, presetPayload: unknown | null): { manifest: Record<string, unknown>; payloadText: string | null } {
+  const tags = draft.tagsInput
+    .split(",")
+    .map((tag) => tag.trim())
+    .filter(Boolean);
+  const kind: RegistryPackageKind = draft.kind;
+  const usesPayloadFile = draft.kind === "preset" ? presetPayload !== null : draft.usePastedContent && draft.pastedContent.trim().length > 0;
+  const sourceUrl = usesPayloadFile
+    ? `https://raw.githubusercontent.com/${METIS_REGISTRY_OWNER}/${METIS_REGISTRY_NAME}/main/${publishPayloadPath(draft)}`
+    : draft.kind === "preset"
+      ? ""
+      : draft.sourceUrl.trim();
+  const manifest: Record<string, unknown> = {
+    schema_version: "0.1.0",
+    id: draft.id.trim(),
+    kind,
+    name: draft.name.trim(),
+    version: draft.version.trim(),
+    publisher: draft.publisher.trim(),
+    description: draft.description.trim(),
+    tags,
+    permissions_requested: draft.permissions,
+    source_url: sourceUrl
+  };
+  if (draft.asciiArt.trim()) manifest.ascii_art = draft.asciiArt.replace(/\r\n/g, "\n").split("\n");
+  const payloadText = draft.kind === "preset" ? (presetPayload !== null ? JSON.stringify(presetPayload, null, 2) : null) : draft.usePastedContent ? draft.pastedContent : null;
+  return { manifest, payloadText };
+}
+
+function validatePublishDraft(draft: PublishDraft, presetPayload: unknown | null): string[] {
+  const errors: string[] = [];
+  if (!draft.name.trim()) errors.push("Name is required.");
+  if (!draft.publisher.trim()) errors.push("Publisher handle is required.");
+  if (!draft.version.trim()) errors.push("Version is required.");
+  else if (!/^\d+\.\d+\.\d+/.test(draft.version.trim())) errors.push("Version should look like 1.0.0 (semver).");
+  if (!draft.id.trim()) errors.push("Package id is required.");
+  else if (!PACKAGE_ID_PATTERN.test(draft.id.trim())) errors.push("Package id must be lowercase letters, digits, dots and dashes only (e.g. lachy.my-skill).");
+  if (!draft.description.trim()) errors.push("A short description helps people trust the package.");
+  if (draft.kind === "preset") {
+    if (presetPayload === null) errors.push("No saved preset found — save one from the Orchestration graph first (Save preset), then reopen this wizard.");
+  } else if (!draft.usePastedContent && !draft.sourceUrl.trim()) {
+    errors.push("Add a source URL, or paste the skill content instead.");
+  } else if (draft.usePastedContent && !draft.pastedContent.trim()) {
+    errors.push("Paste the skill content, or switch back to a source URL.");
+  }
+  return errors;
+}
+
+/** GitHub's "create new file" page accepts filename + prefilled value as query params — this is
+ *  the entire "publish" mechanism, since the registry has no upload API (see module comment above
+ *  MarketplaceWorkspace / METIS_REGISTRY_BASE_URL in electron/main.ts). Committing on that page IS
+ *  the first step of opening a PR. */
+function githubNewFileUrl(path: string, content: string): string {
+  return `${METIS_REGISTRY_HTML_URL}/new/main?filename=${encodeURIComponent(path)}&value=${encodeURIComponent(content)}`;
+}
+
+function githubEditFileUrl(path: string): string {
+  return `${METIS_REGISTRY_HTML_URL}/edit/main/${path}`;
+}
+
+function PublishWizard({ onClose }: { onClose: () => void }): JSX.Element {
+  const [publisherHandle, setPublisherHandle] = useAppStoreState("publisherHandle", "");
+  const [draft, setDraft] = useState<PublishDraft>(() => emptyPublishDraft(publisherHandle));
+  const [customSkills] = useAppStoreState("customSkills", EMPTY_CUSTOM_SKILLS);
+  const [copied, setCopied] = useState(false);
+
+  // Publisher handle only needs loading once the app-store value resolves — after that the wizard
+  // owns it locally so retyping isn't fought by the async store round-trip.
+  const publisherPrefilled = useRef(false);
+  useEffect(() => {
+    if (publisherPrefilled.current) return;
+    if (publisherHandle) {
+      setDraft((current) => (current.publisher ? current : { ...current, publisher: publisherHandle }));
+      publisherPrefilled.current = true;
+    }
+  }, [publisherHandle]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
+  function patch(next: Partial<PublishDraft>): void {
+    setDraft((current) => {
+      const merged = { ...current, ...next };
+      if (!merged.idTouched && (next.name !== undefined || next.publisher !== undefined || next.kind !== undefined)) {
+        merged.id = suggestPackageId(merged.publisher, merged.name);
+      }
+      return merged;
+    });
+  }
+
+  const savedPreset = useMemo(() => {
+    if (draft.kind !== "preset") return null;
+    try {
+      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as unknown) : null;
+    } catch {
+      return null;
+    }
+  }, [draft.kind]);
+
+  const { manifest, payloadText } = useMemo(() => buildPublishManifest(draft, savedPreset), [draft, savedPreset]);
+  const errors = useMemo(() => validatePublishDraft(draft, savedPreset), [draft, savedPreset]);
+  const manifestJson = useMemo(() => JSON.stringify(manifest, null, 2), [manifest]);
+  const isValid = errors.length === 0;
+
+  function togglePermission(scope: PermissionScope): void {
+    setDraft((current) => ({
+      ...current,
+      permissions: current.permissions.includes(scope) ? current.permissions.filter((entry) => entry !== scope) : [...current.permissions, scope]
+    }));
+  }
+
+  function copyManifest(): void {
+    void navigator.clipboard?.writeText(manifestJson).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    });
+  }
+
+  function openManifestPr(): void {
+    if (!isValid) return;
+    setPublisherHandle(draft.publisher.trim());
+    openExternal(githubNewFileUrl(`packages/${draft.id.trim()}/manifest.json`, manifestJson));
+  }
+
+  function openPayloadPr(): void {
+    if (!isValid || !payloadText) return;
+    openExternal(githubNewFileUrl(publishPayloadPath(draft), payloadText));
+  }
+
+  function fillFromCustomSkill(skillId: string): void {
+    const skill = customSkills.find((entry) => entry.id === skillId);
+    if (!skill) return;
+    patch({ name: skill.name, description: skill.description ?? draft.description });
+  }
+
+  return (
+    <>
+      <button className="publish-backdrop" type="button" aria-label="Close publish wizard" onClick={onClose} />
+      <div className="publish-modal" role="dialog" aria-label="Publish a package" aria-modal="true">
+        <header className="publish-modal-head">
+          <div>
+            <h2>Publish to the marketplace</h2>
+            <p className="publish-framing">
+              Adding a skill or preset to your orchestration only lives on this machine — that stays personal. <strong>Publishing</strong> opens a pull request against{" "}
+              <button type="button" className="publish-link-inline" onClick={() => openExternal(METIS_REGISTRY_HTML_URL)}>
+                {METIS_REGISTRY_OWNER}/{METIS_REGISTRY_NAME}
+              </button>{" "}
+              so anyone can install it once it's merged.
+            </p>
+          </div>
+          <button type="button" className="publish-modal-close" aria-label="Close" onClick={onClose}>
+            <X size={16} />
+          </button>
+        </header>
+
+        <div className="publish-modal-body">
+          <div className="publish-form">
+            <div className="publish-kind-tabs" role="tablist" aria-label="Package kind">
+              {(["skill", "mcp", "preset"] as PublishKind[]).map((kind) => (
+                <button key={kind} type="button" role="tab" aria-selected={draft.kind === kind} className={draft.kind === kind ? "active" : ""} onClick={() => patch({ kind })}>
+                  {kind === "mcp" ? "MCP" : kind[0].toUpperCase() + kind.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            {draft.kind === "skill" && customSkills.length > 0 ? (
+              <label className="publish-field">
+                <span>Prefill from a custom skill (optional)</span>
+                <select defaultValue="" onChange={(event) => event.target.value && fillFromCustomSkill(event.target.value)}>
+                  <option value="">Choose a custom skill…</option>
+                  {customSkills.map((skill) => (
+                    <option key={skill.id} value={skill.id}>
+                      {skill.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+
+            <label className="publish-field">
+              <span>Name</span>
+              <input value={draft.name} placeholder="My Great Skill" onChange={(event) => patch({ name: event.target.value })} />
+            </label>
+
+            <div className="publish-field-row">
+              <label className="publish-field">
+                <span>Publisher handle</span>
+                <input value={draft.publisher} placeholder="yourname" onChange={(event) => patch({ publisher: event.target.value })} />
+              </label>
+              <label className="publish-field">
+                <span>Version</span>
+                <input value={draft.version} placeholder="1.0.0" onChange={(event) => setDraft((current) => ({ ...current, version: event.target.value }))} />
+              </label>
+            </div>
+
+            <label className="publish-field">
+              <span>Package id</span>
+              <input
+                value={draft.id}
+                placeholder="yourname.my-great-skill"
+                onChange={(event) => setDraft((current) => ({ ...current, id: event.target.value, idTouched: true }))}
+              />
+              <small>Where the manifest will live: packages/{draft.id.trim() || "<id>"}/manifest.json</small>
+            </label>
+
+            <label className="publish-field">
+              <span>Description</span>
+              <textarea rows={2} value={draft.description} placeholder="What does this do, in one or two sentences?" onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} />
+            </label>
+
+            <label className="publish-field">
+              <span>Tags (comma-separated)</span>
+              <input value={draft.tagsInput} placeholder="frontend, local-first, security" onChange={(event) => setDraft((current) => ({ ...current, tagsInput: event.target.value }))} />
+            </label>
+
+            <div className="publish-field">
+              <span>Permissions requested</span>
+              <div className="publish-permission-grid">
+                {PUBLISH_PERMISSION_SCOPES.map((scope) => (
+                  <button key={scope} type="button" className={`publish-permission-chip ${draft.permissions.includes(scope) ? "active" : ""}`} onClick={() => togglePermission(scope)} aria-pressed={draft.permissions.includes(scope)}>
+                    <Shield size={11} /> {scope}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {draft.kind === "preset" ? (
+              <div className="publish-field">
+                <span>Preset payload</span>
+                {savedPreset ? (
+                  <p className="publish-hint">
+                    Using your saved preset from the Orchestration graph (saved {(savedPreset as { saved_at?: string })?.saved_at ? new Date((savedPreset as { saved_at?: string }).saved_at as string).toLocaleString() : "locally"}). It will be
+                    committed as <code>{publishPayloadPath(draft)}</code>.
+                  </p>
+                ) : (
+                  <p className="publish-hint publish-hint-warn">No saved preset yet — go to Orchestration and click "Save preset" first, then reopen this wizard.</p>
+                )}
+              </div>
+            ) : (
+              <>
+                <label className="publish-toggle">
+                  <input type="checkbox" checked={draft.usePastedContent} onChange={(event) => setDraft((current) => ({ ...current, usePastedContent: event.target.checked }))} />
+                  <span>Paste the {draft.kind === "mcp" ? "MCP config" : "SKILL.md"} content instead of linking a source URL</span>
+                </label>
+                {draft.usePastedContent ? (
+                  <label className="publish-field">
+                    <span>Content</span>
+                    <textarea
+                      rows={8}
+                      className="publish-monospace-input"
+                      value={draft.pastedContent}
+                      placeholder={draft.kind === "mcp" ? "MCP server config JSON…" : "# SKILL.md contents…"}
+                      onChange={(event) => setDraft((current) => ({ ...current, pastedContent: event.target.value }))}
+                    />
+                    <small>Will be committed as <code>{publishPayloadPath(draft)}</code>; source_url points there automatically.</small>
+                  </label>
+                ) : (
+                  <label className="publish-field">
+                    <span>Source URL</span>
+                    <input value={draft.sourceUrl} placeholder="https://raw.githubusercontent.com/you/repo/main/SKILL.md" onChange={(event) => setDraft((current) => ({ ...current, sourceUrl: event.target.value }))} />
+                  </label>
+                )}
+              </>
+            )}
+
+            <label className="publish-field">
+              <span>ASCII art preview (optional)</span>
+              <textarea rows={4} className="publish-monospace-input" value={draft.asciiArt} placeholder={"  /\\_/\\ \n ( o.o )\n  > ^ <"} onChange={(event) => setDraft((current) => ({ ...current, asciiArt: event.target.value }))} />
+            </label>
+          </div>
+
+          <div className="publish-preview">
+            <div className="publish-preview-head">
+              <span>manifest.json preview</span>
+              <button type="button" className="ghost-action" onClick={copyManifest}>
+                <Copy size={13} /> {copied ? "Copied" : "Copy manifest"}
+              </button>
+            </div>
+            <pre className="publish-manifest-preview">{manifestJson}</pre>
+
+            {draft.asciiArt.trim() ? <pre className="marketplace-card-ascii publish-ascii-preview">{draft.asciiArt}</pre> : null}
+
+            {errors.length > 0 ? (
+              <ul className="publish-errors">
+                {errors.map((message) => (
+                  <li key={message}>{message}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="publish-valid-note">
+                <Check size={13} /> Manifest looks good.
+              </p>
+            )}
+
+            <div className="publish-steps">
+              <strong>To publish:</strong>
+              <ol>
+                <li>Open a pull request below — it opens GitHub's "create file" page pre-filled with your manifest (and payload, if any). Commit it.</li>
+                <li>Add <code>{draft.id.trim() || "<id>"}</code> to <code>index.json</code> in the same PR.</li>
+                <li>Open the pull request from GitHub — a human reviews and merges it.</li>
+              </ol>
+            </div>
+
+            <div className="publish-actions">
+              <button type="button" className="publish-primary" disabled={!isValid} onClick={openManifestPr}>
+                <Github size={14} /> Open a pull request
+              </button>
+              {payloadText ? (
+                <button type="button" className="ghost-action" disabled={!isValid} onClick={openPayloadPr}>
+                  <Upload size={13} /> Open new-file for the payload
+                </button>
+              ) : null}
+              <button type="button" className="ghost-action" onClick={() => openExternal(githubEditFileUrl("index.json"))}>
+                <FileText size={13} /> Edit index.json
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 

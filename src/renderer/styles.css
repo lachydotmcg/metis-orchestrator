@@ -7688,7 +7688,8 @@ button.pulse-tile:hover {
 .run-test-backdrop,
 .account-backdrop,
 .resource-backdrop,
-.perm-backdrop {
+.perm-backdrop,
+.publish-backdrop {
   padding: 0;
   background: transparent;
   border: 0;
@@ -7706,7 +7707,9 @@ button.pulse-tile:hover {
 .resource-backdrop:focus,
 .resource-backdrop:focus-visible,
 .perm-backdrop:focus,
-.perm-backdrop:focus-visible {
+.perm-backdrop:focus-visible,
+.publish-backdrop:focus,
+.publish-backdrop:focus-visible {
   outline: none;
   box-shadow: none;
 }
@@ -7729,7 +7732,8 @@ a:focus-visible,
 .run-test-backdrop:focus-visible,
 .account-backdrop:focus-visible,
 .resource-backdrop:focus-visible,
-.perm-backdrop:focus-visible {
+.perm-backdrop:focus-visible,
+.publish-backdrop:focus-visible {
   outline: none;
 }
 
@@ -10101,6 +10105,374 @@ a:focus-visible,
 .marketplace-detail-readme {
   padding-top: 8px;
   border-top: 1px solid var(--line-soft);
+}
+
+/* ---- Publish wizard (owner: "let people add their own skills/presets to the marketplace,
+   not just their orchestration") — GitHub-native publish flow, no backend: generates a manifest
+   and hands off to a pre-filled GitHub "create file" URL. ---- */
+
+.marketplace-framing-hint {
+  max-width: 720px;
+  margin: -6px auto 0;
+  padding: 0 4px;
+  color: var(--faint);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.marketplace-framing-hint strong {
+  color: var(--soft);
+}
+
+.publish-open-button {
+  color: var(--text);
+  border-color: var(--line);
+}
+
+.publish-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgb(0 0 0 / 0.55);
+}
+
+.publish-modal {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 61;
+  display: flex;
+  flex-direction: column;
+  width: min(920px, calc(100vw - 32px));
+  max-height: min(88vh, 860px);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.55);
+  transform: translate(-50%, -50%);
+}
+
+.publish-modal-head {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.publish-modal-head h2 {
+  margin: 0 0 6px;
+  color: white;
+  font-size: 17px;
+}
+
+.publish-framing {
+  margin: 0;
+  max-width: 620px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.publish-framing strong {
+  color: var(--soft);
+}
+
+.publish-link-inline {
+  display: inline;
+  padding: 0;
+  color: var(--accent);
+  background: none;
+  border: 0;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.publish-modal-close {
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-left: auto;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+}
+
+.publish-modal-close:hover {
+  color: white;
+  background: var(--line);
+}
+
+.publish-modal-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  overflow: auto;
+  padding: 16px 18px 20px;
+}
+
+.publish-form {
+  display: grid;
+  gap: 12px;
+  align-content: start;
+}
+
+.publish-kind-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 4px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.publish-kind-tabs button {
+  flex: 1;
+  padding: 7px 0;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 750;
+}
+
+.publish-kind-tabs button.active {
+  color: #0c0d10;
+  background: var(--accent);
+}
+
+.publish-field {
+  display: grid;
+  gap: 5px;
+}
+
+.publish-field > span:first-child {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.publish-field input,
+.publish-field select,
+.publish-field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--text);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.publish-field small {
+  color: var(--faint);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+
+.publish-field small code {
+  color: var(--soft);
+}
+
+.publish-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.publish-permission-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.publish-permission-chip {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  padding: 5px 9px;
+  color: var(--muted);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.publish-permission-chip.active {
+  color: white;
+  background: var(--line);
+  border-color: var(--accent);
+}
+
+.publish-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--soft);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.publish-monospace-input {
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.publish-hint {
+  margin: 0;
+  padding: 9px 10px;
+  color: var(--soft);
+  background: var(--node);
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.publish-hint code {
+  color: var(--accent);
+}
+
+.publish-hint-warn {
+  color: #ffd8a3;
+  border-color: #6b5a3a;
+}
+
+.publish-preview {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+}
+
+.publish-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.publish-preview-head span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.publish-manifest-preview {
+  overflow: auto;
+  max-height: 260px;
+  margin: 0;
+  padding: 12px;
+  color: var(--soft);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
+.publish-ascii-preview {
+  max-height: 120px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.publish-errors {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 10px 12px;
+  background: rgb(217 144 144 / 0.1);
+  border: 1px solid #6b3a3a;
+  border-radius: 9px;
+  color: #d99090;
+  font-size: 12px;
+  line-height: 1.5;
+  list-style: none;
+}
+
+.publish-valid-note {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 0;
+  padding: 9px 12px;
+  background: rgb(174 183 198 / 0.1);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.publish-steps {
+  padding: 10px 12px;
+  background: var(--node);
+  border: 1px solid var(--line-soft);
+  border-radius: 10px;
+  color: var(--soft);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.publish-steps strong {
+  color: white;
+}
+
+.publish-steps ol {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.publish-steps code {
+  color: var(--accent);
+}
+
+.publish-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.publish-primary {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 9px 16px;
+  color: #0c0d10;
+  background: var(--accent);
+  border: 0;
+  border-radius: 10px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.publish-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 780px) {
+  .publish-modal-body {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---- Right palette ---- */
