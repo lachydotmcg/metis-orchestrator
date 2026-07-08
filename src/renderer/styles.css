@@ -8488,8 +8488,17 @@ a:focus-visible,
 .gallery-board-head label,
 .gallery-board-head-title {
   display: grid;
-  flex: 0 1 auto;
+  flex: 1 1 240px;
   gap: 4px;
+  min-width: 0;
+}
+
+/* Grid items default to min-width: auto, which refuses to shrink below the child's intrinsic
+   (max-content) width — so a long, or single unbroken-word, board title forced this box wider
+   than its flex-shrunk container with nowhere to scroll to see the rest (genuinely invisible,
+   not just visually tight). min-width: 0 here lets the label/title/input shrink with their
+   container instead of overflowing it. */
+.gallery-board-head-title > * {
   min-width: 0;
 }
 
@@ -8507,6 +8516,7 @@ a:focus-visible,
 .gallery-board-head-title input {
   font-size: 22px;
   font-weight: 850;
+  overflow-wrap: anywhere;
 }
 
 /* Click-to-edit-in-place text (docs/FABLE_PLANS.md section 23b): board title and, once an
@@ -8515,6 +8525,7 @@ a:focus-visible,
 .click-to-edit {
   display: block;
   width: 100%;
+  min-width: 0;
   padding: 0;
   color: white;
   background: transparent;
@@ -8523,6 +8534,7 @@ a:focus-visible,
   font: inherit;
   text-align: left;
   cursor: text;
+  overflow-wrap: anywhere;
   border-bottom: 1px dashed transparent;
 }
 
@@ -8856,6 +8868,13 @@ a:focus-visible,
   display: flex;
   gap: 4px;
   margin: 8px 11px 0;
+}
+
+/* Palette strip inside the selected-image editor's labelled field (docs/FABLE_PLANS.md section
+   23b/23c, "Palette" caption fix): sits flush like the neighbouring Image title/Description
+   fields instead of using the masonry-card margin above. */
+.gallery-image-editor-field .palette-strip {
+  margin: 0;
 }
 
 .palette-swatch {

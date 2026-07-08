@@ -6156,8 +6156,14 @@ function parseCaptionResponse(raw: string): { caption: string; moodTags: string[
 }
 
 const VISION_CAPTION_PROMPT =
-  "Look at this image from a design/style moodboard. Respond with ONLY a JSON object, no other text: " +
-  '{"caption": "one concise sentence describing the visual style", "tags": ["3 to 6 lowercase mood or style tags"]}.';
+  "This image is a design/style reference on a moodboard used by a frontend designer. Write a SPECIFIC, " +
+  "evocative style read they could act on as a design brief — not a description of what's literally in the " +
+  "picture. In 1-2 tight sentences, name the concrete palette feel (exact hues/contrast, not just 'colorful'), " +
+  "the mood, the era or genre it evokes, the typography character if any text or type-like shapes are visible, " +
+  "and the composition/density (tight and busy, airy and minimal, grid-like, etc). Never start with filler like " +
+  "'this image shows' or 'this is a picture of' — open directly with the style read itself. " +
+  "Respond with ONLY a JSON object, no other text: " +
+  '{"caption": "your 1-2 sentence style read", "tags": ["3 to 6 lowercase mood or style tags"]}.';
 
 /** Detects the "I can't see an image" refusal family some vision models emit when the
  *  image payload didn't actually reach them (the root cause of docs/FABLE_PLANS.md

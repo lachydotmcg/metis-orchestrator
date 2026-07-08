@@ -7359,11 +7359,22 @@ function MetricCard({ label, value }: { label: string; value: string }): JSX.Ele
 
 // One-time sample purge (docs/FABLE_PLANS.md section 23b): the earlier "real images only"
 // cleanup (section 23) only stopped seeding NEW installs — owners with a persisted store from
-// before that change still have the old seeded board+images. This strips exactly the known seed
-// shape (board id "client-websites" with images "cw-1".."cw-4", all `data:image/svg+xml` src —
-// see the pre-section-23 seed in git history at commit 1e25c68) and, if that leaves the seeded
-// board with zero images, drops the board too. Anything else (user-created boards/images, even
-// ones that happen to be empty) is left untouched.
+// before that change still have the old seeded board+images. This strips the known seed shape
+// (board id "client-websites" with images "cw-1".."cw-4" — see the pre-section-23 seed in git
+// history at commit 1e25c68) and, if that leaves the seeded board with zero images, drops the
+// board too. Anything else (user-created boards/images, even ones that happen to be empty) is
+// left untouched.
+//
+// Match is by id ONLY (not src/mime) — some installs rasterized the seed svgs to PNG at some
+// point, so an `src.startsWith("data:image/svg+xml")` guard silently stopped matching them. The
+// id set is fixed and known (cw-1..cw-4 on client-websites only), so dropping the mime check
+// can't touch a user's own images regardless of format.
+//
+// This runs every time GalleryWorkspace mounts (see the effect below) rather than being gated by
+// a persisted "already ran" flag — the function is idempotent (no-op once the seed is gone), so
+// re-running it on every Gallery visit is simpler and correct, and it means an owner on an older
+// build that already "ran" a stricter purge once still gets the broadened check applied next
+// time they open the tab, with no version bump needed.
 const SEED_BOARD_ID = "client-websites";
 const SEED_IMAGE_IDS = new Set(["cw-1", "cw-2", "cw-3", "cw-4"]);
 
@@ -7372,7 +7383,7 @@ function purgeSeededGalleryBoards(current: GalleryBoard[]): GalleryBoard[] {
   const next = current
     .map((board) => {
       if (board.id !== SEED_BOARD_ID) return board;
-      const filteredImages = board.images.filter((image) => !(SEED_IMAGE_IDS.has(image.id) && image.src.startsWith("data:image/svg+xml")));
+      const filteredImages = board.images.filter((image) => !SEED_IMAGE_IDS.has(image.id));
       if (filteredImages.length === board.images.length) return board;
       mutated = true;
       return { ...board, images: filteredImages };
@@ -7589,7 +7600,7 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
                 src: String(reader.result),
                 title: file.name.replace(/\.[^.]+$/, ""),
                 tags: ["imported", "needs analysis"],
-                analysis: "Imported from your machine. Analysis can later describe layout, palette, typography, and routing use."
+                analysis: "Not analysed yet — run Analyze board."
               });
             };
             reader.readAsDataURL(file);
@@ -7597,8 +7608,16 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
       )
     ).then((images) => {
       onBoardsChange((current) =>
-        // Board cover always tracks the most recently added image (docs/FABLE_PLANS.md section 23c).
-        current.map((item) => (item.id === board.id ? { ...item, coverImage: images[images.length - 1].src, images: [...item.images, ...images] } : item))
+        current.map((item) => {
+          if (item.id !== board.id) return item;
+          // Adding a real image to the seed board also clears any leftover cw-* seed images in
+          // the same update (the owner's expectation: "remove it when someone adds an image"),
+          // not just on the next purge pass.
+          const baseImages = item.id === SEED_BOARD_ID ? item.images.filter((image) => !SEED_IMAGE_IDS.has(image.id)) : item.images;
+          const nextImages = [...baseImages, ...images];
+          // Board cover always tracks the most recently added image (docs/FABLE_PLANS.md section 23c).
+          return { ...item, coverImage: images[images.length - 1].src, images: nextImages };
+        })
       );
     });
   }
@@ -7668,11 +7687,14 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
             {selectedImage ? (
               <div className="gallery-image-editor">
                 <img alt={selectedCard?.title ?? selectedImage.title} src={selectedImage.src} />
-                {selectedCard ? (
-                  <div className="palette-strip" aria-label="Extracted palette">
-                    {selectedCard.palette.map((hex, index) => (
-                      <span key={`${hex}-${index}`} className="palette-swatch" style={{ background: hex }} title={hex} />
-                    ))}
+                {selectedCard && selectedCard.palette.some(Boolean) ? (
+                  <div className="gallery-image-editor-field">
+                    <small>Palette</small>
+                    <div className="palette-strip" aria-label="Extracted palette">
+                      {selectedCard.palette.filter(Boolean).map((hex, index) => (
+                        <span key={`${hex}-${index}`} className="palette-swatch" style={{ background: hex }} title={hex} />
+                      ))}
+                    </div>
                   </div>
                 ) : null}
                 <div className="gallery-image-editor-field">
