@@ -6526,7 +6526,6 @@ function MemoryGraphWorkspace({
   const [zoom, setZoom] = useState(1);
   const [selected, setSelected] = useState<string | null>(null);
   const [treeCollapsed, setTreeCollapsed] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [focusRoot, setFocusRoot] = useState<string | null>(null);
   const [focusDepth, setFocusDepth] = useState(2);
   const [runtimeConversations, setRuntimeConversations] = useState<ConversationRecord[]>([]);
@@ -6549,8 +6548,11 @@ function MemoryGraphWorkspace({
   const [docSaving, setDocSaving] = useState(false);
   const [docSaveStatus, setDocSaveStatus] = useState<"saved" | "error" | null>(null);
   const [docSaveError, setDocSaveError] = useState<string | null>(null);
-  const [physics, setPhysics, physicsLoaded] = useAppStoreState<GraphPhysicsSettings>("graphPhysics", DEFAULT_GRAPH_PHYSICS);
-  const [colorByProject, setColorByProject] = useAppStoreState<boolean>("graphColorByProject", false);
+  // Owner wants the physics feel kept but the customizer UI gone, so this stays read-only here:
+  // whatever was last persisted (or the default) still drives the sim, there's just no in-app
+  // control surface to change it anymore.
+  const [physics] = useAppStoreState<GraphPhysicsSettings>("graphPhysics", DEFAULT_GRAPH_PHYSICS);
+  const [colorByProject] = useAppStoreState<boolean>("graphColorByProject", false);
   // "Search notes" / "Pinned notes" toolbar buttons (owner: "a lot of buttons that just do
   // nothing") — wired to a real client-side filter over the note tree instead of being no-ops.
   // Pins persist via the same local app-store hook physics/colorByProject use, so they survive
@@ -6640,21 +6642,39 @@ function MemoryGraphWorkspace({
   // MEMORY_GRAPH_NODES/LINKS above already act as the seeded "welcome" cluster, so the view is never blank.
   const graphTree = useMemo(() => (runtimeGraph.tree ? [...MEMORY_TREE, runtimeGraph.tree] : MEMORY_TREE), [runtimeGraph.tree]);
 
-  // Filters the note tree down to matches for the search query and/or pinned-only view. Folders
-  // with nothing left after filtering are dropped entirely rather than shown empty.
-  const visibleTree = useMemo(() => {
+  // Directory panel (owner: "the right-hand directory items still do not open documents") — groups
+  // the REAL project files (same list the canvas draws as project-file-* nodes) by folder so the
+  // tree reads like a file browser instead of the old static demo note tree. Folder key is the
+  // project-relative directory ("" becomes a synthetic "(root)" bucket for top-level files).
+  const projectFileGroups = useMemo<{ folder: string; files: MemoryGraphNode[] }[]>(() => {
+    const groups = new Map<string, MemoryGraphNode[]>();
+    for (const node of projectFileNodes) {
+      const relPath = node.detail ?? node.label;
+      const slashIdx = relPath.lastIndexOf("/");
+      const folder = slashIdx === -1 ? "" : relPath.slice(0, slashIdx);
+      (groups.get(folder) ?? groups.set(folder, []).get(folder)!).push(node);
+    }
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([folder, files]) => ({ folder: folder || "(root)", files: [...files].sort((a, b) => a.label.localeCompare(b.label)) }));
+  }, [projectFileNodes]);
+
+  // Search + pinned toolbar buttons now target this real file list (owner: repurpose the buttons
+  // that used to filter the fake demo notes). Folders with nothing left after filtering are dropped.
+  const visibleFileGroups = useMemo(() => {
     const query = treeSearchQuery.trim().toLowerCase();
     const pinnedSet = new Set(pinnedNotes);
-    if (!query && !pinnedOnly) return graphTree;
-    const walk = (folder: MemoryFolder): MemoryFolder | null => {
-      const notes = (folder.notes ?? []).filter((note) => (!pinnedOnly || pinnedSet.has(note)) && (!query || note.toLowerCase().includes(query)));
-      const children = (folder.children ?? []).map(walk).filter((child): child is MemoryFolder => child !== null);
-      if (notes.length === 0 && children.length === 0) return null;
-      return { ...folder, notes, children: children.length ? children : undefined };
-    };
-    return graphTree.map(walk).filter((folder): folder is MemoryFolder => folder !== null);
-  }, [graphTree, treeSearchQuery, pinnedOnly, pinnedNotes]);
-  const isFiltering = Boolean(treeSearchQuery.trim()) || pinnedOnly;
+    if (!query && !pinnedOnly) return projectFileGroups;
+    return projectFileGroups
+      .map((group) => ({
+        folder: group.folder,
+        files: group.files.filter(
+          (file) => (!pinnedOnly || pinnedSet.has(file.detail ?? file.label)) && (!query || file.label.toLowerCase().includes(query))
+        )
+      }))
+      .filter((group) => group.files.length > 0);
+  }, [projectFileGroups, treeSearchQuery, pinnedOnly, pinnedNotes]);
+  const isFilteringFiles = Boolean(treeSearchQuery.trim()) || pinnedOnly;
 
   function togglePinnedNote(note: string): void {
     setPinnedNotes((current) => (current.includes(note) ? current.filter((n) => n !== note) : [...current, note]));
@@ -7026,11 +7046,6 @@ function MemoryGraphWorkspace({
     wake();
   }
 
-  function updatePhysics(patch: Partial<GraphPhysicsSettings>): void {
-    setPhysics((current) => ({ ...current, ...patch }));
-    wake();
-  }
-
   return (
     <main className={`memory-workspace ${treeCollapsed ? "tree-collapsed" : ""}`} aria-label="Graph View">
       <section
@@ -7060,43 +7075,6 @@ function MemoryGraphWorkspace({
           <button type="button" aria-label="Refresh runtime memory" onClick={refreshRuntimeGraph}>
             <RotateCcw size={15} />
           </button>
-          <div className="memory-settings-anchor">
-            <button type="button" aria-label="Graph settings" className={settingsOpen ? "active" : ""} onClick={() => setSettingsOpen((v) => !v)}>
-              <Settings size={15} />
-            </button>
-            {settingsOpen ? (
-              <div className="perm-popover graph-settings-popover" role="dialog" aria-label="Graph settings">
-                <header>
-                  <SlidersHorizontal size={14} />
-                  <span>Graph physics</span>
-                  <button type="button" aria-label="Close settings" onClick={() => setSettingsOpen(false)}>
-                    <X size={14} />
-                  </button>
-                </header>
-                <div className="field">
-                  <span>Repel force</span>
-                  <input type="range" min={0.2} max={3} step={0.05} value={physics.repelForce} onChange={(e) => updatePhysics({ repelForce: Number(e.target.value) })} />
-                </div>
-                <div className="field">
-                  <span>Center force</span>
-                  <input type="range" min={0} max={3} step={0.05} value={physics.centerForce} onChange={(e) => updatePhysics({ centerForce: Number(e.target.value) })} />
-                </div>
-                <div className="field">
-                  <span>Link distance</span>
-                  <input type="range" min={40} max={260} step={2} value={physics.linkDistance} onChange={(e) => updatePhysics({ linkDistance: Number(e.target.value) })} />
-                </div>
-                <div className="field">
-                  <span>Link thickness</span>
-                  <input type="range" min={0.3} max={4} step={0.1} value={physics.linkThickness} onChange={(e) => updatePhysics({ linkThickness: Number(e.target.value) })} />
-                </div>
-                <div className="field field-checkbox">
-                  <span>Colour by project</span>
-                  <input type="checkbox" checked={colorByProject} onChange={(e) => setColorByProject(e.target.checked)} />
-                </div>
-                {!physicsLoaded ? <p className="field-hint">Loading saved settings…</p> : null}
-              </div>
-            ) : null}
-          </div>
         </div>
         <div className="memory-title">Graph View</div>
         {focusRoot ? (
@@ -7235,12 +7213,9 @@ function MemoryGraphWorkspace({
         <aside className="memory-tree" aria-label="Note folders">
           <header className="memory-tree-head">
             <div className="memory-tree-actions">
-              <button type="button" aria-label="Graph settings" onClick={() => setSettingsOpen((v) => !v)}>
-                <Network size={15} />
-              </button>
               <button
                 type="button"
-                aria-label="Search notes"
+                aria-label="Search files"
                 className={treeSearchOpen ? "active" : ""}
                 onClick={() => setTreeSearchOpen((v) => { const next = !v; if (!next) setTreeSearchQuery(""); return next; })}
               >
@@ -7248,9 +7223,9 @@ function MemoryGraphWorkspace({
               </button>
               <button
                 type="button"
-                aria-label="Pinned notes"
+                aria-label="Pinned files"
                 className={pinnedOnly ? "active" : ""}
-                title={pinnedNotes.length ? `${pinnedNotes.length} pinned` : "No notes pinned yet — pin one from the tree"}
+                title={pinnedNotes.length ? `${pinnedNotes.length} pinned` : "No files pinned yet — pin one from the list"}
                 onClick={() => setPinnedOnly((v) => !v)}
               >
                 <Pin size={15} />
@@ -7267,33 +7242,104 @@ function MemoryGraphWorkspace({
                 type="text"
                 value={treeSearchQuery}
                 onChange={(e) => setTreeSearchQuery(e.target.value)}
-                placeholder="Search notes…"
+                placeholder="Search files…"
                 autoFocus
               />
             </div>
           ) : null}
           <div className="memory-tree-list">
-            {visibleTree.length === 0 ? (
-              <p className="memory-tree-empty">{pinnedOnly ? "No pinned notes yet." : "No notes match."}</p>
+            {!projectWorkspace || !projectSnapshot ? (
+              <p className="memory-tree-empty">Select a project folder to see its files.</p>
+            ) : projectFileGroups.length === 0 ? (
+              <p className="memory-tree-empty">No matching files in this project.</p>
+            ) : visibleFileGroups.length === 0 ? (
+              <p className="memory-tree-empty">{pinnedOnly ? "No pinned files yet." : "No files match."}</p>
             ) : (
-              visibleTree.map((folder) => (
-                <MemoryTreeFolder
-                  key={folder.name}
-                  depth={0}
+              visibleFileGroups.map((group) => (
+                <ProjectFileTreeGroup
+                  key={group.folder}
+                  group={group}
                   expanded={expanded}
-                  folder={folder}
-                  onPick={selectByLabel}
                   onToggle={toggleFolder}
-                  forceOpen={isFiltering}
+                  forceOpen={isFilteringFiles}
                   pinnedNotes={pinnedNotes}
                   onTogglePin={togglePinnedNote}
+                  onOpen={openDocForNode}
                 />
               ))
             )}
+            {graphTree.length > 0 ? (
+              <div className="memory-tree-notes-section">
+                <div className="memory-tree-section-label">Notes</div>
+                {graphTree.map((folder) => (
+                  <MemoryTreeFolder key={folder.name} depth={0} expanded={expanded} folder={folder} onPick={selectByLabel} onToggle={toggleFolder} />
+                ))}
+              </div>
+            ) : null}
           </div>
         </aside>
       ) : null}
     </main>
+  );
+}
+
+// Renders one folder bucket of real project files in the directory panel (owner: "the right-hand
+// directory items still do not open documents"). A row click calls `onOpen`, the same
+// `openDocForNode` path the canvas file nodes already use, so this is a second entry point into
+// the same doc viewer rather than a separate select-only affordance like the old note tree.
+function ProjectFileTreeGroup({
+  group,
+  expanded,
+  onToggle,
+  forceOpen,
+  pinnedNotes,
+  onTogglePin,
+  onOpen
+}: {
+  group: { folder: string; files: MemoryGraphNode[] };
+  expanded: Record<string, boolean>;
+  onToggle: (name: string) => void;
+  forceOpen?: boolean;
+  pinnedNotes: string[];
+  onTogglePin: (note: string) => void;
+  onOpen: (node: MemoryGraphNode) => void;
+}): JSX.Element {
+  const groupKey = `files:${group.folder}`;
+  const isOpen = forceOpen || Boolean(expanded[groupKey]);
+  const pinnedSet = new Set(pinnedNotes);
+  return (
+    <div className="memory-tree-group">
+      <button className="memory-tree-row folder" type="button" style={{ paddingLeft: "10px" }} onClick={() => onToggle(groupKey)}>
+        <ChevronRight className={isOpen ? "open" : ""} size={14} />
+        <Folder size={13} />
+        <span>{group.folder}</span>
+      </button>
+      {isOpen
+        ? group.files.map((file) => {
+            const pinKey = file.detail ?? file.label;
+            const isPinned = pinnedSet.has(pinKey);
+            return (
+              <div key={file.id} className="memory-tree-row note" style={{ paddingLeft: "34px" }}>
+                <button type="button" className="memory-tree-note-label" onClick={() => onOpen(file)} title={file.detail ?? file.label}>
+                  <FileText size={12} />
+                  <span>{file.label}</span>
+                </button>
+                <button
+                  type="button"
+                  className={`memory-tree-pin ${isPinned ? "pinned" : ""}`}
+                  aria-label={isPinned ? `Unpin ${file.label}` : `Pin ${file.label}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onTogglePin(pinKey);
+                  }}
+                >
+                  <Pin size={11} />
+                </button>
+              </div>
+            );
+          })
+        : null}
+    </div>
   );
 }
 

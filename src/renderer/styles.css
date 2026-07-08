@@ -2331,27 +2331,19 @@ p {
   cursor: grabbing;
 }
 
-.memory-settings-anchor {
-  position: relative;
-  display: inline-flex;
+.memory-tree-notes-section {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #2c2c2c;
 }
 
-.memory-settings-anchor button.active {
-  color: white;
-  background: #353535;
-}
-
-/* Bug fix (owner: "settings button does nothing"): .perm-popover's base rule (top/bottom/left/
-   width, declared later in this file) was winning the cascade over this same-specificity
-   single-class override, so the popover rendered with both top:44px AND bottom:44px plus
-   left:0/width:284px — collapsing it to a near-zero-height sliver positioned off-anchor instead
-   of the intended dropdown. Scoping the selector to the anchor raises specificity so this override
-   always wins regardless of declaration order. */
-.memory-settings-anchor .graph-settings-popover {
-  top: 44px;
-  bottom: auto;
-  left: 0;
-  width: 240px;
+.memory-tree-section-label {
+  padding: 2px 4px 6px;
+  color: #6c6c6c;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .memory-focus-bar {
