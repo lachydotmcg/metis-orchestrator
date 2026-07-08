@@ -2061,7 +2061,8 @@ function sessionProviderPrompt(
   projectSnapshot?: ProjectSnapshot,
   designSeed?: DesignSeed,
   metisFile?: { content: string; chars: number } | null,
-  conversationContext?: string | null
+  conversationContext?: string | null,
+  knowledgeContext?: string | null
 ): string {
   const previousSource = previousRun?.providerResult
     ? `Previous response source: ${providerInfo[previousRun.providerResult.provider].label} / ${previousRun.providerResult.model} via ${previousRun.pipelineName}.`
@@ -2069,6 +2070,7 @@ function sessionProviderPrompt(
       ? `Previous response source: ${previousRun.pipelineName}; no live provider result was recorded.`
       : "";
   return [
+    knowledgeContext ?? "",
     metisFilePromptBlock(metisFile ?? null),
     conversationContext ? `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}` : "",
     `You are running inside Metis Orchestrator.`,
@@ -3774,6 +3776,245 @@ function projectCheckSummary(files: GeneratedFile[]): string {
   return hasIndexHtml ? `${base} — index.html present` : base;
 }
 
+// --- Knowledge Banks phase 1: local embeddings retrieval (docs/FABLE_PLANS.md
+// §16). STRICTLY ADDITIVE and a no-op whenever Ollama/the embed model/the
+// project files/the retrieval result are unavailable — every function here
+// fails soft (returns null/[] on any error) so a broken embed can never break
+// a run. Uses the same OLLAMA_BASE_URL as the rest of the app (see the Ollama
+// vision-RAG section below); this section is defined earlier in the file so
+// it's usable by the edit/chat prompt-assembly sites above, which run later
+// at runtime regardless of source order.
+const KNOWLEDGE_EMBED_MODEL = "nomic-embed-text";
+const KNOWLEDGE_MAX_CHUNKS = 200;
+const KNOWLEDGE_CHUNK_SIZE = 1500;
+const KNOWLEDGE_TOP_K = 4;
+const KNOWLEDGE_SIMILARITY_FLOOR = 0.3;
+const KNOWLEDGE_CONTEXT_CHAR_CAP = 6000;
+
+type KnowledgeChunk = { path: string; ordinal: number; text: string };
+type KnowledgeIndexedChunk = KnowledgeChunk & { vector: number[] };
+type KnowledgeIndex = { signature: string; model: string; chunks: KnowledgeIndexedChunk[] };
+type RetrievedKnowledgeChunk = { path: string; ordinal: number; text: string; score: number };
+
+/** Embeds a batch of texts via Ollama's /api/embeddings, one request per text
+ *  (simplest, works with any Ollama version). Returns null on ANY failure —
+ *  unreachable server, missing model, malformed response — so callers can
+ *  treat embeddings as simply "unavailable" and no-op. */
+async function embedTexts(texts: string[]): Promise<number[][] | null> {
+  if (texts.length === 0) return [];
+  try {
+    const vectors: number[][] = [];
+    for (const text of texts) {
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/embeddings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: KNOWLEDGE_EMBED_MODEL, prompt: text })
+      });
+      if (!response.ok) return null;
+      const payload = (await response.json()) as { embedding?: number[] };
+      if (!Array.isArray(payload.embedding) || payload.embedding.length === 0) return null;
+      vectors.push(payload.embedding);
+    }
+    return vectors;
+  } catch {
+    return null;
+  }
+}
+
+/** Splits a file's text into ~KNOWLEDGE_CHUNK_SIZE-char chunks on paragraph
+ *  (blank-line) boundaries where possible, falling back to line boundaries,
+ *  so chunks stay deterministic and readable. */
+function chunkFileText(path: string, content: string): KnowledgeChunk[] {
+  const chunks: KnowledgeChunk[] = [];
+  const paragraphs = content.split(/\n{2,}/);
+  let buffer = "";
+  let ordinal = 0;
+  const flush = (): void => {
+    const trimmed = buffer.trim();
+    if (trimmed.length > 0) {
+      chunks.push({ path, ordinal, text: trimmed });
+      ordinal += 1;
+    }
+    buffer = "";
+  };
+  for (const paragraph of paragraphs) {
+    if (paragraph.length > KNOWLEDGE_CHUNK_SIZE) {
+      // A single oversized paragraph — fall back to line-by-line packing.
+      flush();
+      const lines = paragraph.split("\n");
+      let lineBuffer = "";
+      for (const line of lines) {
+        if (lineBuffer.length + line.length + 1 > KNOWLEDGE_CHUNK_SIZE) {
+          if (lineBuffer.trim().length > 0) {
+            chunks.push({ path, ordinal, text: lineBuffer.trim() });
+            ordinal += 1;
+          }
+          lineBuffer = "";
+        }
+        lineBuffer += `${line}\n`;
+      }
+      if (lineBuffer.trim().length > 0) {
+        chunks.push({ path, ordinal, text: lineBuffer.trim() });
+        ordinal += 1;
+      }
+      continue;
+    }
+    if (buffer.length + paragraph.length + 2 > KNOWLEDGE_CHUNK_SIZE) flush();
+    buffer += `${paragraph}\n\n`;
+  }
+  flush();
+  return chunks;
+}
+
+/** Cheap, order-independent signature over the project's source files (path +
+ *  size + mtime), used to decide whether a cached knowledge index is still
+ *  fresh without re-reading file contents. */
+async function knowledgeSourceSignature(root: string, files: GeneratedFile[]): Promise<string> {
+  const resolvedRoot = resolve(root);
+  const parts: string[] = [];
+  for (const file of files) {
+    try {
+      const info = await stat(join(resolvedRoot, file.path));
+      parts.push(`${file.path}:${info.size}:${info.mtimeMs}`);
+    } catch {
+      parts.push(`${file.path}:${file.content.length}`);
+    }
+  }
+  return sha256(parts.sort().join("|"));
+}
+
+function knowledgeCachePath(root: string): string {
+  return dataPath("knowledge", `${sha256(resolve(root))}.json`);
+}
+
+/** Builds (or reuses a cached) local embeddings index over the selected
+ *  project's files. Returns null whenever there is nothing to index or
+ *  embedding is unavailable — callers must treat null as "no knowledge bank"
+ *  and change nothing about the run. Never throws. */
+async function buildOrLoadKnowledgeIndex(root: string): Promise<KnowledgeIndex | null> {
+  try {
+    const files = await readExistingProjectFiles(root);
+    if (files.length === 0) return null;
+    const signature = await knowledgeSourceSignature(root, files);
+    const cachePath = knowledgeCachePath(root);
+    try {
+      const cached = JSON.parse(await readFile(cachePath, "utf8")) as KnowledgeIndex;
+      if (cached.signature === signature && cached.model === KNOWLEDGE_EMBED_MODEL && Array.isArray(cached.chunks)) {
+        return cached;
+      }
+    } catch {
+      /* no usable cache — fall through to (re)build */
+    }
+    const allChunks: KnowledgeChunk[] = [];
+    for (const file of files) {
+      for (const chunk of chunkFileText(file.path, file.content)) {
+        if (allChunks.length >= KNOWLEDGE_MAX_CHUNKS) break;
+        allChunks.push(chunk);
+      }
+      if (allChunks.length >= KNOWLEDGE_MAX_CHUNKS) break;
+    }
+    if (allChunks.length === 0) return null;
+    const vectors = await embedTexts(allChunks.map((chunk) => chunk.text));
+    if (!vectors || vectors.length !== allChunks.length) return null;
+    const index: KnowledgeIndex = {
+      signature,
+      model: KNOWLEDGE_EMBED_MODEL,
+      chunks: allChunks.map((chunk, i) => ({ ...chunk, vector: vectors[i] }))
+    };
+    try {
+      await mkdir(dirname(cachePath), { recursive: true });
+      await writeFile(cachePath, JSON.stringify(index), "utf8");
+    } catch {
+      /* cache write failure is non-fatal — the index is still usable this run */
+    }
+    return index;
+  } catch {
+    return null;
+  }
+}
+
+function cosineSimilarity(a: number[], b: number[]): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    dot += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+/** Retrieves the top-K most relevant chunks from the project's knowledge
+ *  index for `query`. Returns [] on ANY failure or when the index/embedding
+ *  is unavailable, or when nothing clears the similarity floor — [] is the
+ *  required no-op signal for callers (no prompt change, no operation line). */
+async function retrieveKnowledge(root: string, query: string, topK: number = KNOWLEDGE_TOP_K): Promise<RetrievedKnowledgeChunk[]> {
+  try {
+    const index = await buildOrLoadKnowledgeIndex(root);
+    if (!index || index.chunks.length === 0) return [];
+    const queryVectors = await embedTexts([query]);
+    if (!queryVectors || queryVectors.length === 0) return [];
+    const queryVector = queryVectors[0];
+    const scored = index.chunks
+      .map((chunk) => ({ path: chunk.path, ordinal: chunk.ordinal, text: chunk.text, score: cosineSimilarity(queryVector, chunk.vector) }))
+      .filter((chunk) => chunk.score >= KNOWLEDGE_SIMILARITY_FLOOR)
+      .sort((a, b) => b.score - a.score);
+    return scored.slice(0, topK);
+  } catch {
+    return [];
+  }
+}
+
+/** Formats retrieved chunks into a labelled context block for prompt
+ *  prepending, capped to KNOWLEDGE_CONTEXT_CHAR_CAP total characters. Returns
+ *  "" when given no chunks (callers should also just skip in that case). */
+function knowledgeContextBlock(chunks: RetrievedKnowledgeChunk[]): string {
+  if (chunks.length === 0) return "";
+  let body = chunks.map((chunk) => `# ${chunk.path}\n${chunk.text}`).join("\n\n");
+  if (body.length > KNOWLEDGE_CONTEXT_CHAR_CAP) body = `${body.slice(0, KNOWLEDGE_CONTEXT_CHAR_CAP)}\n/* [truncated] */`;
+  return `Relevant project context (retrieved from the knowledge bank — cite/stay grounded in this, do not contradict it):\n\n${body}\n\n`;
+}
+
+/** Builds the "Grounded on N chunks" AgentOperation for a successful
+ *  retrieval. Callers only build/emit this when chunks.length > 0 — an empty
+ *  retrieval must never produce an operation line. */
+function knowledgeGroundingOperation(root: string, chunks: RetrievedKnowledgeChunk[]): AgentOperation {
+  const distinctFiles = Array.from(new Set(chunks.map((chunk) => chunk.path)));
+  return {
+    id: randomUUID(),
+    kind: "context_load",
+    label: `Grounded on ${chunks.length} chunk${chunks.length === 1 ? "" : "s"}`,
+    target: root,
+    status: "complete",
+    charCount: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
+    permission: "filesystem.read",
+    detail: distinctFiles.join(", ").slice(0, 400)
+  };
+}
+
+/** Single entry point for the prompt-assembly sites: retrieves knowledge for
+ *  `query` against the project at `root` (honouring the knowledgeBankEnabled
+ *  store toggle), and returns both the context block to prepend and the
+ *  operation to emit — or null when there is nothing to ground on (the
+ *  required no-op path: unchanged prompt, no operation, no timeline line). */
+async function retrieveKnowledgeForPrompt(root: string | undefined, query: string): Promise<{ block: string; operation: AgentOperation } | null> {
+  if (!root) return null;
+  try {
+    const knowledgeEnabled = await readStoreValue<boolean>("knowledgeBankEnabled", true);
+    if (!knowledgeEnabled) return null;
+    const chunks = await retrieveKnowledge(root, query);
+    if (chunks.length === 0) return null;
+    const block = knowledgeContextBlock(chunks);
+    if (!block) return null;
+    return { block, operation: knowledgeGroundingOperation(root, chunks) };
+  } catch {
+    return null;
+  }
+}
+
 // Gate for the full multi-stage build pipeline. Router judgement
 // (decision.task_type) is now the SOLE signal for the non-forced path — no
 // more regex-sniffing the prompt for imperative build verbs. That keyword
@@ -4839,6 +5080,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       let editPrompt = `You are EDITING an existing project. Do NOT redesign or rebuild it — preserve its current structure, style, and content except where the user's request requires changes. You may ADD new files (e.g. a new page) alongside changed ones when the request calls for it.\n\nUser request:\n${prompt}\n\nCurrent project files:\n${fileDump}\n\nReturn the complete files you changed or added — and nothing else. Before each fenced code block, put the file path in backticks on its own line. One short sentence describing the change, then the files.`;
       if (conversationContext) editPrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${editPrompt}`;
       if (metisFile) editPrompt = `${metisFilePromptBlock(metisFile)}\n\n${editPrompt}`;
+      const editKnowledge = await retrieveKnowledgeForPrompt(writable?.path, prompt);
+      if (editKnowledge) {
+        editPrompt = `${editKnowledge.block}${editPrompt}`;
+        metisOperations.push(editKnowledge.operation);
+        emitStream(stream, { kind: "operation", operation: editKnowledge.operation });
+        emitTimeline(stream, { id: randomUUID(), kind: "operations", title: editKnowledge.operation.label, operationIds: [editKnowledge.operation.id] });
+      }
       // Stage id "frontend" keeps extraction recovery's existing output lookup working.
       const editCallContext: StageCallContext = { stream, stageId: "frontend", stageLabel: "Edit existing project" };
       const attempt = await callStageWithFallback(editConfig.chain, editPrompt, editConfig.gatewayPreference, editCallContext);
@@ -5069,7 +5317,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const chatDesignSeed = includeProjectTools ? pickDesignSeed(prompt) : undefined;
   if (chatDesignSeed) emitTimeline(stream, timelineText(designSeedTimelineText(chatDesignSeed)));
   const chatConversationContext = await recentConversationContext(input.conversationId);
-  const sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext);
+  const chatKnowledge = await retrieveKnowledgeForPrompt(writableWorkspace?.path, prompt);
+  if (chatKnowledge) {
+    metisOperations.push(chatKnowledge.operation);
+    emitStream(stream, { kind: "operation", operation: chatKnowledge.operation });
+    emitTimeline(stream, { id: randomUUID(), kind: "operations", title: chatKnowledge.operation.label, operationIds: [chatKnowledge.operation.id] });
+  }
+  const sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block);
   const overrideWarnings: string[] = [];
   let providerResult: ProviderInvokeResult;
   try {
