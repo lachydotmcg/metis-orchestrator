@@ -6075,9 +6075,7 @@ function NodeCard({
         ) : null}
         {node.kind === "router" ? <span className="node-tag">ROUTER</span> : null}
         {provider?.tier === "local" && node.kind !== "skill" ? <span className="node-pill">local</span> : null}
-        {isMoodboard && galleryVisual?.coverImage ? (
-          <img className="node-moodboard-cover" alt="" src={galleryVisual.coverImage} />
-        ) : isMoodboard ? (
+        {isMoodboard ? (
           <GalleryHorizontalEnd size={24} strokeWidth={1.8} />
         ) : node.kind === "skill" ? (
           <ClipboardList size={24} strokeWidth={1.8} />
@@ -6225,7 +6223,7 @@ function Palette({
                       onPointerDown={(event) => pick(event, { kind: "skill", name: entry.name })}
                     >
                       <span className="palette-icon skill gallery">
-                        {entry.gallery?.coverImage ? <img alt="" src={entry.gallery.coverImage} /> : <GalleryHorizontalEnd size={16} strokeWidth={1.9} />}
+                        <GalleryHorizontalEnd size={16} strokeWidth={1.9} />
                       </span>
                       <span className="palette-label">
                         <span className="palette-label-text">{entry.name.replace(/^Gallery:\s*/, "")}</span>
@@ -6242,16 +6240,23 @@ function Palette({
                   ))}
                 </div>
               ) : null}
-              {plainSkills.map((entry) => (
-                <div key={entry.name} className="palette-item skill" title={entry.description} onPointerDown={(event) => pick(event, { kind: "skill", name: entry.name })}>
-                  <span className="palette-icon skill">
-                    <ClipboardList size={16} strokeWidth={1.9} />
+              {plainSkills.length ? (
+                <div className="palette-group">
+                  <span className="palette-subhead">
+                    <Layers size={12} strokeWidth={2} /> Skills
                   </span>
-                  <span className="palette-label">{entry.name}</span>
-                  {entry.source === "installed" ? <span className="palette-chip palette-chip-installed">installed</span> : null}
-                  {entry.source === "custom" ? <span className="palette-chip palette-chip-custom">custom</span> : null}
+                  {plainSkills.map((entry) => (
+                    <div key={entry.name} className="palette-item skill" title={entry.description} onPointerDown={(event) => pick(event, { kind: "skill", name: entry.name })}>
+                      <span className="palette-icon skill">
+                        <ClipboardList size={16} strokeWidth={1.9} />
+                      </span>
+                      <span className="palette-label">{entry.name}</span>
+                      {entry.source === "installed" ? <span className="palette-chip palette-chip-installed">installed</span> : null}
+                      {entry.source === "custom" ? <span className="palette-chip palette-chip-custom">custom</span> : null}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              ) : null}
             </>
           )
           : tab === "models"
@@ -7889,6 +7894,10 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   const [moodDraft, setMoodDraft] = useState("");
   const [deleteImageArmed, setDeleteImageArmed] = useState(false);
   const [reanalyzingImageId, setReanalyzingImageId] = useState<string | null>(null);
+  // Delete-board affordance on the grid card (owner: no way to remove a board). Arm-then-confirm,
+  // same UX as deleteSelectedImage above — first click arms a 3s confirm window, second click within
+  // it actually removes the board.
+  const [deleteBoardArmedId, setDeleteBoardArmedId] = useState<string | null>(null);
 
   const refreshCards = useCallback(async () => {
     if (!window.metisGallery) return;
@@ -8050,6 +8059,23 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
 
   function updateBoard(id: string, patch: Partial<GalleryBoard>): void {
     onBoardsChange((current) => current.map((board) => (board.id === id ? { ...board, ...patch } : board)));
+  }
+
+  function deleteBoard(board: GalleryBoard): void {
+    if (deleteBoardArmedId !== board.id) {
+      setDeleteBoardArmedId(board.id);
+      window.setTimeout(() => setDeleteBoardArmedId((current) => (current === board.id ? null : current)), 3000);
+      return;
+    }
+    setDeleteBoardArmedId(null);
+    onBoardsChange((current) => current.filter((item) => item.id !== board.id));
+    if (window.metisGallery) {
+      for (const image of board.images) {
+        void window.metisGallery.deleteCard(image.id).catch(() => {
+          /* best-effort — board removal already went through */
+        });
+      }
+    }
   }
 
   function addBoard(): void {
@@ -8355,7 +8381,31 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
 
       <section className="board-grid">
         {boards.map((board) => (
-          <button key={board.id} className="board-card" type="button" onClick={() => setSelectedId(board.id)}>
+          <div
+            key={board.id}
+            className="board-card"
+            role="button"
+            tabIndex={0}
+            onClick={() => setSelectedId(board.id)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                setSelectedId(board.id);
+              }
+            }}
+          >
+            <button
+              type="button"
+              className={`board-card-delete${deleteBoardArmedId === board.id ? " armed" : ""}`}
+              aria-label={deleteBoardArmedId === board.id ? `Confirm delete ${board.title}` : `Delete ${board.title}`}
+              title={deleteBoardArmedId === board.id ? "Click again to delete" : "Delete board"}
+              onClick={(event) => {
+                event.stopPropagation();
+                deleteBoard(board);
+              }}
+            >
+              {deleteBoardArmedId === board.id ? <Trash2 size={13} /> : <X size={13} />}
+            </button>
             <span className="board-collage">
               {[board.coverImage, ...board.images.slice(0, 3).map((image) => image.src)]
                 .filter(Boolean)
@@ -8369,7 +8419,7 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
             <span className="tag-row">
               {board.tags.slice(0, 3).map((tag) => <span key={tag}>{tag}</span>)}
             </span>
-          </button>
+          </div>
         ))}
       </section>
     </main>

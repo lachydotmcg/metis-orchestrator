@@ -1473,24 +1473,11 @@ p {
 }
 
 /* Moodboard node (owner idea: Gallery model-visualisation inside orchestration) — a gallery board
-   dropped onto an agent reads as a visual pipeline step: cover thumbnail fills the icon tile and a
-   strip of its extracted palette swatches sits under the label. Falls back to the gallery glyph +
-   name when the board has no cover/palette yet. */
+   dropped onto an agent reads as a visual pipeline step: the gallery glyph fills the icon tile and a
+   strip of its extracted palette swatches sits under the label. */
 .node-icon.skill.gallery {
-  overflow: hidden;
-  padding: 0;
   color: #d8dde7;
   background: var(--node-2);
-}
-
-.node-moodboard-cover {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
-  border-radius: 13px;
-  pointer-events: none;
 }
 
 .moodboard-node .node-icon {
@@ -9620,10 +9607,12 @@ a:focus-visible,
 }
 
 .board-card {
+  position: relative;
   display: grid;
   gap: 11px;
   padding: 10px;
   text-align: left;
+  cursor: pointer;
   transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
 }
 
@@ -9631,6 +9620,45 @@ a:focus-visible,
   background: var(--node);
   border-color: var(--line);
   transform: translateY(-1px);
+}
+
+.board-card:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgb(174 183 198 / 0.5);
+}
+
+/* Delete-board affordance (owner: no way to remove a board from the grid). Hover-revealed like
+   node-delete, arm-then-confirm — first click swaps the glyph to a trash icon for a 3s confirm
+   window, second click within it removes the board. */
+.board-card-delete {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: #f4f4f4;
+  background: #2a2f3a;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  line-height: 0;
+  opacity: 0;
+  transition: opacity 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.board-card:hover .board-card-delete,
+.board-card-delete:focus-visible,
+.board-card-delete.armed {
+  opacity: 1;
+}
+
+.board-card-delete:hover,
+.board-card-delete.armed {
+  background: #b3404a;
+  border-color: #c75660;
 }
 
 .board-collage {
@@ -10681,7 +10709,7 @@ a:focus-visible,
 }
 
 /* Moodboards group in the Skills tab — gallery boards surface as a small distinct set with a
-   subheading, a cover thumbnail (or gallery glyph fallback) and a mini palette-swatch strip. */
+   subheading, a gallery glyph icon and a mini palette-swatch strip. */
 .palette-group {
   display: flex;
   flex-direction: column;
@@ -10701,18 +10729,7 @@ a:focus-visible,
 }
 
 .palette-icon.skill.gallery {
-  overflow: hidden;
-  padding: 0;
   background: var(--node);
-}
-
-.palette-icon.skill.gallery img {
-  display: block;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
-  pointer-events: none;
 }
 
 .palette-item.moodboard .palette-label {
