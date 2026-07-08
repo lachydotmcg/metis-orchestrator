@@ -321,6 +321,13 @@ type GalleryBoard = {
   linkedSkill: boolean;
 };
 
+/** Visual data for a gallery board projected into the orchestration graph (owner idea: "Gallery
+ *  model-visualisation inside orchestration") — a board's cover thumbnail and a handful of
+ *  aggregated palette swatches (from its analyzed StyleCards), keyed by the same skill-name
+ *  string a board is dragged onto the graph as (`Gallery: ${title}`), so the Palette list and
+ *  the graph node can both look a skill name up against this map without adding new node fields. */
+type GalleryVisual = { coverImage: string; palette: string[] };
+
 type MarketplaceCategory = "all" | "mcp" | "skill" | "preset";
 // Presentation-level normalization only (owner: "presets pipelines and templates ... just needs to
 // be presets"). The underlying RegistryPackageKind union and registry data keep "pipeline"/
@@ -1321,6 +1328,41 @@ export function App(): JSX.Element {
   // Gallery boards are always part of orchestration now (docs/FABLE_PLANS.md section 23) —
   // no per-board "linked" toggle, every board's title feeds the skills palette.
   const linkedGallerySkills = useMemo(() => galleryBoards.map((board) => `Gallery: ${board.title}`), [galleryBoards]);
+  // Style memory for the orchestration graph's moodboard visualisation (owner idea: "Gallery
+  // model-visualisation inside orchestration"): read the same window.metisGallery.cards() bridge
+  // GalleryWorkspace uses, independently, so the graph can render a board's palette/cover without
+  // a parallel store. Re-read on nav changes so a just-analyzed board's palette shows up once the
+  // user switches back to Orchestration; a no-op (empty array) in preview where the bridge is absent.
+  const [galleryStyleCards, setGalleryStyleCards] = useState<StyleCard[]>([]);
+  useEffect(() => {
+    if (!window.metisGallery) return;
+    let cancelled = false;
+    window.metisGallery
+      .cards()
+      .then((cards) => {
+        if (!cancelled) setGalleryStyleCards(cards);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [activeNav]);
+  const galleryVisuals = useMemo<Record<string, GalleryVisual>>(() => {
+    const map: Record<string, GalleryVisual> = {};
+    for (const board of galleryBoards) {
+      const palette: string[] = [];
+      for (const card of galleryStyleCards) {
+        if (card.boardId !== board.id) continue;
+        for (const hex of card.palette) {
+          if (hex && !palette.includes(hex)) palette.push(hex);
+          if (palette.length >= 5) break;
+        }
+        if (palette.length >= 5) break;
+      }
+      map[`Gallery: ${board.title}`] = { coverImage: board.coverImage, palette };
+    }
+    return map;
+  }, [galleryBoards, galleryStyleCards]);
   const activeStoredConversations = useMemo(() => storedConversations.filter((conversation) => !conversation.archived), [storedConversations]);
   const archivedConversations = useMemo(
     () =>
@@ -1459,7 +1501,7 @@ export function App(): JSX.Element {
       {activeNav === "pulse" ? <PulseWorkspace /> : null}
       {activeNav === "settings" ? <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} /> : null}
       {activeNav !== "session" && activeNav !== "graph" && activeNav !== "benchmark" && activeNav !== "gallery" && activeNav !== "marketplace" && activeNav !== "routines" && activeNav !== "todo" && activeNav !== "manager" && activeNav !== "pulse" && activeNav !== "settings" ? (
-        <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} />
+        <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} galleryVisuals={galleryVisuals} />
       ) : null}
       </div>
       <ManagerWidget />
@@ -5200,7 +5242,7 @@ function projectGraphPipeline(nodes: GraphNode[]): GraphPipelineConfig {
   return { updatedAt: new Date().toISOString(), stages };
 }
 
-function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; gallerySkills: string[] }): JSX.Element {
+function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNav: NavKey; gallerySkills: string[]; galleryVisuals: Record<string, GalleryVisual> }): JSX.Element {
   const [nodes, setNodes] = useState<GraphNode[]>(loadNodes);
   const [installedSkills, setInstalledSkills] = useState<RegistryPackage[]>([]);
   const [customSkills, setCustomSkills] = useAppStoreState("customSkills", EMPTY_CUSTOM_SKILLS);
@@ -5810,6 +5852,7 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
     <Palette
       customSkills={customSkills}
       gallerySkills={gallerySkills}
+      galleryVisuals={galleryVisuals}
       hasSavedPreset={hasSavedPreset}
       installedSkills={installedSkills}
       onAddCustomSkill={(skill) => setCustomSkills((current) => [...current, skill])}
@@ -5878,6 +5921,7 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
               node={node}
               selected={selected === node.id}
               targetMode={overTarget === node.id ? (drag?.payload.kind ?? (interaction?.type === "node" && interaction.isSkill ? "skill" : null)) : null}
+              galleryVisual={node.kind === "skill" ? galleryVisuals[node.label] : undefined}
               onPointerDown={onNodePointerDown}
               onDelete={removeNode}
             />
@@ -5955,12 +5999,19 @@ function GraphWorkspace({ activeNav, gallerySkills }: { activeNav: NavKey; galle
               </>
             ) : (
               <>
-                <span className="node-icon skill">
-                  <ClipboardList size={24} strokeWidth={1.8} />
+                <span className={`node-icon skill${galleryVisuals[drag.payload.name] ? " gallery" : ""}`}>
+                  {galleryVisuals[drag.payload.name] ? <GalleryHorizontalEnd size={24} strokeWidth={1.8} /> : <ClipboardList size={24} strokeWidth={1.8} />}
                 </span>
                 <span className="node-caption">
                   <strong>{drag.payload.name}</strong>
-                  <small>Skill · loads first</small>
+                  <small>{galleryVisuals[drag.payload.name] ? "Moodboard · loads first" : "Skill · loads first"}</small>
+                  {galleryVisuals[drag.payload.name]?.palette.length ? (
+                    <span className="node-palette-strip" aria-hidden="true">
+                      {galleryVisuals[drag.payload.name].palette.slice(0, 5).map((hex, index) => (
+                        <span key={`${hex}-${index}`} className="node-palette-swatch" style={{ background: hex }} />
+                      ))}
+                    </span>
+                  ) : null}
                 </span>
               </>
             )}
@@ -5975,23 +6026,31 @@ function NodeCard({
   node,
   selected,
   targetMode,
+  galleryVisual,
   onPointerDown,
   onDelete
 }: {
   node: GraphNode;
   selected: boolean;
   targetMode: DragPayload["kind"] | null;
+  /** When this skill node matches a gallery board (by its `Gallery: <title>` label), its cover
+   *  thumbnail + aggregated palette swatches — so the node renders as a moodboard step in the
+   *  pipeline (owner idea "Gallery model-visualisation inside orchestration") instead of a plain
+   *  skill. Undefined for every non-gallery node. */
+  galleryVisual?: GalleryVisual;
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, node: GraphNode) => void;
   onDelete: (id: string) => void;
 }): JSX.Element {
   const provider = node.provider ? PROVIDERS[node.provider] : null;
-  const sublabel = node.kind === "skill" ? "Skill · loads first" : `${provider?.label ?? "Unassigned"}${node.model ? ` · ${node.model}` : ""}`;
+  const isMoodboard = node.kind === "skill" && Boolean(galleryVisual);
+  const sublabel = node.kind === "skill" ? (isMoodboard ? "Moodboard · loads first" : "Skill · loads first") : `${provider?.label ?? "Unassigned"}${node.model ? ` · ${node.model}` : ""}`;
   const fallbacks = node.fallbacks ?? [];
+  const palette = galleryVisual?.palette ?? [];
 
   return (
     <article
       aria-label={`${node.label} ${sublabel}`}
-      className={["graph-node", `${node.kind}-node`, selected ? "selected" : "", targetMode === "model" ? "target-model" : "", targetMode === "skill" ? "target-skill" : ""]
+      className={["graph-node", `${node.kind}-node`, isMoodboard ? "moodboard-node" : "", selected ? "selected" : "", targetMode === "model" ? "target-model" : "", targetMode === "skill" ? "target-skill" : ""]
         .filter(Boolean)
         .join(" ")}
       role="button"
@@ -5999,7 +6058,7 @@ function NodeCard({
       style={{ left: `${node.pos.x}px`, top: `${node.pos.y}px` }}
       onPointerDown={(event) => onPointerDown(event, node)}
     >
-      <span className={node.kind === "skill" ? "node-icon skill" : "node-icon logo"}>
+      <span className={`${node.kind === "skill" ? "node-icon skill" : "node-icon logo"}${isMoodboard ? " gallery" : ""}`}>
         {node.kind !== "router" ? (
           <button
             className="node-delete"
@@ -6016,12 +6075,27 @@ function NodeCard({
         ) : null}
         {node.kind === "router" ? <span className="node-tag">ROUTER</span> : null}
         {provider?.tier === "local" && node.kind !== "skill" ? <span className="node-pill">local</span> : null}
-        {node.kind === "skill" ? <ClipboardList size={24} strokeWidth={1.8} /> : <img alt="" src={provider?.logo ?? PROVIDERS.qwen.logo} />}
+        {isMoodboard && galleryVisual?.coverImage ? (
+          <img className="node-moodboard-cover" alt="" src={galleryVisual.coverImage} />
+        ) : isMoodboard ? (
+          <GalleryHorizontalEnd size={24} strokeWidth={1.8} />
+        ) : node.kind === "skill" ? (
+          <ClipboardList size={24} strokeWidth={1.8} />
+        ) : (
+          <img alt="" src={provider?.logo ?? PROVIDERS.qwen.logo} />
+        )}
       </span>
 
       <span className="node-caption">
         <strong>{node.label}</strong>
         <small>{sublabel}</small>
+        {isMoodboard && palette.length ? (
+          <span className="node-palette-strip" aria-hidden="true">
+            {palette.slice(0, 5).map((hex, index) => (
+              <span key={`${hex}-${index}`} className="node-palette-swatch" style={{ background: hex }} />
+            ))}
+          </span>
+        ) : null}
       </span>
 
       {fallbacks.length ? (
@@ -6041,11 +6115,12 @@ function NodeCard({
 /** One entry in the merged Skills palette: built-ins (SKILL_LIBRARY + gallery), Marketplace-installed
  *  packages (kind "skill"), and user-authored custom skills all render the same way, distinguished
  *  only by a small chip (docs/FABLE_PLANS.md section 18, "Installed skills -> Library"). */
-type PaletteSkill = { name: string; source: "builtin" | "installed" | "custom"; description?: string };
+type PaletteSkill = { name: string; source: "builtin" | "installed" | "custom"; description?: string; gallery?: GalleryVisual };
 
 function Palette({
   customSkills,
   gallerySkills,
+  galleryVisuals,
   hasSavedPreset,
   installedSkills,
   onAddCustomSkill,
@@ -6056,6 +6131,7 @@ function Palette({
 }: {
   customSkills: CustomSkill[];
   gallerySkills: string[];
+  galleryVisuals: Record<string, GalleryVisual>;
   hasSavedPreset: boolean;
   installedSkills: RegistryPackage[];
   onAddCustomSkill: (skill: CustomSkill) => void;
@@ -6071,7 +6147,7 @@ function Palette({
   const [newSkillDescription, setNewSkillDescription] = useState("");
 
   const skills = useMemo<PaletteSkill[]>(() => {
-    const builtins = [...new Set([...SKILL_LIBRARY, ...gallerySkills])].map((name) => ({ name, source: "builtin" as const }));
+    const builtins = [...new Set([...SKILL_LIBRARY, ...gallerySkills])].map((name) => ({ name, source: "builtin" as const, gallery: galleryVisuals[name] }));
     const installed = installedSkills.map((pkg) => ({ name: pkg.name, source: "installed" as const, description: pkg.description }));
     const custom = customSkills.map((skill) => ({ name: skill.name, source: "custom" as const, description: skill.description }));
     const seen = new Set<string>();
@@ -6082,7 +6158,12 @@ function Palette({
       merged.push(entry);
     }
     return merged.filter((entry) => entry.name.toLowerCase().includes(query.toLowerCase()));
-  }, [customSkills, gallerySkills, installedSkills, query]);
+  }, [customSkills, gallerySkills, galleryVisuals, installedSkills, query]);
+  // Gallery boards read as a distinct "Moodboards" group at the top of the Skills tab (owner idea:
+  // model-visualisation inside orchestration) — a board carries a GalleryVisual; everything else is
+  // a plain skill. Both drag via the same onPick skill path, so attach-to-agent is unchanged.
+  const moodboardSkills = useMemo(() => skills.filter((entry) => Boolean(entry.gallery)), [skills]);
+  const plainSkills = useMemo(() => skills.filter((entry) => !entry.gallery), [skills]);
   const models = useMemo(() => MODEL_LIBRARY.filter((entry) => `${PROVIDERS[entry.provider].label} ${entry.model}`.toLowerCase().includes(query.toLowerCase())), [query]);
   const showSearch = tab === "skills" || tab === "models";
 
@@ -6129,16 +6210,50 @@ function Palette({
 
       <div className="palette-list">
         {tab === "skills"
-          ? skills.map((entry) => (
-              <div key={entry.name} className="palette-item skill" title={entry.description} onPointerDown={(event) => pick(event, { kind: "skill", name: entry.name })}>
-                <span className="palette-icon skill">
-                  <ClipboardList size={16} strokeWidth={1.9} />
-                </span>
-                <span className="palette-label">{entry.name}</span>
-                {entry.source === "installed" ? <span className="palette-chip palette-chip-installed">installed</span> : null}
-                {entry.source === "custom" ? <span className="palette-chip palette-chip-custom">custom</span> : null}
-              </div>
-            ))
+          ? (
+            <>
+              {moodboardSkills.length ? (
+                <div className="palette-group">
+                  <span className="palette-subhead">
+                    <GalleryHorizontalEnd size={12} strokeWidth={2} /> Moodboards
+                  </span>
+                  {moodboardSkills.map((entry) => (
+                    <div
+                      key={entry.name}
+                      className="palette-item skill moodboard"
+                      title={entry.description ?? entry.name}
+                      onPointerDown={(event) => pick(event, { kind: "skill", name: entry.name })}
+                    >
+                      <span className="palette-icon skill gallery">
+                        {entry.gallery?.coverImage ? <img alt="" src={entry.gallery.coverImage} /> : <GalleryHorizontalEnd size={16} strokeWidth={1.9} />}
+                      </span>
+                      <span className="palette-label">
+                        <span className="palette-label-text">{entry.name.replace(/^Gallery:\s*/, "")}</span>
+                        {entry.gallery?.palette.length ? (
+                          <span className="palette-mini-strip" aria-hidden="true">
+                            {entry.gallery.palette.slice(0, 5).map((hex, index) => (
+                              <span key={`${hex}-${index}`} className="palette-mini-swatch" style={{ background: hex }} />
+                            ))}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="palette-chip palette-chip-moodboard">board</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {plainSkills.map((entry) => (
+                <div key={entry.name} className="palette-item skill" title={entry.description} onPointerDown={(event) => pick(event, { kind: "skill", name: entry.name })}>
+                  <span className="palette-icon skill">
+                    <ClipboardList size={16} strokeWidth={1.9} />
+                  </span>
+                  <span className="palette-label">{entry.name}</span>
+                  {entry.source === "installed" ? <span className="palette-chip palette-chip-installed">installed</span> : null}
+                  {entry.source === "custom" ? <span className="palette-chip palette-chip-custom">custom</span> : null}
+                </div>
+              ))}
+            </>
+          )
           : tab === "models"
             ? models.map((entry) => (
               <div key={`${entry.provider}-${entry.model}`} className="palette-item model" onPointerDown={(event) => pick(event, { kind: "model", provider: entry.provider, model: entry.model })}>

@@ -1472,6 +1472,45 @@ p {
   line-height: 1.2;
 }
 
+/* Moodboard node (owner idea: Gallery model-visualisation inside orchestration) — a gallery board
+   dropped onto an agent reads as a visual pipeline step: cover thumbnail fills the icon tile and a
+   strip of its extracted palette swatches sits under the label. Falls back to the gallery glyph +
+   name when the board has no cover/palette yet. */
+.node-icon.skill.gallery {
+  overflow: hidden;
+  padding: 0;
+  color: #d8dde7;
+  background: var(--node-2);
+}
+
+.node-moodboard-cover {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  border-radius: 13px;
+  pointer-events: none;
+}
+
+.moodboard-node .node-icon {
+  border-style: solid;
+  border-color: #4a5262;
+}
+
+.node-palette-strip {
+  display: flex;
+  gap: 2px;
+  margin-top: 3px;
+}
+
+.node-palette-swatch {
+  width: 12px;
+  height: 8px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
+}
+
 .graph-toolbar {
   position: absolute;
   top: 16px;
@@ -10270,6 +10309,68 @@ a:focus-visible,
 
 .palette-chip-custom {
   color: var(--text);
+}
+
+.palette-chip-moodboard {
+  color: var(--text);
+  border-color: #4a5262;
+}
+
+/* Moodboards group in the Skills tab — gallery boards surface as a small distinct set with a
+   subheading, a cover thumbnail (or gallery glyph fallback) and a mini palette-swatch strip. */
+.palette-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.palette-subhead {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  margin: 2px 2px 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.palette-icon.skill.gallery {
+  overflow: hidden;
+  padding: 0;
+  background: var(--node);
+}
+
+.palette-icon.skill.gallery img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  pointer-events: none;
+}
+
+.palette-item.moodboard .palette-label {
+  gap: 3px;
+}
+
+.palette-label-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.palette-mini-strip {
+  display: flex;
+  gap: 2px;
+}
+
+.palette-mini-swatch {
+  width: 12px;
+  height: 7px;
+  border-radius: 2px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
 }
 
 .palette-add-skill {
