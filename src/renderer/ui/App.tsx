@@ -126,6 +126,7 @@ import type {
   RegistryPackageKind,
   RegistryState,
   Routine,
+  SessionAttachment,
   SessionRun,
   SessionRunInput,
   SessionPipelineStep,
@@ -344,6 +345,11 @@ type ConversationTurn = {
   prompt: string;
   /** True when this entry is a mid-run steering directive, not a full run. */
   directive?: boolean;
+  /** User-attached reference images for this turn — kept in-memory only (the
+   *  live pending-turn bucket), never written to the persisted conversation
+   *  record, so raw base64 never bloats long-term storage. Undefined once
+   *  the app reloads and this turn is rehydrated from storage. */
+  attachments?: SessionAttachment[];
   status: "running" | "complete" | "error";
   run?: SessionRun;
   streamEvents?: SessionTimelineEvent[];
@@ -3011,14 +3017,16 @@ function NewSessionWorkspace({
     });
   }
 
-  async function submitPrompt(text: string): Promise<void> {
-    if (!text) return;
+  async function submitPrompt(text: string, attachments?: SessionAttachment[]): Promise<void> {
+    const hasAttachments = Boolean(attachments && attachments.length);
+    if (!text && !hasAttachments) return;
     // Steering directives are per-active-conversation: this posts against the
     // conversation currently open in this view, regardless of what else may
     // be streaming elsewhere. Empty-prompt "stop" is handled by the composer's
-    // stop button, not here.
+    // stop button, not here. Attachments are ignored on the directive path —
+    // steering directives are text-only; images belong to a fresh run.
     if (sessionBusy) {
-      if (!window.metisBus) return;
+      if (!text || !window.metisBus) return;
       updatePendingTurns(activeKey, (current) => [
         ...current,
         { id: `directive-${Date.now()}`, prompt: text, status: "complete", directive: true }
@@ -3032,7 +3040,7 @@ function NewSessionWorkspace({
     // while this run streams) so writes always land in the right bucket.
     const runKey = activeKey;
     const turnId = `turn-${Date.now()}`;
-    const pending = makePendingTurn(turnId, text);
+    const pending = makePendingTurn(turnId, text, attachments);
     updatePendingTurns(runKey, (current) => [...current, pending]);
     setBusyKeys((current) => new Set(current).add(runKey));
     // New runs in the same conversation reopen the side-chat stack even if the
@@ -3058,7 +3066,8 @@ function NewSessionWorkspace({
               model: selectedModel.model,
               label: `${PROVIDERS[selectedModel.provider].label} ${selectedModel.model}`
             }
-          : undefined
+          : undefined,
+        attachments: hasAttachments ? attachments : undefined
       };
       const run = window.metisSession.runStream
         ? await window.metisSession.runStream(sessionInput, (streamEvent) => {
@@ -3437,7 +3446,7 @@ function SessionComposer({
   projectWorkspace: ProjectWorkspace | null;
   suggestion: string | null | undefined;
   suggestionResetKey: string;
-  onSubmit: (text: string) => void | Promise<void>;
+  onSubmit: (text: string, attachments?: SessionAttachment[]) => void | Promise<void>;
   permissionMode: PermissionMode;
   setPermissionMode: (mode: PermissionMode | ((current: PermissionMode) => PermissionMode)) => void;
   resourceMenuOpen: boolean;
@@ -3465,6 +3474,13 @@ function SessionComposer({
   const [permOpen, setPermOpen] = useState(false);
   const [routerOpen, setRouterOpen] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  // Reference images for the NEXT submit — reset after every send. Capped at
+  // MAX_ATTACHMENTS; an image-only submit (no typed text) is valid, so the
+  // submit guard below checks this alongside `prompt`.
+  const [attachments, setAttachments] = useState<SessionAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const MAX_ATTACHMENTS = 4;
+  const MAX_ATTACHMENT_BYTES = 4 * 1024 * 1024;
 
   useEffect(() => {
     setSuggestionDismissed(false);
@@ -3476,18 +3492,69 @@ function SessionComposer({
   // menu, just a small heads-up that this prompt will force the build pipeline.
   const showOrchestrationChip = /^\s*\/(orchestration|orch)\b/i.test(prompt);
 
+  function handleAttachFiles(event: ChangeEvent<HTMLInputElement>): void {
+    const files = event.target.files;
+    // Snapshot into a plain array BEFORE resetting event.target.value — in
+    // Chromium, clearing .value on the input truncates the live FileList it
+    // still holds a reference to, so reading `files` after the reset silently
+    // yields zero items.
+    const picked = files ? Array.from(files) : [];
+    // Reset immediately so re-picking the same file later still fires onChange.
+    event.target.value = "";
+    if (!picked.length) return;
+    const room = MAX_ATTACHMENTS - attachments.length;
+    if (room <= 0) return;
+    picked
+      .slice(0, room)
+      .forEach((file) => {
+        if (!file.type.startsWith("image/")) return;
+        if (file.size > MAX_ATTACHMENT_BYTES) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = typeof reader.result === "string" ? reader.result : "";
+          const commaIndex = result.indexOf(",");
+          const dataBase64 = commaIndex >= 0 ? result.slice(commaIndex + 1) : result;
+          if (!dataBase64) return;
+          setAttachments((current) =>
+            current.length >= MAX_ATTACHMENTS
+              ? current
+              : [...current, { id: `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: file.name, mimeType: file.type, dataBase64 }]
+          );
+        };
+        reader.readAsDataURL(file);
+      });
+  }
+
+  function removeAttachment(id: string | undefined): void {
+    setAttachments((current) => current.filter((item) => item.id !== id));
+  }
+
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
     const text = prompt.trim();
-    if (!text) return;
+    if (!text && !attachments.length) return;
     setPrompt("");
-    void onSubmit(text);
+    const sentAttachments = attachments;
+    setAttachments([]);
+    void onSubmit(text, sentAttachments.length ? sentAttachments : undefined);
   }
 
   return (
     <form className="home-composer" onSubmit={handleSubmit}>
       {showOrchestrationChip ? (
         <span className="composer-suggestion-chip composer-orchestration-chip">Build pipeline will run</span>
+      ) : null}
+      {attachments.length > 0 ? (
+        <div className="composer-attachment-strip" aria-label="Attached images">
+          {attachments.map((item) => (
+            <div className="composer-attachment-thumb" key={item.id}>
+              <img src={`data:${item.mimeType};base64,${item.dataBase64}`} alt={item.name} title={item.name} />
+              <button type="button" className="composer-attachment-remove" aria-label={`Remove ${item.name}`} onClick={() => removeAttachment(item.id)}>
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+        </div>
       ) : null}
       <div className="composer-input-wrap">
         <textarea
@@ -3613,6 +3680,24 @@ function SessionComposer({
               </>
             ) : null}
           </div>
+          <button
+            className="tool-btn"
+            type="button"
+            aria-label="Attach images"
+            title={attachments.length >= MAX_ATTACHMENTS ? `Up to ${MAX_ATTACHMENTS} images` : "Attach images"}
+            disabled={attachments.length >= MAX_ATTACHMENTS}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <ImagePlus size={16} />
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="composer-file-input"
+            onChange={handleAttachFiles}
+          />
           <button className="tool-btn" type="button" aria-label="Voice input">
             <Mic size={16} />
           </button>
@@ -3713,7 +3798,7 @@ function SessionComposer({
               className="send-btn"
               type="submit"
               aria-label={sessionBusy ? "Send direction to the running build" : "Send message"}
-              disabled={!prompt.trim() || (sessionBusy && !window.metisBus)}
+              disabled={(!prompt.trim() && !attachments.length) || (sessionBusy && !window.metisBus)}
             >
               <ArrowUp size={17} />
             </button>
@@ -3990,7 +4075,20 @@ const ConversationTurnCard = memo(function ConversationTurnCard({ anchorId, turn
     <article className={`conversation-turn ${turn.status}`} id={anchorId}>
       <div className="message-row user-message">
         <div className="user-bubble">
-          <p>{turn.prompt}</p>
+          {turn.attachments && turn.attachments.length ? (
+            <div className="turn-attachment-row" aria-label="Attached images">
+              {turn.attachments.map((item, index) => (
+                <img
+                  key={item.id ?? `${turn.id}-att-${index}`}
+                  className="turn-attachment-thumb"
+                  src={`data:${item.mimeType};base64,${item.dataBase64}`}
+                  alt={item.name}
+                  title={item.name}
+                />
+              ))}
+            </div>
+          ) : null}
+          {turn.prompt ? <p>{turn.prompt}</p> : null}
         </div>
       </div>
 
@@ -4905,8 +5003,8 @@ function introForPipeline(name: string): string {
   return "I routed this according to your orchestration pipeline and kept the route trace attached.";
 }
 
-function makePendingTurn(id: string, prompt: string): ConversationTurn {
-  return { id, prompt, status: "running" };
+function makePendingTurn(id: string, prompt: string, attachments?: SessionAttachment[]): ConversationTurn {
+  return { id, prompt, status: "running", attachments: attachments && attachments.length ? attachments : undefined };
 }
 
 function makePreviewRun(prompt: string): SessionRun {

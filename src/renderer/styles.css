@@ -3466,6 +3466,21 @@ p {
   word-break: break-word;
 }
 
+.turn-attachment-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.turn-attachment-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
 .assistant-text {
   display: grid;
   gap: 12px;
@@ -7248,6 +7263,60 @@ button.pulse-tile:hover {
   color: #0c0d10;
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.composer-file-input {
+  display: none;
+}
+
+.composer-attachment-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px 8px;
+}
+
+.composer-attachment-thumb {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--sidebar);
+}
+
+.composer-attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.composer-attachment-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: none;
+  background: rgba(12, 13, 16, 0.72);
+  color: #fff;
+  cursor: pointer;
+}
+
+.composer-attachment-remove:hover {
+  background: rgba(12, 13, 16, 0.92);
 }
 
 .router-pill {
