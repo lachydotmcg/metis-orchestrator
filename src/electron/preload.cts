@@ -14,7 +14,8 @@ import type {
   Routine,
   SessionStreamEvent,
   SessionRunInput,
-  StyleCard
+  StyleCard,
+  UpdateCheckResult
 } from "../shared/runtime-contracts";
 
 contextBridge.exposeInMainWorld("metisPolicy", {
@@ -148,6 +149,10 @@ contextBridge.exposeInMainWorld("metisOllama", {
 
 contextBridge.exposeInMainWorld("metisManager", {
   chat: (history: ManagerChatMessage[]) => ipcRenderer.invoke("metis-manager:chat", history) as Promise<ManagerChatResult>
+});
+
+contextBridge.exposeInMainWorld("metisUpdates", {
+  check: () => ipcRenderer.invoke("metis-updates:check") as Promise<UpdateCheckResult>
 });
 
 contextBridge.exposeInMainWorld("metisGallery", {

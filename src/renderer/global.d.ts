@@ -34,7 +34,8 @@ import type {
   SessionRunInput,
   SessionStreamEvent,
   SecretStatus,
-  StyleCard
+  StyleCard,
+  UpdateCheckResult
 } from "../shared/runtime-contracts";
 
 declare global {
@@ -138,6 +139,9 @@ declare global {
     };
     metisManager?: {
       chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;
+    };
+    metisUpdates?: {
+      check: () => Promise<UpdateCheckResult>;
     };
     metisGallery?: {
       analyzeBoard: (boardId: string) => Promise<StyleCard[]>;

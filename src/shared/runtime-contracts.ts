@@ -312,6 +312,21 @@ export interface GraphPipelineConfig {
   stages: GraphPipelineStage[];
 }
 
+/** Result of `metis-updates:check` (titlebar "Update available" badge) — compares
+ *  `app.getVersion()` against the latest tagged GitHub release. Guarded to never
+ *  throw: any fetch/parse failure (offline, no releases yet, rate-limited) comes
+ *  back as `{ updateAvailable: false, currentVersion }` rather than rejecting.
+ *  NOTE: this only checks + surfaces a badge that links to the release page —
+ *  true auto-download/install (electron-updater against GitHub Releases) is a
+ *  follow-up that needs a publish config, a packaged app, and published releases. */
+export interface UpdateCheckResult {
+  updateAvailable: boolean;
+  currentVersion: string;
+  latestVersion?: string;
+  url?: string;
+  notes?: string;
+}
+
 export interface PulseChangelogEntry {
   date: string;
   title: string;

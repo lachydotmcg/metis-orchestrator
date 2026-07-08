@@ -65,7 +65,8 @@ import type {
   StyleCard,
   UserQuestionRequest,
   ManagerChatMessage,
-  ManagerChatResult
+  ManagerChatResult,
+  UpdateCheckResult
 } from "../shared/runtime-contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1973,6 +1974,59 @@ async function refreshPulseFeed(sourceUrl?: string): Promise<PulseFeed> {
     };
     await writeStoreValue("pulseFeed", state);
     return state;
+  }
+}
+
+const METIS_RELEASES_URL = "https://api.github.com/repos/lachydotmcg/metis-orchestrator/releases/latest";
+
+/** Numeric semver-ish compare: splits on "." and compares major/minor/patch as
+ *  numbers, left to right. Non-numeric/missing segments read as 0. Returns
+ *  true when `latest` is strictly newer than `current`. */
+function isNewerVersion(latest: string, current: string): boolean {
+  const latestParts = latest.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const currentParts = current.split(".").map((part) => Number.parseInt(part, 10) || 0);
+  const len = Math.max(latestParts.length, currentParts.length);
+  for (let i = 0; i < len; i += 1) {
+    const l = latestParts[i] ?? 0;
+    const c = currentParts[i] ?? 0;
+    if (l > c) return true;
+    if (l < c) return false;
+  }
+  return false;
+}
+
+/** Titlebar "Update available" badge check (docs follow-up: this is a CHECK +
+ *  BADGE + click-through-to-release only. Wiring true auto-download/install
+ *  needs electron-updater pointed at published GitHub Releases, which in turn
+ *  needs a publish config and a packaged/signed app — none of that exists yet,
+ *  so this handler only ever tells the renderer "go look at this release page". */
+async function checkForUpdate(): Promise<UpdateCheckResult> {
+  const currentVersion = app.getVersion();
+  try {
+    const response = await fetch(METIS_RELEASES_URL, {
+      headers: {
+        "User-Agent": "metis-orchestrator",
+        Accept: "application/vnd.github+json"
+      }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = (await response.json()) as { tag_name?: string; html_url?: string; body?: string };
+    const rawTag = typeof payload.tag_name === "string" ? payload.tag_name : "";
+    const latestVersion = rawTag.replace(/^v/i, "").trim();
+    if (!latestVersion) throw new Error("missing tag_name");
+    const updateAvailable = isNewerVersion(latestVersion, currentVersion);
+    const notes = typeof payload.body === "string" ? payload.body.trim().slice(0, 500) : undefined;
+    return {
+      updateAvailable,
+      currentVersion,
+      latestVersion,
+      url: typeof payload.html_url === "string" ? payload.html_url : undefined,
+      notes
+    };
+  } catch {
+    // Offline, no releases published yet (404), rate-limited, or an unparseable
+    // payload — never throw out of the handler, just report "no update".
+    return { updateAvailable: false, currentVersion };
   }
 }
 
@@ -6788,6 +6842,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-registry:uninstall", (_event, id: string) => uninstallPackage(id));
   ipcMain.handle("metis-catalog:models", () => listModelCatalog());
   ipcMain.handle("metis-pulse:feed", () => listPulseFeed());
+  ipcMain.handle("metis-updates:check", () => checkForUpdate());
   ipcMain.handle("metis-ollama:list", () => listOllamaModels());
   ipcMain.handle("metis-ollama:pull", async (event, modelName: string) => {
     return pullOllamaModel(modelName, (progress) => {

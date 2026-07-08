@@ -133,7 +133,8 @@ import type {
   SessionStreamEvent,
   SessionTimelineEvent,
   SecretStatus,
-  StyleCard
+  StyleCard,
+  UpdateCheckResult
 } from "../../shared/runtime-contracts";
 
 /** Narrows SessionStreamEvent down to the `stage_call` variant (docs/FABLE_PLANS.md
@@ -1587,6 +1588,7 @@ function Titlebar({
   const hasWindow = typeof window !== "undefined" && Boolean(window.metisWindow);
   const [pulse, setPulse] = useState<PulseFeed>(FALLBACK_PULSE);
   const [lastSeenPulse, setLastSeenPulse] = useAppStoreState<string | undefined>("lastSeenPulse", undefined);
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | undefined>(undefined);
 
   useEffect(() => {
     if (!window.metisPulse) return;
@@ -1596,10 +1598,31 @@ function Titlebar({
       .catch(() => undefined);
   }, []);
 
+  // Titlebar "Update available" badge (see UpdateCheckResult / metis-updates:check in
+  // main.ts): a one-shot check on mount, guarded for `window.metisUpdates` being absent
+  // in the browser/preview build. This only checks + surfaces a badge that links out to
+  // the GitHub release page — true auto-download/install (electron-updater against
+  // published GitHub Releases) is a follow-up needing a publish config + packaged app.
+  useEffect(() => {
+    if (!window.metisUpdates) return;
+    window.metisUpdates
+      .check()
+      .then((result) => setUpdateCheck(result))
+      .catch(() => undefined);
+  }, []);
+
   const hasUnseenUpdate = Boolean(pulse.updated && pulse.updated !== lastSeenPulse);
 
   function handleOpenPulse(): void {
     if (pulse.updated) setLastSeenPulse(pulse.updated);
+    onOpenPulse();
+  }
+
+  function handleOpenUpdate(): void {
+    if (updateCheck?.url && window.metisShell) {
+      window.metisShell.openExternal(updateCheck.url);
+      return;
+    }
     onOpenPulse();
   }
 
@@ -1616,6 +1639,17 @@ function Titlebar({
           <Newspaper size={16} />
           {hasUnseenUpdate ? <span className="pulse-dot" aria-hidden="true" /> : null}
         </button>
+        {updateCheck?.updateAvailable ? (
+          <button
+            className="titlebar-update-badge"
+            type="button"
+            title={updateCheck.latestVersion ? `v${updateCheck.latestVersion} available` : "Update available"}
+            onClick={handleOpenUpdate}
+          >
+            <Download size={12} />
+            <span>Update available</span>
+          </button>
+        ) : null}
       </div>
       <div className="titlebar-drag" />
       {hasWindow ? (
