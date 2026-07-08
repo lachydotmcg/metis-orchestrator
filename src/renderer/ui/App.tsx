@@ -1436,7 +1436,7 @@ export function App(): JSX.Element {
       {activeNav === "marketplace" ? <MarketplaceWorkspace /> : null}
       {activeNav === "routines" ? <RoutinesWorkspace onConversationOpen={openConversationById} /> : null}
       {activeNav === "todo" ? <TodoWorkspace storedConversations={storedConversations} /> : null}
-      {activeNav === "manager" ? <ManagerWorkspace /> : null}
+      {activeNav === "manager" ? <ManagerWorkspace onNavigate={setActiveNav} /> : null}
       {activeNav === "pulse" ? <PulseWorkspace /> : null}
       {activeNav === "settings" ? <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} /> : null}
       {activeNav !== "session" && activeNav !== "graph" && activeNav !== "benchmark" && activeNav !== "gallery" && activeNav !== "marketplace" && activeNav !== "routines" && activeNav !== "todo" && activeNav !== "manager" && activeNav !== "pulse" && activeNav !== "settings" ? (
@@ -9025,33 +9025,214 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
   );
 }
 
-function ManagerWorkspace(): JSX.Element {
-  const lanes = [
-    { title: "Project manager", detail: "Maintains project context, conversations, todos, and handoffs across selected folders.", status: "designing" },
-    { title: "Subagent supervisor", detail: "Delegates to frontend, testing, research, local, cloud, or fallback routes when a prompt needs them.", status: "planned" },
-    { title: "Fallback model policy", detail: "Chooses a backup model when the preferred provider is unavailable, rate-limited, or too expensive.", status: "planned" }
-  ];
+/** A local, non-destructive suggestion the Manager surfaces for the user to approve or
+ *  dismiss (docs/FABLE_PLANS.md §11). `id` is derived from the suggestion's subject
+ *  (provider key, audit event id, or a single fixed id for the unowned-work rollup) so
+ *  it stays stable across renders and dedupes correctly against the dismissed list. */
+type ManagerSuggestion = { id: string; text: string; actionLabel: string; action: () => void; tone?: "info" | "warn" };
+
+/** Cloud/keyable providers the "add a key" suggestion applies to — local providers
+ *  (ollama) are never unkeyed in the sense this suggestion means. */
+const MANAGER_KEYABLE_PROVIDERS: ProviderKey[] = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
+
+function ManagerWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX.Element {
+  const [board, setBoard] = useAppStoreState("todoBoard", DEFAULT_TODO_BOARD);
+  const [dismissed, setDismissed] = useAppStoreState<string[]>("managerDismissedSuggestions", []);
+  const [providers, setProviders] = useState<ProviderStatus[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function refresh(): Promise<void> {
+      const [nextProviders, nextAudit] = await Promise.all([
+        window.metisProviders?.list() ?? Promise.resolve<ProviderStatus[]>([]),
+        window.metisAudit?.list(20) ?? Promise.resolve<AuditEvent[]>([])
+      ]);
+      if (cancelled) return;
+      setProviders(nextProviders);
+      setAuditEvents(nextAudit);
+    }
+    void refresh();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const flatCards = useMemo(
+    () => board.columns.flatMap((col) => col.cards.map((card) => ({ card, colId: col.id, colTitle: col.title }))),
+    [board]
+  );
+
+  function mutateBoard(fn: (cols: TodoColumn[]) => TodoColumn[]): void {
+    setBoard((current) => ({ columns: fn(current.columns) }));
+  }
+
+  function setCardAssignee(colId: string, cardId: string, assignee: TodoAssignee): void {
+    mutateBoard((cols) => cols.map((col) => (col.id === colId ? { ...col, cards: col.cards.map((card) => (card.id === cardId ? { ...card, assignee } : card)) } : col)));
+  }
+
+  function toggleCardDone(colId: string, cardId: string): void {
+    mutateBoard((cols) => cols.map((col) => (col.id === colId ? { ...col, cards: col.cards.map((card) => (card.id === cardId ? { ...card, done: !card.done } : card)) } : col)));
+  }
+
+  const suggestions = useMemo<ManagerSuggestion[]>(() => {
+    const list: ManagerSuggestion[] = [];
+
+    // (a) Unowned work: a single rollup suggestion so it stays one stable chip
+    // no matter how the unowned count changes between renders.
+    const unowned = flatCards.filter(({ card }) => !card.done && (!card.assignee || card.assignee.kind === "unassigned"));
+    if (unowned.length) {
+      list.push({
+        id: "unowned-cards",
+        text: `${unowned.length} task${unowned.length === 1 ? "" : "s"} ${unowned.length === 1 ? "has" : "have"} no owner.`,
+        actionLabel: "Assign to me",
+        tone: "info",
+        action: () =>
+          mutateBoard((cols) =>
+            cols.map((col) => ({
+              ...col,
+              cards: col.cards.map((card) => (!card.done && (!card.assignee || card.assignee.kind === "unassigned") ? { ...card, assignee: { kind: "manager" } } : card))
+            }))
+          )
+      });
+    }
+
+    // (b) Unkeyed providers, one chip per provider so each can be dismissed independently.
+    for (const provider of providers) {
+      if (provider.status === "not_configured" && MANAGER_KEYABLE_PROVIDERS.includes(provider.provider)) {
+        list.push({
+          id: `unkeyed:${provider.provider}`,
+          text: `You haven't added a key for ${provider.label}.`,
+          actionLabel: "Open Settings",
+          tone: "info",
+          action: () => onNavigate("settings")
+        });
+      }
+    }
+
+    // (c) Recent failures, most recent first, capped so the list can't run away.
+    const errors = auditEvents.filter((event) => event.level === "error").slice(0, 5);
+    for (const event of errors) {
+      list.push({
+        id: `error:${event.id}`,
+        text: `A recent run reported an error: ${event.summary.slice(0, 140)}`,
+        actionLabel: "Add a repair todo",
+        tone: "warn",
+        action: () =>
+          mutateBoard((cols) => {
+            if (!cols.length) return cols;
+            const [first, ...rest] = cols;
+            const repairCard: TodoCard = { id: todoId(), title: `Fix: ${event.summary.slice(0, 90)}`, priority: "high", done: false, assignee: { kind: "manager" } };
+            return [{ ...first, cards: [...first.cards, repairCard] }, ...rest];
+          })
+      });
+    }
+
+    return list.filter((suggestion) => !dismissed.includes(suggestion.id));
+  }, [flatCards, providers, auditEvents, dismissed, onNavigate]);
+
+  function dismissSuggestion(id: string): void {
+    setDismissed((current) => (current.includes(id) ? current : [...current, id]));
+  }
+
+  const myQueue = flatCards.filter(({ card }) => card.assignee?.kind === "manager");
+
+  const glance = useMemo(() => {
+    const counts = { you: 0, manager: 0, unassigned: 0, agents: 0 };
+    for (const { card } of flatCards) {
+      const kind = card.assignee?.kind ?? "unassigned";
+      if (kind === "fable") counts.you += 1;
+      else if (kind === "manager") counts.manager += 1;
+      else if (kind === "agent") counts.agents += 1;
+      else if (kind === "unassigned") counts.unassigned += 1;
+    }
+    return counts;
+  }, [flatCards]);
+
   return (
-    <main className="product-workspace todo-workspace" aria-label="Manager agent">
-      <section className="todo-shell">
-        <header>
+    <main className="product-workspace manager-workspace" aria-label="Manager agent">
+      <section className="manager-shell">
+        <header className="manager-head">
           <small>Built-in assistant layer</small>
           <h1>Manager</h1>
-          <p>A project-aware assistant that can manage subagents, update orchestration, watch routines, and keep memory linked through Graph View.</p>
+          <p>Watches your work — the to-do board, provider setup, and recent run activity — and surfaces suggestions here. It never acts on its own; every action below is one you approve.</p>
         </header>
-        <div className="todo-columns">
-          {lanes.map((lane) => (
-            <article className="todo-column" key={lane.title}>
-              <h2>{lane.title}</h2>
-              <div className="todo-card manager-card">
-                <strong>{lane.title}</strong>
-                <span>{lane.detail}</span>
-                <em>{lane.status}</em>
+
+        <section className="manager-section">
+          <h2>Suggestions</h2>
+          {suggestions.length === 0 ? (
+            <p className="manager-empty">All clear — nothing needs your attention.</p>
+          ) : (
+            <div className="manager-suggestions">
+              {suggestions.map((suggestion) => (
+                <div key={suggestion.id} className={`manager-suggestion ${suggestion.tone === "warn" ? "warn" : ""}`}>
+                  <span className="manager-suggestion-text">{suggestion.text}</span>
+                  <div className="manager-suggestion-actions">
+                    <button type="button" className="ghost" onClick={suggestion.action}>
+                      {suggestion.actionLabel}
+                    </button>
+                    <button type="button" className="manager-suggestion-dismiss" aria-label="Dismiss suggestion" title="Dismiss" onClick={() => dismissSuggestion(suggestion.id)}>
+                      <X size={13} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <div className="manager-columns">
+          <section className="manager-section">
+            <h2>My queue</h2>
+            {myQueue.length === 0 ? (
+              <p className="manager-empty">Nothing assigned to the Manager right now.</p>
+            ) : (
+              <div className="manager-queue">
+                {myQueue.map(({ card, colId, colTitle }) => (
+                  <div key={card.id} className={`manager-queue-row p-${card.priority} ${card.done ? "done" : ""}`}>
+                    <button type="button" className="todo-check" aria-label={card.done ? "Mark not done" : "Mark done"} onClick={() => toggleCardDone(colId, card.id)}>
+                      {card.done ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+                    </button>
+                    <span className="manager-queue-title">{card.title}</span>
+                    <span className="manager-queue-source">{colTitle}</span>
+                    <span className="manager-queue-prio" title={TODO_PRIORITY_LABEL[card.priority]} />
+                    <button type="button" className="ghost" onClick={() => setCardAssignee(colId, card.id, { kind: "fable" })}>
+                      Hand to you
+                    </button>
+                  </div>
+                ))}
               </div>
-            </article>
-          ))}
+            )}
+          </section>
+
+          <section className="manager-section">
+            <h2>Board at a glance</h2>
+            <div className="manager-glance">
+              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                <strong>{glance.you}</strong>
+                <span>You</span>
+              </button>
+              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                <strong>{glance.manager}</strong>
+                <span>Manager</span>
+              </button>
+              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                <strong>{glance.unassigned}</strong>
+                <span>Unassigned</span>
+              </button>
+              <button type="button" className="manager-glance-stat" onClick={() => onNavigate("todo")}>
+                <strong>{glance.agents}</strong>
+                <span>Agents</span>
+              </button>
+            </div>
+          </section>
         </div>
       </section>
+      {/* v1 Manager actions are all local: mutating the shared todoBoard store and in-app
+          navigation, never a model or API call. A future model-driven Manager (auto-triage,
+          drafting replies, running commands) must route those actions through the existing
+          permission ceremony (gatePermission / permission_request) so the assistant stays
+          suggestion-first and permission-gated by design, not just in this UI. */}
     </main>
   );
 }

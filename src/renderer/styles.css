@@ -5019,6 +5019,208 @@ details.artifact-row[open] summary {
   font-weight: 800;
 }
 
+/* ---- Manager: suggestion-first assistant sharing the To-Do board (FABLE_PLANS §11) ---- */
+.manager-workspace {
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.manager-shell {
+  display: grid;
+  gap: 18px;
+  width: min(860px, 100%);
+}
+
+.manager-head {
+  display: grid;
+  gap: 6px;
+}
+
+.manager-head small {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.manager-head h1 {
+  margin: 0;
+  color: white;
+  font-size: 24px;
+}
+
+.manager-head p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.manager-section {
+  display: grid;
+  gap: 10px;
+}
+
+.manager-section h2 {
+  margin: 0;
+  color: var(--soft);
+  font-size: 13px;
+}
+
+.manager-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.manager-suggestions {
+  display: grid;
+  gap: 8px;
+}
+
+.manager-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent);
+  border-radius: 10px;
+}
+
+.manager-suggestion.warn {
+  border-left-color: #e0a23a;
+}
+
+.manager-suggestion-text {
+  flex: 1;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.manager-suggestion-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.manager-suggestion-dismiss {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.manager-suggestion-dismiss:hover {
+  color: var(--text);
+  border-color: var(--faint);
+}
+
+.manager-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 16px;
+}
+
+.manager-queue {
+  display: grid;
+  gap: 6px;
+}
+
+.manager-queue-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.manager-queue-row.done .manager-queue-title {
+  color: var(--faint);
+  text-decoration: line-through;
+}
+
+.manager-queue-title {
+  flex: 1;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-queue-source {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.manager-queue-prio {
+  width: 7px;
+  height: 7px;
+  flex-shrink: 0;
+  background: var(--faint);
+  border-radius: 999px;
+}
+
+.manager-queue-row.p-high .manager-queue-prio {
+  background: #e0556a;
+}
+
+.manager-queue-row.p-medium .manager-queue-prio {
+  background: #e0a23a;
+}
+
+.manager-queue-row.p-idea .manager-queue-prio {
+  background: #56b6e0;
+}
+
+.manager-glance {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.manager-glance-stat {
+  display: grid;
+  gap: 2px;
+  padding: 12px;
+  text-align: left;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.manager-glance-stat:hover {
+  border-color: var(--faint);
+}
+
+.manager-glance-stat strong {
+  color: white;
+  font-size: 18px;
+}
+
+.manager-glance-stat span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 /* ---- Routines / schedules: alarm-app-style card list, editor, hour dial ---- */
 .routines-workspace {
   align-items: flex-start;
