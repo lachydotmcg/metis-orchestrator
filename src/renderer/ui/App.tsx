@@ -1435,7 +1435,7 @@ export function App(): JSX.Element {
       {activeNav === "gallery" ? <GalleryWorkspace boards={galleryBoards} onBoardsChange={setGalleryBoards} /> : null}
       {activeNav === "marketplace" ? <MarketplaceWorkspace /> : null}
       {activeNav === "routines" ? <RoutinesWorkspace onConversationOpen={openConversationById} /> : null}
-      {activeNav === "todo" ? <TodoWorkspace /> : null}
+      {activeNav === "todo" ? <TodoWorkspace storedConversations={storedConversations} /> : null}
       {activeNav === "manager" ? <ManagerWorkspace /> : null}
       {activeNav === "pulse" ? <PulseWorkspace /> : null}
       {activeNav === "settings" ? <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} /> : null}
@@ -8053,9 +8053,41 @@ function MarketplaceDetailView({
 }
 
 type TodoPriority = "high" | "medium" | "idea" | "none";
-type TodoCard = { id: string; title: string; priority: TodoPriority; done: boolean };
+/** Who a to-do card is assigned to (docs/FABLE_PLANS.md — To-Do board as central feed):
+ *  a fixed kind (unassigned/fable/manager) is self-describing; "conversation" and "agent"
+ *  carry an id (+ a stored label as a fallback if the target no longer resolves). */
+type TodoAssigneeKind = "unassigned" | "fable" | "manager" | "conversation" | "agent";
+type TodoAssignee = { kind: TodoAssigneeKind; id?: string; label?: string };
+type TodoCard = { id: string; title: string; priority: TodoPriority; done: boolean; assignee?: TodoAssignee };
 type TodoColumn = { id: string; title: string; cards: TodoCard[] };
 type TodoBoard = { columns: TodoColumn[] };
+
+/** Managed-agent identities available as to-do assignees, forward-compatible with the
+ *  auto-named agents from FABLE_PLANS section 3. Each gets a stable hue for its dot. */
+const MANAGED_AGENT_IDENTITIES: { name: string; hue: number }[] = [
+  { name: "Nyx", hue: 265 },
+  { name: "Talos", hue: 200 },
+  { name: "Echo", hue: 150 },
+  { name: "Atlas", hue: 30 },
+  { name: "Juno", hue: 330 }
+];
+
+/** Resolves a to-do assignee into what the card/filter UI renders: a label and a dot color.
+ *  Missing `assignee` is treated as unassigned everywhere (persisted boards predate the field). */
+function resolveTodoAssignee(assignee: TodoAssignee | undefined, storedConversations: ConversationRecord[]): { label: string; dotColor: string; muted?: boolean } {
+  const kind = assignee?.kind ?? "unassigned";
+  if (kind === "fable") return { label: "You", dotColor: "var(--accent)" };
+  if (kind === "manager") return { label: "Manager", dotColor: "#56b6e0" };
+  if (kind === "conversation") {
+    const found = assignee?.id ? storedConversations.find((conversation) => conversation.id === assignee.id) : undefined;
+    return { label: found?.title ?? assignee?.label ?? "Conversation", dotColor: "var(--muted)", muted: !found };
+  }
+  if (kind === "agent") {
+    const identity = MANAGED_AGENT_IDENTITIES.find((agent) => agent.name === assignee?.id);
+    return { label: assignee?.label ?? assignee?.id ?? "Agent", dotColor: identity ? `hsl(${identity.hue} 45% 62%)` : "var(--faint)" };
+  }
+  return { label: "Assign", dotColor: "var(--faint)", muted: true };
+}
 
 const TODO_PRIORITY_CYCLE: TodoPriority[] = ["none", "high", "medium", "idea"];
 const TODO_PRIORITY_LABEL: Record<TodoPriority, string> = {
@@ -8075,7 +8107,7 @@ const DEFAULT_TODO_BOARD: TodoBoard = {
       id: "backlog",
       title: "Backlog",
       cards: [
-        { id: todoId(), title: "Design the Manager window", priority: "high", done: false },
+        { id: todoId(), title: "Design the Manager window", priority: "high", done: false, assignee: { kind: "manager" } },
         { id: todoId(), title: "Newspaper / Home feed", priority: "idea", done: false },
         { id: todoId(), title: "Routines / Schedules surface", priority: "medium", done: false }
       ]
@@ -8083,7 +8115,7 @@ const DEFAULT_TODO_BOARD: TodoBoard = {
     {
       id: "todo",
       title: "To do",
-      cards: [{ id: todoId(), title: "Connect tasks to project conversations", priority: "medium", done: false }]
+      cards: [{ id: todoId(), title: "Connect tasks to project conversations", priority: "medium", done: false, assignee: { kind: "fable" } }]
     },
     {
       id: "doing",
@@ -8101,16 +8133,46 @@ const DEFAULT_TODO_BOARD: TodoBoard = {
   ]
 };
 
-function TodoWorkspace(): JSX.Element {
+/** Board-level assignee filter (todo-head): "all" plus the fixed kinds, and a specific
+ *  conversation id when kind is "conversation". Agents aren't filterable here yet — the
+ *  per-card picker still assigns them, this just keeps the top filter row compact. */
+type TodoFilter = { kind: TodoAssigneeKind | "all"; id?: string };
+
+function TodoWorkspace({ storedConversations }: { storedConversations: ConversationRecord[] }): JSX.Element {
   const [board, setBoard] = useAppStoreState("todoBoard", DEFAULT_TODO_BOARD);
   const drag = useRef<{ colId: string; cardId: string } | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<string | null>(null);
   const [addingCol, setAddingCol] = useState<string | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
+  const [assigneeMenu, setAssigneeMenu] = useState<{ colId: string; cardId: string } | null>(null);
+  const [assigneeSearch, setAssigneeSearch] = useState("");
+  const [filter, setFilter] = useState<TodoFilter>({ kind: "all" });
+
+  useEffect(() => {
+    if (!assigneeMenu) return;
+    function onKey(event: KeyboardEvent): void {
+      if (event.key === "Escape") setAssigneeMenu(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [assigneeMenu]);
 
   function mutate(fn: (cols: TodoColumn[]) => TodoColumn[]): void {
     setBoard((current) => ({ columns: fn(current.columns) }));
+  }
+
+  function matchesFilter(assignee: TodoAssignee | undefined): boolean {
+    if (filter.kind === "all") return true;
+    const kind = assignee?.kind ?? "unassigned";
+    if (filter.kind === "conversation") return kind === "conversation" && assignee?.id === filter.id;
+    return kind === filter.kind;
+  }
+
+  function setCardAssignee(colId: string, cardId: string, assignee: TodoAssignee): void {
+    updateCard(colId, cardId, { assignee });
+    setAssigneeMenu(null);
+    setAssigneeSearch("");
   }
 
   function moveCard(toColId: string, beforeCardId?: string): void {
@@ -8176,13 +8238,49 @@ function TodoWorkspace(): JSX.Element {
           <small>Shared with the Manager</small>
           <h1>To Do List</h1>
         </div>
-        <button type="button" className="todo-add-col" onClick={() => mutate((cols) => [...cols, { id: todoId(), title: "New list", cards: [] }])}>
-          <Plus size={15} /> Add list
-        </button>
+        <div className="todo-head-actions">
+          <div className="todo-filter-chips" role="group" aria-label="Filter by assignee">
+            {(
+              [
+                { kind: "all" as const, label: "All" },
+                { kind: "fable" as const, label: "You" },
+                { kind: "manager" as const, label: "Manager" },
+                { kind: "unassigned" as const, label: "Unassigned" }
+              ]
+            ).map((chip) => (
+              <button
+                key={chip.kind}
+                type="button"
+                className={`todo-filter-chip ${filter.kind === chip.kind ? "active" : ""}`}
+                onClick={() => setFilter({ kind: chip.kind })}
+              >
+                {chip.label}
+              </button>
+            ))}
+            {storedConversations.length ? (
+              <select
+                className="todo-filter-conversation"
+                aria-label="Filter by conversation"
+                value={filter.kind === "conversation" ? filter.id ?? "" : ""}
+                onChange={(event) => (event.target.value ? setFilter({ kind: "conversation", id: event.target.value }) : setFilter({ kind: "all" }))}
+              >
+                <option value="">This conversation…</option>
+                {storedConversations.map((conversation) => (
+                  <option key={conversation.id} value={conversation.id}>{conversation.title}</option>
+                ))}
+              </select>
+            ) : null}
+          </div>
+          <button type="button" className="todo-add-col" onClick={() => mutate((cols) => [...cols, { id: todoId(), title: "New list", cards: [] }])}>
+            <Plus size={15} /> Add list
+          </button>
+        </div>
       </header>
 
       <div className="todo-board">
-        {board.columns.map((col) => (
+        {board.columns.map((col) => {
+          const visibleCards = col.cards.filter((card) => matchesFilter(card.assignee));
+          return (
           <section
             key={col.id}
             className={`todo-column ${dragOverCol === col.id ? "drag-over" : ""}`}
@@ -8197,14 +8295,20 @@ function TodoWorkspace(): JSX.Element {
           >
             <header className="todo-col-head">
               <input value={col.title} aria-label="List title" onChange={(event) => mutate((cols) => cols.map((c) => (c.id === col.id ? { ...c, title: event.target.value } : c)))} />
-              <span className="todo-count">{col.cards.length}</span>
+              <span className="todo-count">{visibleCards.length}</span>
               <button type="button" className="todo-col-del" aria-label="Delete list" onClick={() => mutate((cols) => cols.filter((c) => c.id !== col.id))}>
                 <Trash2 size={13} />
               </button>
             </header>
 
             <div className="todo-col-body">
-              {col.cards.map((card) => (
+              {visibleCards.map((card) => {
+                const assigneeMenuOpen = assigneeMenu?.colId === col.id && assigneeMenu.cardId === card.id;
+                const resolvedAssignee = resolveTodoAssignee(card.assignee, storedConversations);
+                const filteredConversations = assigneeSearch.trim()
+                  ? storedConversations.filter((conversation) => conversation.title.toLowerCase().includes(assigneeSearch.trim().toLowerCase()))
+                  : storedConversations;
+                return (
                 <article
                   key={card.id}
                   className={`todo-card p-${card.priority} ${card.done ? "done" : ""} ${draggingId === card.id ? "dragging" : ""}`}
@@ -8230,12 +8334,84 @@ function TodoWorkspace(): JSX.Element {
                     {card.done ? <CheckCircle2 size={15} /> : <Circle size={15} />}
                   </button>
                   <span className="todo-card-title">{card.title}</span>
+                  <span className="todo-assignee-wrap">
+                    <button
+                      type="button"
+                      className={`todo-assignee ${resolvedAssignee.muted ? "muted" : ""}`}
+                      aria-label={`Assignee: ${resolvedAssignee.label}`}
+                      title="Change assignee"
+                      onClick={() => {
+                        setAssigneeSearch("");
+                        setAssigneeMenu(assigneeMenuOpen ? null : { colId: col.id, cardId: card.id });
+                      }}
+                    >
+                      <span className="todo-assignee-dot" style={{ background: resolvedAssignee.dotColor }} />
+                      <span className="todo-assignee-label">{resolvedAssignee.label}</span>
+                    </button>
+                    {assigneeMenuOpen ? (
+                      <>
+                        <div className="todo-assignee-backdrop" onPointerDown={() => setAssigneeMenu(null)} />
+                        <div className="todo-assignee-popover" role="menu" aria-label="Assign task">
+                          <button type="button" role="menuitem" onClick={() => setCardAssignee(col.id, card.id, { kind: "unassigned" })}>
+                            <span className="todo-assignee-dot" style={{ background: "var(--faint)" }} />
+                            <span>Unassigned</span>
+                          </button>
+                          <button type="button" role="menuitem" onClick={() => setCardAssignee(col.id, card.id, { kind: "fable" })}>
+                            <span className="todo-assignee-dot" style={{ background: "var(--accent)" }} />
+                            <span>You (Fable)</span>
+                          </button>
+                          <button type="button" role="menuitem" onClick={() => setCardAssignee(col.id, card.id, { kind: "manager" })}>
+                            <span className="todo-assignee-dot" style={{ background: "#56b6e0" }} />
+                            <span>Manager</span>
+                          </button>
+                          {storedConversations.length ? (
+                            <>
+                              <div className="todo-assignee-group-label">Conversations</div>
+                              {storedConversations.length > 8 ? (
+                                <div className="todo-assignee-search">
+                                  <Search size={12} />
+                                  <input autoFocus value={assigneeSearch} placeholder="Search conversations" onChange={(event) => setAssigneeSearch(event.target.value)} />
+                                </div>
+                              ) : null}
+                              <div className="todo-assignee-scroll">
+                                {filteredConversations.map((conversation) => (
+                                  <button
+                                    key={conversation.id}
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={() => setCardAssignee(col.id, card.id, { kind: "conversation", id: conversation.id, label: conversation.title })}
+                                  >
+                                    <span className="todo-assignee-dot" style={{ background: "var(--muted)" }} />
+                                    <span>{conversation.title}</span>
+                                  </button>
+                                ))}
+                                {filteredConversations.length === 0 ? <p className="todo-assignee-empty">No matches</p> : null}
+                              </div>
+                            </>
+                          ) : null}
+                          <div className="todo-assignee-group-label">Agents</div>
+                          {MANAGED_AGENT_IDENTITIES.map((agent) => (
+                            <button
+                              key={agent.name}
+                              type="button"
+                              role="menuitem"
+                              onClick={() => setCardAssignee(col.id, card.id, { kind: "agent", id: agent.name, label: agent.name })}
+                            >
+                              <span className="todo-assignee-dot" style={{ background: `hsl(${agent.hue} 45% 62%)` }} />
+                              <span>{agent.name}</span>
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    ) : null}
+                  </span>
                   <button type="button" className="todo-prio" aria-label={TODO_PRIORITY_LABEL[card.priority]} title={`${TODO_PRIORITY_LABEL[card.priority]} (click to change)`} onClick={() => cyclePriority(col.id, card)} />
                   <button type="button" className="todo-card-del" aria-label="Delete task" onClick={() => deleteCard(col.id, card.id)}>
                     <X size={13} />
                   </button>
                 </article>
-              ))}
+                );
+              })}
 
               {addingCol === col.id ? (
                 <div className="todo-add-card">
@@ -8268,7 +8444,8 @@ function TodoWorkspace(): JSX.Element {
               )}
             </div>
           </section>
-        ))}
+          );
+        })}
       </div>
     </main>
   );
