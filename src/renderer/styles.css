@@ -2176,16 +2176,26 @@ p {
    Slim right-side panel, styled like .preview-rail — sits inside .memory-workspace next to the
    canvas/tree so it doesn't cover the toolbar or file tree. ---- */
 
-/* Opening a document REPLACES the whole graph view (owner: "clicking on a document should
-   completely replace the graph view, not a side bar") — a full-cover overlay over the workspace. */
+/* Opening a document replaces the GRAPH area only (owner: "I don't want the preview of the document
+   to take up the directory/list on the right hand side, just the view of the graphs"). The overlay
+   covers the canvas but stops short of the 244px directory panel on the right; when that panel is
+   collapsed it extends to the full width. */
 .memory-doc-panel {
   position: absolute;
-  inset: 0;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  right: 244px;
   z-index: 20;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  height: 100%;
   background: var(--surface-2);
+  border-right: 1px solid var(--line);
+}
+
+.memory-workspace.tree-collapsed .memory-doc-panel {
+  right: 0;
+  border-right: none;
 }
 
 .memory-doc-panel-header {
