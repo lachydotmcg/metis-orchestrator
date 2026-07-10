@@ -23,7 +23,7 @@
   `AbortController` through every provider fetch (Ollama + cloud) keyed by the run scope;
   `metis-session:cancel` aborts the live fetch AND the stage loop. Verify a long local
   generation stops within ~1s.
-- [ ] **L1 — Collapsed Manager widget STILL not draggable** (regression or incomplete fix;
+- [x] **L1 — Collapsed Manager widget STILL not draggable** (regression or incomplete fix;
   the `-webkit-app-region: no-drag` fix shipped in 9048754 but Lachy still can't drag it
   when minimized). Re-diagnose properly: check `.manager-widget.minimized` pointer-events,
   header hit area (the title span may be tiny), whether the collapsed pill ends up under
@@ -39,13 +39,13 @@
   ugly and redundant (there's a New Routine button top-right) — remove it, keep a plain
   empty-state sentence. Also RENAME the nav item and page title from "Routines / schedules"
   to just "Routines".
-- [ ] **L25 — Run Test panel is clipped into the sidebar and far too big.** Shrink to ~25%
+- [x] **L25 — Run Test panel is clipped into the sidebar and far too big.** Shrink to ~25%
   of current size (slim rows, compact type) and fix the clipping/positioning so it never
   overlaps the right rail.
-- [ ] **L7 — Message copy UX.** Normal prose replies must never render as a giant copy
+- [x] **L7 — Message copy UX.** Normal prose replies must never render as a giant copy
   block. Add a small hover-only copy ICON (no text label) at the bottom of each assistant
   message; it appears on message hover only. Keep code-fence copy behaviour for actual code.
-- [ ] **L3 — Permissions button should be SMALL** — a compact pill like Claude Code's mode
+- [x] **L3 — Permissions button should be SMALL** — a compact pill like Claude Code's mode
   chip (see Lachy's screenshot: a tiny "Auto" pill bottom-left that opens Manual / Accept
   edits / Plan / Auto / Bypass permissions). Replace the current shield button + popover
   trigger with that compact pill showing the current mode name.

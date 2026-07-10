@@ -195,20 +195,25 @@ p {
 /* Compound selector so this beats .healthsweep-panel on specificity. The toolbar
    anchor sits near the TOP of the canvas, so the panel opens DOWNWARD (opening
    upward pushed it off-screen with only the bottom edge visible) and clamps its
-   height to the space below the anchor. */
+   height to the space below the anchor.
+   L25: shrunk to ~a quarter of its old footprint (was 320px wide, ~70vh tall, chunky
+   two-line rows) and the width is now capped relative to the viewport so it can never
+   spill past the canvas into the right library rail or the left sidebar, regardless of
+   window size — a plain fixed px width can't guarantee that on narrow windows. */
 .healthsweep-panel.run-test-panel {
-  top: calc(100% + 8px);
+  top: calc(100% + 6px);
   bottom: auto;
   right: 0;
   left: auto;
-  width: 320px;
-  max-height: min(70vh, calc(100vh - 160px));
+  width: clamp(180px, 20vw, 220px);
+  max-width: calc(100vw - 320px);
+  max-height: min(40vh, calc(100vh - 220px));
 }
 
 .run-test-subhead {
-  margin: 4px 0 -2px;
+  margin: 3px 0 -1px;
   color: var(--muted);
-  font-size: 10.5px;
+  font-size: 9.5px;
   font-weight: 650;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -216,43 +221,43 @@ p {
 
 .healthsweep-panel {
   position: absolute;
-  top: calc(100% + 8px);
+  top: calc(100% + 6px);
   left: 0;
   z-index: 20;
   display: grid;
-  gap: 8px;
-  width: 300px;
-  max-height: 70vh;
-  padding: 10px;
+  gap: 5px;
+  width: 220px;
+  max-height: 40vh;
+  padding: 7px;
   overflow-y: auto;
   background: #1e1e1e;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: 10px;
   box-shadow: 0 20px 52px rgb(0 0 0 / 0.5);
 }
 
 .healthsweep-head {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   align-items: center;
-  padding-bottom: 6px;
+  padding-bottom: 4px;
   color: white;
   border-bottom: 1px solid var(--line-soft);
-  font-size: 12.5px;
+  font-size: 11px;
   font-weight: 700;
 }
 
 .healthsweep-rerun {
   display: inline-flex;
-  gap: 5px;
+  gap: 4px;
   align-items: center;
   margin-left: auto;
-  padding: 3px 8px;
+  padding: 2px 6px;
   color: var(--soft);
   background: var(--node);
   border: 1px solid var(--line);
-  border-radius: 7px;
-  font-size: 11px;
+  border-radius: 6px;
+  font-size: 10px;
   font-weight: 650;
 }
 
@@ -269,12 +274,12 @@ p {
 .healthsweep-head > button:last-child {
   display: grid;
   place-items: center;
-  width: 20px;
-  height: 20px;
+  width: 17px;
+  height: 17px;
   color: var(--muted);
   background: transparent;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
 }
 
 .healthsweep-head > button:last-child:hover {
@@ -284,30 +289,30 @@ p {
 
 .healthsweep-rows {
   display: grid;
-  gap: 5px;
+  gap: 3px;
 }
 
 .healthsweep-empty {
   margin: 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
 }
 
 .healthsweep-row {
   display: flex;
-  gap: 9px;
-  align-items: flex-start;
-  padding: 7px 8px;
+  gap: 6px;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 6px;
   background: var(--node);
   border: 1px solid var(--line-soft);
-  border-radius: 9px;
+  border-radius: 7px;
 }
 
 .healthsweep-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   flex: none;
-  margin-top: 4px;
   border-radius: 50%;
   background: var(--faint);
 }
@@ -329,20 +334,27 @@ p {
 }
 
 .healthsweep-row-body {
-  display: grid;
-  gap: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
   min-width: 0;
 }
 
 .healthsweep-row-body strong {
+  flex: none;
   color: white;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .healthsweep-row-body small {
+  overflow: hidden;
+  min-width: 0;
   color: var(--muted);
-  font-size: 11px;
-  line-height: 1.35;
+  font-size: 10.5px;
+  line-height: 1.3;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .titlebar-drag {
@@ -3572,21 +3584,20 @@ p {
   justify-content: flex-start;
 }
 
+/* L7: small icon-only copy affordance at the bottom of an assistant message, revealed only
+   on hover of that message (row is a flex column, so this sits below the rendered content). */
 .turn-copy {
-  position: absolute;
-  top: -2px;
-  right: 0;
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  padding: 3px 8px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   color: var(--muted);
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  font-size: 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
   opacity: 0;
-  transition: opacity 120ms ease, color 120ms ease;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
 }
 
 .assistant-message:hover .turn-copy,
@@ -5561,11 +5572,20 @@ details.artifact-row[open] summary {
   /* Root cause of "can't drag while minimized": this fixed-position widget can be parked
      anywhere on screen, including overlapping the frameless titlebar's OS drag strip
      (`.titlebar`, top 34px, `-webkit-app-region: drag`). That drag region is resolved by
-     screen geometry, not DOM stacking order, so without an explicit no-drag override here a
-     pointerdown over the widget there gets hijacked into a native window-drag before our own
-     handlers ever see it — most visible when minimized, since the collapsed header is small
-     enough to sit entirely inside that strip. */
+     screen geometry, not DOM stacking order, so an explicit no-drag override is needed here.
+     The `no-drag` alone (shipped in 9048754) still left the collapsed pill undraggable: Chromium
+     only recomputes its native draggable-region hit-test when an app-region element gets a fresh
+     compositing layer (paint invalidation), and a `position: fixed` element that's only ever
+     repositioned via plain `left`/`top` inline-style writes — as this widget is, see setPos in
+     ManagerWidget — doesn't reliably get promoted to its own layer. The full-size expanded widget
+     happens to get one anyway (its scrollable chat body forces a layer), which is why dragging
+     worked fine there; the collapsed pill has no such content and kept tracking a stale hit-test
+     region at its old position, so pointerdowns after a move landed back in the OS drag strip.
+     `translateZ(0)` forces a permanent compositing layer (no visual effect on its own) so the
+     draggable-region tracks the live position in both states. Also declare no-drag redundantly on
+     the header/button/title below since the collapsed pill's only visible content IS the header. */
   -webkit-app-region: no-drag;
+  transform: translateZ(0);
 }
 
 .manager-widget.minimized {
@@ -5587,6 +5607,7 @@ details.artifact-row[open] summary {
   touch-action: none;
   outline: none;
   user-select: none;
+  -webkit-app-region: no-drag;
 }
 
 .manager-widget-head.dragging {
@@ -5604,6 +5625,7 @@ details.artifact-row[open] summary {
   color: var(--soft);
   font-size: 13px;
   font-weight: 700;
+  -webkit-app-region: no-drag;
 }
 
 .manager-widget-actions {
@@ -5611,6 +5633,7 @@ details.artifact-row[open] summary {
   flex-shrink: 0;
   align-items: center;
   gap: 2px;
+  -webkit-app-region: no-drag;
 }
 
 .manager-widget-btn {
@@ -5622,6 +5645,7 @@ details.artifact-row[open] summary {
   background: transparent;
   border: none;
   border-radius: 7px;
+  -webkit-app-region: no-drag;
 }
 
 .manager-widget-btn:hover {
@@ -8037,6 +8061,43 @@ a:focus-visible,
 
 .perm-wrap {
   position: relative;
+}
+
+/* Compact Claude-Code-style mode pill (L3): replaces the old shield icon trigger with a small
+   text pill showing the current permission mode. Opens the same perm-popover unchanged. */
+.perm-pill {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 9px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  outline: none;
+}
+
+.perm-pill:hover {
+  color: var(--text);
+  border-color: var(--soft);
+}
+
+.perm-pill.active {
+  color: var(--text);
+  border-color: var(--soft);
+}
+
+.perm-pill.accent {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.perm-pill.bypass {
+  color: #ff8a8a;
+  border-color: color-mix(in srgb, #ff8a8a 45%, transparent);
 }
 
 .resource-wrap {

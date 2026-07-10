@@ -2454,6 +2454,15 @@ const PERMISSION_MODES: { key: PermissionMode; label: string; desc: string }[] =
   { key: "bypass", label: "Bypass Permissions", desc: "No prompts at all. Use with care." }
 ];
 
+/** Short names for the compact composer mode pill (Claude-Code-style), keyed off PermissionMode. */
+const PERMISSION_MODE_SHORT: Record<PermissionMode, string> = {
+  ask: "Manual",
+  edits: "Accept edits",
+  plan: "Plan",
+  auto: "Auto",
+  bypass: "Bypass"
+};
+
 const OVERVIEW_STATS = [
   { label: "Sessions", value: "189" },
   { label: "Messages", value: "26,665" },
@@ -3735,13 +3744,13 @@ function SessionComposer({
         <div className="composer-tools">
           <div className="perm-wrap">
             <button
-              className={`tool-btn ${permOpen ? "active" : ""} ${permissionMode === "bypass" ? "bypass" : ""}`}
+              className={`perm-pill ${permOpen ? "active" : ""} ${permissionMode !== "auto" ? "accent" : ""} ${permissionMode === "bypass" ? "bypass" : ""}`}
               type="button"
-              aria-label="Permissions"
+              aria-label={`Permission mode: ${PERMISSION_MODE_SHORT[permissionMode]}`}
               aria-expanded={permOpen}
               onClick={() => setPermOpen((open) => !open)}
             >
-              {permissionMode === "bypass" ? <ShieldAlert size={16} /> : <Shield size={16} />}
+              {PERMISSION_MODE_SHORT[permissionMode]}
             </button>
             {permOpen ? (
               <>
@@ -4187,9 +4196,8 @@ function TurnCopyButton({ run }: { run: SessionRun }): JSX.Element | null {
     window.setTimeout(() => setCopied(false), 1400);
   }
   return (
-    <button type="button" className="turn-copy" onClick={copy} aria-label="Copy conversation turn">
-      {copied ? <Check size={12} /> : <Copy size={12} />}
-      {copied ? "Copied" : "Copy"}
+    <button type="button" className="turn-copy" onClick={copy} aria-label={copied ? "Copied" : "Copy message"} title={copied ? "Copied" : "Copy message"}>
+      {copied ? <Check size={13} /> : <Copy size={13} />}
     </button>
   );
 }
@@ -4236,8 +4244,8 @@ const ConversationTurnCard = memo(function ConversationTurnCard({ anchorId, turn
       <div className="message-row assistant-message">
         {turn.run ? (
           <>
-            <TurnCopyButton run={turn.run} />
             <CompletedRun run={turn.run} />
+            <TurnCopyButton run={turn.run} />
           </>
         ) : (
           <PendingRun turn={turn} />
