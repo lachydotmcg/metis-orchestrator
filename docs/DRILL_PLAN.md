@@ -9,7 +9,7 @@
 
 ## PHASE 0 — Bugs and quick wins (do these FIRST, they're what Lachy touches daily)
 
-- [ ] **L4 — Chat latency + snapshot-dump replies.** Typing "Test" in a new conversation
+- [x] **L4 — Chat latency + snapshot-dump replies.** Typing "Test" in a new conversation
   thought for over a minute and replied with a project-structure summary ("The project
   snapshot shows a multi-directory structure..."). Two fixes: (a) a FAST PATH for short/
   trivial prompts — don't run the full route ceremony + snapshot summarisation for a
@@ -18,7 +18,7 @@
   where projectSnapshot is injected into sessionProviderPrompt and make it conditional/
   toned down. Also investigate the 60s+ latency (likely a slow local model on the chat
   chain or the snapshot build) — instrument and fix.
-- [ ] **L5 — Stop button must stop INSTANTLY.** Today cancel checks `throwIfCancelled` at
+- [x] **L5 — Stop button must stop INSTANTLY.** Today cancel checks `throwIfCancelled` at
   stage boundaries, so an in-flight model call runs to completion first. Thread an
   `AbortController` through every provider fetch (Ollama + cloud) keyed by the run scope;
   `metis-session:cancel` aborts the live fetch AND the stage loop. Verify a long local
@@ -29,13 +29,13 @@
   header hit area (the title span may be tiny), whether the collapsed pill ends up under
   the OS titlebar drag strip when parked high, and whether pointer capture is being stolen
   by a child. Fix until a minimized widget drags reliably.
-- [ ] **L16 — Dead "side panel" box, top-left of Graph View.** Does nothing; there's already
+- [x] **L16 — Dead "side panel" box, top-left of Graph View.** Does nothing; there's already
   a collapse control. Find it and remove it.
-- [ ] **L18 — Conversation minimap (the "3 lines") shows on New Session** where it has no
+- [x] **L18 — Conversation minimap (the "3 lines") shows on New Session** where it has no
   purpose. Hide it when there's no conversation content.
-- [ ] **L14 — New gallery boards get a "new" mood tag.** `createBoard` seeds `tags: ["new"]`.
+- [x] **L14 — New gallery boards get a "new" mood tag.** `createBoard` seeds `tags: ["new"]`.
   Remove the seeded tag (empty tags for a fresh board).
-- [ ] **L11 — Routines page:** the grey "+ New Routine" button in the middle empty state is
+- [x] **L11 — Routines page:** the grey "+ New Routine" button in the middle empty state is
   ugly and redundant (there's a New Routine button top-right) — remove it, keep a plain
   empty-state sentence. Also RENAME the nav item and page title from "Routines / schedules"
   to just "Routines".
@@ -49,9 +49,9 @@
   chip (see Lachy's screenshot: a tiny "Auto" pill bottom-left that opens Manual / Accept
   edits / Plan / Auto / Bypass permissions). Replace the current shield button + popover
   trigger with that compact pill showing the current mode name.
-- [ ] **L8 — Rename "Moodboards".** Lachy dislikes the name. Use "Boards" (palette group
+- [x] **L8 — Rename "Moodboards".** Lachy dislikes the name. Use "Boards" (palette group
   label + node sublabel "Board · loads first"). Keep it short and neutral.
-- [ ] **L26 — Sidebar order:** New session, Orchestration, Manager, Marketplace, then the
+- [x] **L26 — Sidebar order:** New session, Orchestration, Manager, Marketplace, then the
   More tab containing: Routines, To Do List, Gallery, Graph View, Benchmark. Exactly that.
 - [ ] **L2 — The composer "+" button should accept image files too.** Today + adds
   files/folders as workspace resources; when an image is picked it should become a chat
@@ -195,7 +195,7 @@
   as the obvious rail, and how subscriptions DON'T break the local-first ethos (never
   paywall local). Competitive scan: Traycer, Cursor, OpenRouter credits. This is a
   DESIGN DOC — no payment code this run.
-- [ ] **L24 — A real README.** Rewrite README.md as actual documentation: what Metis is
+- [x] **L24 — A real README.** Rewrite README.md as actual documentation: what Metis is
   (the 3-layer story), feature tour (one section per surface), install/dev/build,
   architecture overview, the registry/marketplace + publishing guide, roadmap link.
   Leave clearly-marked placeholder blocks for Lachy's logo + screenshots
