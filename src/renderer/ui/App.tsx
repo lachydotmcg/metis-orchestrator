@@ -1989,12 +1989,12 @@ function Sidebar({
       <div className="sidebar-scroll">
       <nav className="sidebar-nav" aria-label="Primary">
         <NavButton active={activeNav === "orchestration"} disabled={benchmarkLocked} icon={<GitBranch size={16} />} label="Orchestration" onClick={() => onSelect("orchestration")} />
-        <NavButton active={activeNav === "routines"} disabled={benchmarkLocked} icon={<CalendarClock size={16} />} label="Routines / schedules" onClick={() => onSelect("routines")} />
-        <NavButton active={activeNav === "todo"} disabled={benchmarkLocked} icon={<ListTodo size={16} />} label="To Do List" onClick={() => onSelect("todo")} />
         <NavButton active={activeNav === "manager"} disabled={benchmarkLocked} icon={<Bot size={16} />} label="Manager" onClick={() => onSelect("manager")} />
         <NavButton active={activeNav === "marketplace"} disabled={benchmarkLocked} icon={<Cable size={16} />} label="Marketplace" onClick={() => onSelect("marketplace")} />
         {moreOpen ? (
           <>
+            <NavButton active={activeNav === "routines"} disabled={benchmarkLocked} icon={<CalendarClock size={16} />} label="Routines" onClick={() => onSelect("routines")} />
+            <NavButton active={activeNav === "todo"} disabled={benchmarkLocked} icon={<ListTodo size={16} />} label="To Do List" onClick={() => onSelect("todo")} />
             <NavButton active={activeNav === "gallery"} disabled={benchmarkLocked} icon={<GalleryHorizontalEnd size={16} />} label="Gallery" onClick={() => onSelect("gallery")} />
             <NavButton active={activeNav === "graph"} disabled={benchmarkLocked} icon={<Network size={16} />} label="Graph View" onClick={() => onSelect("graph")} />
             <NavButton active={activeNav === "benchmark"} icon={<Cpu size={16} />} label="Benchmark" onClick={() => onSelect("benchmark")} />
@@ -6096,7 +6096,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
                 </span>
                 <span className="node-caption">
                   <strong>{drag.payload.name}</strong>
-                  <small>{galleryVisuals[drag.payload.name] ? "Moodboard · loads first" : "Skill · loads first"}</small>
+                  <small>{galleryVisuals[drag.payload.name] ? "Board · loads first" : "Skill · loads first"}</small>
                   {galleryVisuals[drag.payload.name]?.palette.length ? (
                     <span className="node-palette-strip" aria-hidden="true">
                       {galleryVisuals[drag.payload.name].palette.slice(0, 5).map((hex, index) => (
@@ -6135,7 +6135,7 @@ function NodeCard({
 }): JSX.Element {
   const provider = node.provider ? PROVIDERS[node.provider] : null;
   const isMoodboard = node.kind === "skill" && Boolean(galleryVisual);
-  const sublabel = node.kind === "skill" ? (isMoodboard ? "Moodboard · loads first" : "Skill · loads first") : `${provider?.label ?? "Unassigned"}${node.model ? ` · ${node.model}` : ""}`;
+  const sublabel = node.kind === "skill" ? (isMoodboard ? "Board · loads first" : "Skill · loads first") : `${provider?.label ?? "Unassigned"}${node.model ? ` · ${node.model}` : ""}`;
   const fallbacks = node.fallbacks ?? [];
   const palette = galleryVisual?.palette ?? [];
 
@@ -6305,7 +6305,7 @@ function Palette({
               {moodboardSkills.length ? (
                 <div className="palette-group">
                   <span className="palette-subhead">
-                    <GalleryHorizontalEnd size={12} strokeWidth={2} /> Moodboards
+                    <GalleryHorizontalEnd size={12} strokeWidth={2} /> Boards
                   </span>
                   {moodboardSkills.map((entry) => (
                     <div
@@ -7221,7 +7221,6 @@ function MemoryGraphWorkspace({
             {treeCollapsed ? <PanelRightOpen size={15} /> : <PanelRightClose size={15} />}
           </button>
         </div>
-        <div className="memory-title">Graph View</div>
         {focusRoot ? (
           <div className="memory-focus-bar">
             <span>Local graph — depth {focusDepth}</span>
@@ -8249,7 +8248,7 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
     const image = makeGalleryThumb("New Board", "#111827", "#64748b");
     onBoardsChange((current) => [
       ...current,
-      { id, title: "Untitled board", description: "Drop references here and turn them into a route-aware skill.", coverImage: image, images: [], tags: ["new"], linkedSkill: false }
+      { id, title: "Untitled board", description: "Drop references here and turn them into a route-aware skill.", coverImage: image, images: [], tags: [], linkedSkill: false }
     ]);
     setSelectedId(id);
   }
@@ -10343,12 +10342,12 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
   }
 
   return (
-    <main className="product-workspace routines-workspace" aria-label="Routines and schedules">
+    <main className="product-workspace routines-workspace" aria-label="Routines">
       <section className="routines-shell">
         <header className="routines-header">
           <div>
             <small>Recurring prompts, one dedicated conversation per routine</small>
-            <h1>Routines / Schedules</h1>
+            <h1>Routines</h1>
           </div>
           {!editingDraft ? (
             <button
@@ -10379,9 +10378,6 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
         {routines.length === 0 && !editingDraft ? (
           <div className="routines-empty">
             <p>No routines yet. Set one up to have Metis run a prompt automatically on a schedule.</p>
-            <button type="button" className="primary" disabled={!hasBridge} onClick={() => setEditingDraft(draftFromRoutine(undefined, currentProjectPath))}>
-              <Plus size={14} /> New routine
-            </button>
           </div>
         ) : (
           <div className="routines-list">

@@ -1918,18 +1918,6 @@ p {
   cursor: grabbing;
 }
 
-.memory-title {
-  position: absolute;
-  top: 16px;
-  left: 50%;
-  z-index: 10;
-  color: #f2f2f2;
-  font-size: 13px;
-  font-weight: 800;
-  transform: translateX(-50%);
-  pointer-events: none;
-}
-
 .memory-toolbar {
   position: absolute;
   top: 14px;
