@@ -1,5 +1,10 @@
 # Fable Plans — feature designs for Metis Orchestrator
 
+> ## ⚡ 2026-07-10: THE 48-HOUR DRILL IS THE ACTIVE PLAN — read **docs/DRILL_PLAN.md** FIRST.
+> It contains Lachy's full 26-item feedback batch + the entire remaining roadmap + the
+> operating protocol for the autonomous run. This header below is older context; the memory
+> file `metis-orchestrator.md` has the full history. Work DRILL_PLAN.md top to bottom.
+
 > ## ▶ POST-COMPACT / NEW-SESSION HANDOFF (updated 2026-07-08; latest commit 5e14c1c)
 > Read this first, then the numbered sections as needed. Working arrangement: **Fable diagnoses/
 > plans/verifies; Sonnet subagents implement.** Every subagent brief MUST include: "do all work
