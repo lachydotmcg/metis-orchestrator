@@ -97,7 +97,7 @@
 
 ## PHASE 2 — Gallery & vision pipeline (L9, L12b, L15)
 
-- [ ] **L9 — Gallery images must ACTUALLY inject into the API request.** The style-memory
+- [x] **L9 — Gallery images must ACTUALLY inject into the API request.** The style-memory
   retrieval currently injects text (caption/palette) into the front-end stage. Now that
   multimodal attachments exist (3b4ee24), pass the retrieved reference image's actual
   bytes as an image input to vision-capable models on the front-end stage (reuse the

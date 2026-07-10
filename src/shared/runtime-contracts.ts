@@ -212,6 +212,13 @@ export interface StyleCard {
   /** True once a human has edited title/caption/moodTags for this card — user edits
    *  outrank model captions in retrieval scoring (docs/FABLE_PLANS.md section 23). */
   userEdited?: boolean;
+  /** Downscaled (<=768px long edge) JPEG copy of the source image, base64-encoded,
+   *  persisted so retrieval can hand the actual reference image to a vision-capable
+   *  front-end model — not just its caption/palette (docs/DRILL_PLAN.md Phase 2, L9).
+   *  Optional: cards generated before this field existed simply have neither, and
+   *  retrieval falls back to text-only, exactly as before. */
+  imageBase64?: string;
+  imageMime?: string;
 }
 
 export type RegistryPackageKind = "skill" | "mcp" | "preset" | "template" | "pipeline";

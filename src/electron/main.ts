@@ -4959,6 +4959,11 @@ async function runOrchestratedStages(
   const explicitStyle = promptHasExplicitStyle(prompt);
   emitTimeline(stream, timelineText(designSeedTimelineText(seed)));
 
+  // Set by the frontend stage below when retrieveBestStyleCard finds a card
+  // carrying a downscaled reference image (task L9, docs/DRILL_PLAN.md Phase 2)
+  // — read back further down when assembling stageImages for that same stage.
+  let styleCardImage: ProviderImageInput | undefined;
+
   for (const stage of stages) {
     throwIfCancelled(projectPath);
     let stagePrompt: string;
@@ -4975,7 +4980,22 @@ async function runOrchestratedStages(
         const captionText = styleCard.caption || "(no caption — palette-only reference)";
         stagePrompt += `\n\nStyle reference from the user's gallery (this outranks the design seed; the user's explicit request outranks everything): ${captionText}. Mood: ${styleCard.moodTags.join(", ") || "none"}. Palette: ${styleCard.palette.join(", ") || "none"}.`;
         const trimmedCaption = captionText.length > 80 ? `${captionText.slice(0, 77)}...` : captionText;
-        emitTimeline(stream, timelineText(`Style reference: "${trimmedCaption}"`));
+        let hasImage = false;
+        // Hand the actual reference image (not just its caption) to vision-capable
+        // providers, subject to the shared attachment cap — see stageImages assembly
+        // below, which gives user attachments priority (task L9).
+        try {
+          if (styleCard.imageBase64 && styleCard.imageMime) {
+            styleCardImage = { data: styleCard.imageBase64, mimeType: styleCard.imageMime };
+            hasImage = true;
+          }
+        } catch {
+          styleCardImage = undefined;
+        }
+        stagePrompt += hasImage
+          ? " A reference image from the gallery is attached below — use it to guide look and feel alongside this description."
+          : "";
+        emitTimeline(stream, timelineText(`Style reference: "${trimmedCaption}"${hasImage ? " (image attached)" : ""}`));
       }
     } else {
       stagePrompt = `You are the FUNCTIONALITY model. Make the site actually work end to end.\n\nPlan:\n${plan}\n\nFront end so far:\n${frontend}\n\nReturn COMPLETE files (full contents, not diffs) for everything needed to run it — backend (e.g. \`server.js\`, \`package.json\`) and any updated front-end files. Before each fenced code block, put the file path in backticks on its own line. One short sentence of intro, then the files.`;
@@ -4990,9 +5010,20 @@ async function runOrchestratedStages(
     // Reference-image attachments: only the front-end stage gets images (never
     // plan/functionality) — see docs comment on runOrchestratedStages' images
     // param. No-op when there are no attachments.
-    const stageImages = stage.templateRole === "frontend" && images && images.length > 0 ? images : undefined;
+    let stageImages = stage.templateRole === "frontend" && images && images.length > 0 ? images : undefined;
     if (stageImages) {
       stagePrompt += attachmentNoteFor(stageImages.length);
+    }
+    // Fold the gallery style-reference image into the same images array the
+    // front-end stage sends to the provider (task L9, docs/DRILL_PLAN.md Phase 2).
+    // User attachments always take priority over the style reference; the style
+    // image is only added if there's still room under MAX_ATTACHMENT_IMAGES, and
+    // is silently dropped otherwise rather than bumping something the user attached.
+    if (stage.templateRole === "frontend" && styleCardImage) {
+      const existingCount = stageImages?.length ?? 0;
+      if (existingCount < MAX_ATTACHMENT_IMAGES) {
+        stageImages = stageImages ? [...stageImages, styleCardImage] : [styleCardImage];
+      }
     }
     // Mid-run steering: absorb directives posted while earlier stages were running.
     const newDirectives = takePendingDirectives(projectPath, stage.id);
@@ -6679,16 +6710,43 @@ function medianCutPalette(bitmap: Buffer, count: number): string[] {
 
 /** Extracts a 5-color palette from a gallery image src via Electron's
  *  nativeImage + median-cut. Returns [] on any decode failure. */
-async function extractPaletteFromImage(src: string): Promise<{ palette: string[]; base64?: string }> {
+// Max long edge for the copy of a gallery image persisted on its StyleCard
+// (task L9, docs/DRILL_PLAN.md Phase 2): small enough that storing it on every
+// card doesn't bloat the JSON store, big enough to still read as a real style
+// reference to a vision-capable front-end model.
+const STYLE_CARD_IMAGE_MAX_EDGE = 768;
+
+/** Downscales an already-decoded nativeImage to <=STYLE_CARD_IMAGE_MAX_EDGE on
+ *  its long edge and encodes it as JPEG base64 for persistence on a StyleCard.
+ *  Fails soft to undefined — a card missing this field just contributes
+ *  text-only at retrieval time, same as before this existed. */
+function downscaleForStyleCardStorage(image: ReturnType<typeof nativeImage.createEmpty>): { imageBase64: string; imageMime: string } | undefined {
+  try {
+    const size = image.getSize();
+    if (size.width === 0 || size.height === 0) return undefined;
+    const longestEdge = Math.max(size.width, size.height);
+    const resized = longestEdge > STYLE_CARD_IMAGE_MAX_EDGE
+      ? image.resize(size.width >= size.height ? { width: STYLE_CARD_IMAGE_MAX_EDGE } : { height: STYLE_CARD_IMAGE_MAX_EDGE })
+      : image;
+    const imageBase64 = resized.toJPEG(72).toString("base64");
+    if (!imageBase64) return undefined;
+    return { imageBase64, imageMime: "image/jpeg" };
+  } catch {
+    return undefined;
+  }
+}
+
+async function extractPaletteFromImage(src: string): Promise<{ palette: string[]; base64?: string; storageImage?: { imageBase64: string; imageMime: string } }> {
   const decoded = await decodeImageForPalette(src);
   if (!decoded) return { palette: [] };
+  const storageImage = downscaleForStyleCardStorage(decoded.image);
   try {
     const resized = decoded.image.resize({ width: 64 });
     const bitmap = resized.toBitmap();
     const palette = medianCutPalette(bitmap, 5);
-    return { palette, base64: decoded.base64 };
+    return { palette, base64: decoded.base64, storageImage };
   } catch {
-    return { palette: [], base64: decoded.base64 };
+    return { palette: [], base64: decoded.base64, storageImage };
   }
 }
 
@@ -6805,7 +6863,7 @@ async function readGalleryBoards(): Promise<StoredGalleryBoard[]> {
  *  median-cut, caption+tags additionally when a local vision model is
  *  installed. Fails soft to a palette-only (or fully empty) card. */
 async function generateStyleCard(image: StoredGalleryImage, boardId: string): Promise<StyleCard> {
-  const { palette, base64 } = await extractPaletteFromImage(image.src);
+  const { palette, base64, storageImage } = await extractPaletteFromImage(image.src);
   const visionModel = await detectOllamaVisionModel();
   if (visionModel && base64) {
     const captioned = await captionImageWithVisionModel(visionModel, base64);
@@ -6818,7 +6876,9 @@ async function generateStyleCard(image: StoredGalleryImage, boardId: string): Pr
         palette,
         source: "vision-model",
         model: visionModel,
-        createdAt: new Date().toISOString()
+        createdAt: new Date().toISOString(),
+        imageBase64: storageImage?.imageBase64,
+        imageMime: storageImage?.imageMime
       };
     }
   }
@@ -6829,7 +6889,9 @@ async function generateStyleCard(image: StoredGalleryImage, boardId: string): Pr
     moodTags: [],
     palette,
     source: "palette-only",
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(),
+    imageBase64: storageImage?.imageBase64,
+    imageMime: storageImage?.imageMime
   };
 }
 
@@ -6887,7 +6949,9 @@ async function updateStyleCard(imageId: string, boardId: string, patch: StoredSt
     source: existing?.source ?? "palette-only",
     model: existing?.model,
     createdAt: existing?.createdAt ?? new Date().toISOString(),
-    userEdited: true
+    userEdited: true,
+    imageBase64: existing?.imageBase64,
+    imageMime: existing?.imageMime
   };
   cards[imageId] = next;
   await writeStyleCards(cards);
