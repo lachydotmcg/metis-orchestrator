@@ -637,12 +637,19 @@ function attachmentNoteFor(count: number): string {
   return `\n\nThe user attached ${count} reference image${count === 1 ? "" : "s"} as a visual reference; match their style/layout where relevant.`;
 }
 
-async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStreamController): Promise<ProviderInvokeResult> {
+/** `scope` is the same cancel-scope key used by cancelledScopes/throwIfCancelled
+ *  (directiveScopeKey(projectPath)). When present, every fetch this call makes
+ *  is registered under an AbortController for that scope so requestSessionCancel
+ *  can abort it immediately instead of waiting for the call to finish. Callers
+ *  that don't have a scope handy (e.g. the direct metis-providers:invoke IPC,
+ *  Manager chat) simply omit it and get byte-identical behaviour to before. */
+async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStreamController, scope?: string): Promise<ProviderInvokeResult> {
   validateProvider(input.provider);
   if (input.provider === "ollama") {
+    const controller = scope ? registerAbortController(scope) : undefined;
     try {
       if (stream) {
-        return await invokeOllamaProviderStream(input, stream);
+        return await invokeOllamaProviderStream(input, stream, controller?.signal);
       }
       const response = await fetch("http://127.0.0.1:11434/api/generate", {
         method: "POST",
@@ -655,7 +662,8 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
           // below): top-level `images: [<base64>, ...]`. Ollama silently ignores
           // this on non-vision models, so it's safe to always include when present.
           ...(input.images && input.images.length > 0 ? { images: input.images.map((image) => image.data) } : {})
-        })
+        }),
+        signal: controller?.signal
       });
       if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}`);
       const payload = (await response.json()) as {
@@ -689,6 +697,10 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
         usage
       };
     } catch (error) {
+      // A Stop-button abort must surface as cancellation, never as a provider
+      // failure/placeholder — otherwise callStageWithFallback would treat it
+      // as "this model is unavailable" and rotate to the next one.
+      if (isAbortError(error)) throw cancellationError();
       const audit = await appendAudit("warning", "provider.invoke", `Ollama invocation failed for ${input.model}.`, {
         provider: input.provider,
         model: input.model,
@@ -701,6 +713,8 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
         source: "placeholder",
         auditId: audit.id
       };
+    } finally {
+      if (scope && controller) unregisterAbortController(scope, controller);
     }
   }
 
@@ -720,8 +734,9 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
     };
   }
 
+  const cloudController = scope ? registerAbortController(scope) : undefined;
   try {
-    const { text: output, usage: reportedUsage } = await invokeCloudProvider(input, secret);
+    const { text: output, usage: reportedUsage } = await invokeCloudProvider(input, secret, cloudController?.signal);
     const audit = await appendAudit("info", "provider.invoke", `Ran ${input.model} through ${providerInfo[input.provider].label}.`, {
       provider: input.provider,
       model: input.model,
@@ -736,6 +751,7 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
       usage: reportedUsage ?? estimateUsage(input.prompt.length, output.length)
     };
   } catch (error) {
+    if (isAbortError(error)) throw cancellationError();
     if (isQuotaError(error)) {
       const until = markProviderCooldown(input.provider, error);
       await appendAudit("warning", "provider.invoke.cooldown", `${providerInfo[input.provider].label} hit a quota/rate limit — cooling down for ${formatCooldownDuration(until)}.`, {
@@ -757,10 +773,12 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
       source: "placeholder",
       auditId: audit.id
     };
+  } finally {
+    if (scope && cloudController) unregisterAbortController(scope, cloudController);
   }
 }
 
-async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: SessionStreamController): Promise<ProviderInvokeResult> {
+async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: SessionStreamController, signal?: AbortSignal): Promise<ProviderInvokeResult> {
   const response = await fetch("http://127.0.0.1:11434/api/generate", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -769,7 +787,8 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
       prompt: input.prompt,
       stream: true,
       ...(input.images && input.images.length > 0 ? { images: input.images.map((image) => image.data) } : {})
-    })
+    }),
+    signal
   });
   if (!response.ok) throw new Error(`Ollama returned HTTP ${response.status}`);
   if (!response.body) throw new Error("Ollama did not return a readable stream.");
@@ -848,7 +867,7 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
   };
 }
 
-async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number } }> {
+async function invokeCloudProvider(input: ProviderInvokeInput, secret: string, signal?: AbortSignal): Promise<{ text: string; usage?: { inputTokens: number; outputTokens: number } }> {
   if (input.provider === "anthropic") {
     // Vision guard: build an image+text content-block message when images are
     // present; any formatting failure falls back to the plain text-only body
@@ -886,7 +905,8 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
         model: input.model,
         max_tokens: 6000,
         messages: anthropicMessages
-      })
+      }),
+      signal
     });
     const text = response.content?.map((part) => part.text).filter(Boolean).join("\n").trim() || "Anthropic returned an empty response.";
     const usage =
@@ -933,7 +953,8 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       body: JSON.stringify({
         model: input.model,
         input: openaiInput
-      })
+      }),
+      signal
     });
     const text =
       response.output_text?.trim() ||
@@ -969,7 +990,8 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         contents: [{ role: "user", parts: geminiParts }]
-      })
+      }),
+      signal
     });
     const text =
       response.candidates?.flatMap((candidate) => candidate.content?.parts ?? []).map((part) => part.text).filter(Boolean).join("\n").trim() ||
@@ -995,7 +1017,8 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       body: JSON.stringify({
         model,
         messages: [{ role: "user", content: input.prompt }]
-      })
+      }),
+      signal
     });
     const text = response.choices?.map((choice) => choice.message?.content).filter(Boolean).join("\n").trim() || "DeepSeek returned an empty response.";
     const usage =
@@ -1020,7 +1043,8 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       body: JSON.stringify({
         model: input.model === "auto" ? "openrouter/auto" : input.model,
         messages: [{ role: "user", content: input.prompt }]
-      })
+      }),
+      signal
     });
     const text = response.choices?.map((choice) => choice.message?.content).filter(Boolean).join("\n").trim() || "OpenRouter returned an empty response.";
     const usage =
@@ -1045,7 +1069,8 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       body: JSON.stringify({
         model: input.model,
         messages: [{ role: "user", content: input.prompt }]
-      })
+      }),
+      signal
     });
     const text = response.choices?.map((choice) => choice.message?.content).filter(Boolean).join("\n").trim() || "NVIDIA NIM returned an empty response.";
     const usage =
@@ -1068,7 +1093,8 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string): 
       body: JSON.stringify({
         model: input.model,
         messages: [{ role: "user", content: input.prompt }]
-      })
+      }),
+      signal
     });
     const text = response.choices?.map((choice) => choice.message?.content).filter(Boolean).join("\n").trim() || "Groq returned an empty response.";
     const usage =
@@ -1684,13 +1710,19 @@ async function readPackageInfo(root: string): Promise<{ scripts: string[]; depen
   }
 }
 
+// Bug L4a: the old framing ("Project snapshot:" followed by a plain data
+// dump) reads as an implicit instruction to describe the snapshot, so a
+// trivial "Test" message got answered with a project-structure narration
+// instead of a real reply. This is now framed explicitly as silent
+// background context — never the answer itself — while keeping the same
+// data available for turns that actually ask about the project.
 function snapshotPromptContext(snapshot?: ProjectSnapshot): string {
   if (!snapshot) return "";
   const scripts = snapshot.scripts.length ? snapshot.scripts.join(", ") : "none detected";
   const deps = snapshot.dependencies.length ? snapshot.dependencies.slice(0, 12).join(", ") : "none detected";
   const files = snapshot.files.slice(0, 30).map((file) => `${file.kind === "directory" ? "dir" : "file"}:${file.path}`).join("\n");
   return [
-    "Project snapshot:",
+    "This is silent background context about the user's selected project folder, for your reference only — never describe, summarise, list, or acknowledge this snapshot unless the user's message is actually asking about the project or its files. Answer the user's message directly first; only draw on these details when they help answer it.",
     `- Root: ${snapshot.rootName}`,
     `- Package manager: ${snapshot.packageManager ?? "unknown"}`,
     `- Scripts: ${scripts}`,
@@ -4266,6 +4298,23 @@ function shouldRunBuildPipeline(prompt: string, decision: RouteDecision, decisio
   return BUILD_TASK_TYPES.has(decision.task_type);
 }
 
+// Bug L4b: a trivial "Test"/"hi" turn was paying for a full project-snapshot
+// walk + knowledge-bank retrieval before the model ever saw the prompt — real
+// latency for a message that needed neither. This gate is deliberately
+// narrow: only task_type general_chat, only a short prompt, and only when the
+// prompt shows no build/edit/frontend intent, so a genuine question or build
+// request is never affected — those all fail at least one check below.
+const FAST_LANE_MAX_PROMPT_CHARS = 80;
+
+function isFastLaneEligible(prompt: string, decision: RouteDecision): boolean {
+  if (decision.task_type !== "general_chat") return false;
+  if (prompt.trim().length > FAST_LANE_MAX_PROMPT_CHARS) return false;
+  if (hasImperativeBuildIntent(prompt)) return false;
+  if (isEditIntent(prompt)) return false;
+  if (shouldRunFrontendTools(prompt, decision)) return false;
+  return true;
+}
+
 function shouldStreamRouteCeremony(prompt: string, decision: RouteDecision, includeProjectTools: boolean, projectCommandOperations: AgentOperation[]): boolean {
   if (includeProjectTools || projectCommandOperations.length > 0) return true;
   if (decision.task_type !== "general_chat") return true;
@@ -4393,7 +4442,7 @@ async function expandChainByRoutes(chain: StageModelRef[], primaryPreference?: P
  *  §26) — every model call becomes a visible card in the renderer's side-chat
  *  stack. Callers that don't have a stage identity handy (or no stream) can
  *  simply omit this and no events emit; it never affects control flow. */
-type StageCallContext = { stream?: SessionStreamController; stageId: string; stageLabel: string };
+type StageCallContext = { stream?: SessionStreamController; stageId: string; stageLabel: string; scope?: string };
 
 async function callStageWithFallback(
   rawChain: StageModelRef[],
@@ -4448,7 +4497,9 @@ async function callStageWithFallback(
       });
     }
     try {
-      const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt, images });
+      // Stage calls never stream (only the chat path does) — pass no stream
+      // here, same as before this change; only the cancel scope is new.
+      const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt, images }, undefined, callContext?.scope);
       if (result.source === "placeholder" || !result.output.trim()) {
         const note = `${stageModelLabel(ref)} unavailable${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
         notes.push(note);
@@ -4487,6 +4538,10 @@ async function callStageWithFallback(
       }
       return { ref, output: trimmedOutput, notes, failed: false };
     } catch (error) {
+      // A Stop-button abort must surface as cancellation, never as a provider
+      // failure: rethrow immediately so the fallback chain never rotates to
+      // the next model and repair/recovery never treats this as "try again".
+      if (isCancellationError(error)) throw error;
       if (isQuotaError(error)) {
         const until = markProviderCooldown(ref.provider, error);
         const note = `${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${next ? ` — rotated to ${stageModelLabel(next)}.` : "."}`;
@@ -4543,11 +4598,12 @@ const CRITIC_PASS_LIMIT = 4;
 type CriticVerdict = { done: boolean; missing: string[] };
 
 /** Calls the local model with a tight completeness-judging template and
- *  parses its verdict defensively. Never throws: any failure to reach the
- *  model or to parse its reply returns null, which callers treat as "skip
- *  critique" — the critic must never be able to turn a working stage into a
- *  failed one. */
-async function critiqueStageOutput(stageLabel: string, stagePrompt: string, output: string): Promise<CriticVerdict | null> {
+ *  parses its verdict defensively. Never throws for an ordinary failure: any
+ *  failure to reach the model or to parse its reply returns null, which
+ *  callers treat as "skip critique" — the critic must never be able to turn a
+ *  working stage into a failed one. The one exception is a Stop-button
+ *  cancellation, which rethrows so it isn't silently swallowed into "skip". */
+async function critiqueStageOutput(stageLabel: string, stagePrompt: string, output: string, scope?: string): Promise<CriticVerdict | null> {
   try {
     const taskSummary = stagePrompt.slice(0, 1500);
     const cappedOutput = output.slice(0, 6000);
@@ -4566,7 +4622,7 @@ Answer with ONLY JSON, nothing else, in this exact shape:
 
 If it is complete, "missing" should be an empty array.`;
     const ref = localStageRef();
-    const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt: criticPrompt });
+    const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt: criticPrompt }, undefined, scope);
     if (result.source === "placeholder" || !result.output.trim()) return null;
     const cleaned = stripThinkBlocks(result.output);
     const match = cleaned.match(/\{[\s\S]*\}/);
@@ -4575,7 +4631,8 @@ If it is complete, "missing" should be an empty array.`;
     if (typeof parsed.done !== "boolean") return null;
     const missing = Array.isArray(parsed.missing) ? parsed.missing.filter((item): item is string => typeof item === "string") : [];
     return { done: parsed.done, missing };
-  } catch {
+  } catch (error) {
+    if (isCancellationError(error)) throw error;
     return null;
   }
 }
@@ -4604,6 +4661,7 @@ async function runCriticLoop(args: {
   gatewayPreference?: ProviderKey[];
   stageId?: string;
   images?: ProviderImageInput[];
+  scope?: string;
 }): Promise<{ output: string; criticPasses: number }> {
   const isLocalStage = args.ref.provider === "ollama";
   if (!(await shouldSelfVerifyStage(args.ref))) return { output: args.output, criticPasses: 0 };
@@ -4614,7 +4672,7 @@ async function runCriticLoop(args: {
   let passes = 0;
 
   for (let i = 0; i < passLimit; i++) {
-    const verdict = await critiqueStageOutput(args.stageLabel, args.stagePrompt, currentOutput);
+    const verdict = await critiqueStageOutput(args.stageLabel, args.stagePrompt, currentOutput, args.scope);
     if (verdict === null) break; // Unparseable/unreachable critic — skip, never block.
     if (verdict.done) break; // Silence when it passes first try — no timeline noise.
 
@@ -4630,7 +4688,7 @@ async function runCriticLoop(args: {
       args.chain,
       continuationPrompt,
       args.gatewayPreference,
-      args.stageId ? { stream: args.stream, stageId: args.stageId, stageLabel: args.stageLabel } : undefined,
+      args.stageId ? { stream: args.stream, stageId: args.stageId, stageLabel: args.stageLabel, scope: args.scope } : undefined,
       args.images
     );
     if (!attempt.failed && attempt.output.trim()) {
@@ -4689,12 +4747,75 @@ function directiveRequestsSeedReroll(text: string): boolean {
 }
 
 // --- Run cancellation (stop button) ---
-// Scoped like the directive bus: projectPath or "global". Checked at stage /
-// repair / recovery boundaries — an in-flight provider call finishes first.
+// Scoped like the directive bus: projectPath or "global". Historically only
+// checked at stage / repair / recovery boundaries (an in-flight provider call
+// ran to completion first). Now backed by a live AbortController registry
+// (below) so a cancel also kills any in-flight fetch immediately instead of
+// waiting for the next boundary check.
 const cancelledScopes = new Set<string>();
 
+// The exact message every cancellation path throws — throwIfCancelled below,
+// and the AbortError guard inside invokeProvider/callStageWithFallback — so
+// every existing catch site (renderer included) treats them identically.
+const CANCELLATION_MESSAGE = "Stopped by user.";
+
+function cancellationError(): Error {
+  return new Error(CANCELLATION_MESSAGE);
+}
+
+function isCancellationError(error: unknown): boolean {
+  return error instanceof Error && error.message === CANCELLATION_MESSAGE;
+}
+
+/** True for a fetch aborted via AbortController#abort() — both the standard
+ *  DOMException the platform throws and any polyfill that only sets `.name`. */
+function isAbortError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && (error as { name?: unknown }).name === "AbortError");
+}
+
+// Live AbortControllers keyed by the same scope as cancelledScopes, so a
+// cancel can reach into every in-flight provider fetch registered under that
+// scope (chat-path invoke, build-pipeline stage calls, repair/recovery/critic
+// calls — anywhere invokeProvider is given a scope) and abort it directly.
+const liveAbortControllers = new Map<string, Set<AbortController>>();
+
+function registerAbortController(scope: string): AbortController {
+  const controller = new AbortController();
+  let set = liveAbortControllers.get(scope);
+  if (!set) {
+    set = new Set();
+    liveAbortControllers.set(scope, set);
+  }
+  set.add(controller);
+  return controller;
+}
+
+function unregisterAbortController(scope: string, controller: AbortController): void {
+  const set = liveAbortControllers.get(scope);
+  if (!set) return;
+  set.delete(controller);
+  if (set.size === 0) liveAbortControllers.delete(scope);
+}
+
+function abortLiveCalls(scope: string): void {
+  const set = liveAbortControllers.get(scope);
+  if (!set || set.size === 0) return;
+  for (const controller of set) {
+    try {
+      controller.abort();
+    } catch {
+      // Already settled/aborted — nothing to do.
+    }
+  }
+  liveAbortControllers.delete(scope);
+}
+
 function requestSessionCancel(projectPath?: string): void {
-  cancelledScopes.add(directiveScopeKey(projectPath));
+  const scope = directiveScopeKey(projectPath);
+  cancelledScopes.add(scope);
+  // Real abort, not just a flag: kill every live fetch registered under this
+  // scope right now, instead of waiting for the next stage/repair boundary.
+  abortLiveCalls(scope);
 }
 
 function clearSessionCancel(projectPath?: string): void {
@@ -4705,7 +4826,7 @@ function throwIfCancelled(projectPath?: string): void {
   const scope = directiveScopeKey(projectPath);
   if (cancelledScopes.has(scope)) {
     cancelledScopes.delete(scope);
-    throw new Error("Stopped by user.");
+    throw cancellationError();
   }
 }
 
@@ -4762,6 +4883,10 @@ async function runOrchestratedStages(
 ): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed }> {
   const metisBlock = metisFilePromptBlock(metisFile ?? null);
   const singleFile = wantsSingleFileFrontend(prompt);
+  // Same scope key the Stop button cancels by (directiveScopeKey(projectPath))
+  // — every stage/critic call below registers its AbortController under this
+  // key so a cancel reaches every live call this run has in flight.
+  const scope = directiveScopeKey(projectPath);
   const { stages, source: stageSource } = await resolveAgenticStages(prompt, override);
   const results: OrchestrationStage[] = [];
   const steeringLog: string[] = [];
@@ -4855,7 +4980,7 @@ async function runOrchestratedStages(
     } else {
       emitTimeline(stream, timelineText("Checking whether the build needs functionality or support files."));
     }
-    const stageCallContext: StageCallContext = { stream, stageId: stage.id, stageLabel: stage.label };
+    const stageCallContext: StageCallContext = { stream, stageId: stage.id, stageLabel: stage.label, scope };
     let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.gatewayPreference, stageCallContext, stageImages);
     // Scan for an AskUserQuestion tag; if present, pause for an answer, strip
     // the tag, append the answer to the stage prompt, and re-run once.
@@ -4893,7 +5018,8 @@ async function runOrchestratedStages(
         stream,
         gatewayPreference: stage.gatewayPreference,
         stageId: stage.id,
-        images: stageImages
+        images: stageImages,
+        scope
       });
       cleanOutput = criticResult.output;
       criticPasses = criticResult.criticPasses;
@@ -5074,6 +5200,7 @@ async function runRepairPasses(args: {
   stages: OrchestrationStage[];
   stream?: SessionStreamController;
   metisFile?: { content: string; chars: number } | null;
+  scope?: string;
 }): Promise<{ projectResult: ProjectToolResult; files: GeneratedFile[]; repairCount: number }> {
   let projectResult = args.projectResult;
   let files = args.files;
@@ -5090,7 +5217,8 @@ async function runRepairPasses(args: {
     const attempt = await callStageWithFallback(repairChainFor(args.override), repairPrompt, undefined, {
       stream: args.stream,
       stageId: repairStageId,
-      stageLabel: `Repair pass ${repairCount}`
+      stageLabel: `Repair pass ${repairCount}`,
+      scope: args.scope
     });
     const repairThoughts = splitThinkTaggedOutput(attempt.output).thoughts;
     const repairCleanOutput = stripThinkBlocks(attempt.output);
@@ -5157,6 +5285,7 @@ async function runExtractionRecovery(args: {
   override?: SessionModelOverride;
   stream?: SessionStreamController;
   metisFile?: { content: string; chars: number } | null;
+  scope?: string;
 }): Promise<GeneratedFile[]> {
   // Graph-driven stages (docs/FABLE_PLANS.md section 25) keep the graph
   // node's own id, not "plan"/"frontend" — fall back to position (stage 0 is
@@ -5180,7 +5309,8 @@ async function runExtractionRecovery(args: {
     const attempt = await callStageWithFallback(chain, recoveryPrompt, undefined, {
       stream: args.stream,
       stageId: recoveryStageId,
-      stageLabel: recoveryStageLabel
+      stageLabel: recoveryStageLabel,
+      scope: args.scope
     });
     const thoughts = splitThinkTaggedOutput(attempt.output).thoughts;
     let cleanOutput = stripThinkBlocks(attempt.output);
@@ -5188,7 +5318,7 @@ async function runExtractionRecovery(args: {
     // entirely if the critic is unreachable/unparseable or self-verify is off.
     let criticPasses = 0;
     if (!attempt.failed && cleanOutput.trim() && (await shouldSelfVerifyStage(attempt.ref))) {
-      const verdict = await critiqueStageOutput(`File recovery ${attemptNumber}`, recoveryPrompt, cleanOutput);
+      const verdict = await critiqueStageOutput(`File recovery ${attemptNumber}`, recoveryPrompt, cleanOutput, args.scope);
       if (verdict && !verdict.done) {
         criticPasses = 1;
         const firstMissing = (verdict.missing[0] ?? "the rest of the files").trim();
@@ -5198,7 +5328,8 @@ async function runExtractionRecovery(args: {
         const retryAttempt = await callStageWithFallback(chain, continuationPrompt, undefined, {
           stream: args.stream,
           stageId: recoveryStageId,
-          stageLabel: recoveryStageLabel
+          stageLabel: recoveryStageLabel,
+          scope: args.scope
         });
         if (!retryAttempt.failed && retryAttempt.output.trim()) {
           cleanOutput = stripThinkBlocks(retryAttempt.output);
@@ -5243,9 +5374,13 @@ async function runExtractionRecovery(args: {
 }
 
 async function runSession(input: SessionRunInput, stream?: SessionStreamController): Promise<SessionRun> {
+  const runStart = Date.now();
   const originalPrompt = input.prompt.trim();
   if (!originalPrompt) throw new Error("Session run requires a prompt.");
   clearSessionCancel(input.projectPath);
+  // Same key requestSessionCancel/abortLiveCalls use — threaded down to every
+  // provider invoke this run makes so a Stop click can abort them directly.
+  const cancelScope = directiveScopeKey(input.projectPath);
 
   // "/orchestration" (or "/orch") as the leading token is an explicit manual
   // command to run the build pipeline — it bypasses task-type inference
@@ -5299,10 +5434,12 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const createdAt = new Date().toISOString();
   const conversationId = input.conversationId ?? randomUUID();
   const promptHash = sha256(prompt);
+  const policyStart = Date.now();
   const decision = await decidePolicy({
     prompt,
     preset: input.preset
   });
+  const policyMs = Date.now() - policyStart;
   const previousRun = isAttributionQuestion(prompt) ? await previousConversationRun(input.conversationId) : null;
   const routeContext = shouldReusePreviousPipeline(prompt) ? await previousConversationTaskType(input.conversationId) : null;
   const routeLabel = routeLabelFromPrompt(prompt) ?? (shouldReusePreviousPipeline(prompt) ? await previousConversationRouteLabel(input.conversationId) : undefined);
@@ -5430,7 +5567,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         editPrompt += attachmentNoteFor(images.length);
       }
       // Stage id "frontend" keeps extraction recovery's existing output lookup working.
-      const editCallContext: StageCallContext = { stream, stageId: "frontend", stageLabel: "Edit existing project" };
+      const editCallContext: StageCallContext = { stream, stageId: "frontend", stageLabel: "Edit existing project", scope: cancelScope };
       const attempt = await callStageWithFallback(editConfig.chain, editPrompt, editConfig.gatewayPreference, editCallContext, images.length > 0 ? images : undefined);
       const cleanOutput = stripThinkBlocks(attempt.output);
       const editStage: OrchestrationStage = {
@@ -5477,7 +5614,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     // again, explicitly, before conceding nothing was written.
     if (files.length === 0) {
       throwIfCancelled(input.projectPath);
-      files = await runExtractionRecovery({ prompt, stages, override: input.modelOverride, stream, metisFile });
+      files = await runExtractionRecovery({ prompt, stages, override: input.modelOverride, stream, metisFile, scope: cancelScope });
     }
     if (files.length > 0) {
       const gate = await gatePermission({
@@ -5509,7 +5646,8 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         override: input.modelOverride,
         stages,
         stream,
-        metisFile
+        metisFile,
+        scope: cancelScope
       });
       projectResult = repaired.projectResult;
       repairCount = repaired.repairCount;
@@ -5627,7 +5765,14 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const model = override ? resolveOverrideModel(override) : route.model ?? providerInfo[provider].defaultModel ?? "auto";
   const effectiveRouteLabel = override ? overrideDisplayLabel(override) : routeLabel;
   const writableWorkspace = await resolveWritableProjectWorkspace(input.projectPath);
-  const projectSnapshot = writableWorkspace ? await buildProjectSnapshot(writableWorkspace.path) : undefined;
+  // Fast lane (bug L4b): a short, plain general_chat turn ("Test", "hi") skips
+  // the project-snapshot walk and knowledge-bank retrieval below — both add
+  // real tokens/latency that a trivial turn never needed. Route ceremony,
+  // METIS.md, and everything else stays exactly as before.
+  const fastLane = isFastLaneEligible(prompt, effectiveDecision);
+  const snapshotStart = Date.now();
+  const projectSnapshot = !fastLane && writableWorkspace ? await buildProjectSnapshot(writableWorkspace.path) : undefined;
+  const snapshotMs = Date.now() - snapshotStart;
   const metisFile = await loadProjectMetisFile(writableWorkspace?.path ?? input.projectPath);
   const metisOperations: AgentOperation[] = [];
   if (metisFile) {
@@ -5659,7 +5804,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const chatDesignSeed = includeProjectTools ? pickDesignSeed(prompt) : undefined;
   if (chatDesignSeed) emitTimeline(stream, timelineText(designSeedTimelineText(chatDesignSeed)));
   const chatConversationContext = await recentConversationContext(input.conversationId);
-  const chatKnowledge = await retrieveKnowledgeForPrompt(writableWorkspace?.path, prompt);
+  const knowledgeStart = Date.now();
+  const chatKnowledge = fastLane ? null : await retrieveKnowledgeForPrompt(writableWorkspace?.path, prompt);
+  const knowledgeMs = Date.now() - knowledgeStart;
   if (chatKnowledge) {
     metisOperations.push(chatKnowledge.operation);
     emitStream(stream, { kind: "operation", operation: chatKnowledge.operation });
@@ -5672,9 +5819,14 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const chatImages = images.length > 0 ? images : undefined;
   const overrideWarnings: string[] = [];
   let providerResult: ProviderInvokeResult;
+  const providerStart = Date.now();
   try {
-    providerResult = await invokeProvider({ provider, model, prompt: sessionPrompt, images: chatImages }, stream);
+    providerResult = await invokeProvider({ provider, model, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
   } catch (error) {
+    // A Stop-button cancellation must end the run immediately — never trigger
+    // the pinned-model fallback below, which would otherwise treat an abort
+    // as "this model failed" and quietly retry against the default model.
+    if (isCancellationError(error)) throw error;
     if (!override) throw error;
     // A pinned model can be a hand-typed custom entry — fall back to the provider default instead of failing the run.
     const fallbackModel = providerInfo[provider].defaultModel ?? "auto";
@@ -5682,8 +5834,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       `Failed to call ${overrideDisplayLabel(override)} (${error instanceof Error ? error.message : String(error)}), falling back to ${providerInfo[provider].label} (${fallbackModel}).`
     );
     emitTimeline(stream, timelineText(`Couldn’t reach ${overrideDisplayLabel(override)} — falling back to ${providerInfo[provider].label} (${fallbackModel}).`));
-    providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt, images: chatImages }, stream);
+    providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
   }
+  const providerMs = Date.now() - providerStart;
   if (showRouteCeremony) emitTimeline(stream, timelineText("The selected model responded. I’m recording the trace and any follow-up project tools."));
   steps[2] = completeStep(steps[2], providerResult.auditId);
 
@@ -5811,6 +5964,22 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   if (permissionMode === "plan" && projectToolsIndex >= 0) {
     run.assistantText = `${run.assistantText}\n\nPlan mode — nothing was written. Switch to Auto and rerun to build it.`;
   }
+
+  // Bug L4b instrumentation: surface where a chat turn's time actually went
+  // (policy route, snapshot build, knowledge retrieval, provider invoke) so a
+  // slow turn is visible in the audit trail instead of just "it took a while".
+  const totalMs = Date.now() - runStart;
+  await appendAudit("info", "session.timing", `Chat turn timing — policy ${policyMs}ms, snapshot ${snapshotMs}ms, knowledge ${knowledgeMs}ms, provider ${providerMs}ms, total ${totalMs}ms.`, {
+    policyMs,
+    snapshotMs,
+    knowledgeMs,
+    providerMs,
+    totalMs,
+    fastLane,
+    task_type: effectiveDecision.task_type,
+    provider,
+    model
+  });
 
   await appendRunToConversation(run, prompt);
   await writeSessionRun(run);
