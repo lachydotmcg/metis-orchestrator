@@ -44,6 +44,11 @@ export interface PermissionGrant {
   projectPath?: string;
   note?: string;
   grantedAt: string;
+  /** Package id that requested this grant via installPackage, if any. Grants
+   *  predating this field (or created outside package install) omit it; such
+   *  legacy grants are matched for uninstall purposes by parsing the note's
+   *  `Requested by package "<name>" (<id>).` pattern instead. */
+  sourcePackageId?: string;
 }
 
 export interface PermissionRequest {
@@ -51,6 +56,7 @@ export interface PermissionRequest {
   target: string;
   projectPath?: string;
   note?: string;
+  sourcePackageId?: string;
 }
 
 /** Five-mode permission system (docs/FABLE_PLANS.md section 24), replacing the

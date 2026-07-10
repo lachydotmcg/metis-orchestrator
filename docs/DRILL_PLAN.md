@@ -65,7 +65,7 @@
   the Marketplace. No giant package dump inside General.
 - [ ] **L22 — Audit trail gets its own Settings section** (move it out of General; keep a
   small link from General).
-- [ ] **L20 — Uninstalling a package must revoke the scoped grants it requested.**
+- [x] **L20 — Uninstalling a package must revoke the scoped grants it requested.**
   installPackage calls requestPermission per scope; uninstallPackage must remove/revoke
   those grants (match by the package-note or store grant ids per package id).
 

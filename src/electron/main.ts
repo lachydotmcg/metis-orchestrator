@@ -1253,6 +1253,7 @@ async function requestPermission(request: PermissionRequest): Promise<Permission
     target: request.target,
     projectPath: request.projectPath,
     note: request.note,
+    sourcePackageId: request.sourcePackageId,
     grantedAt: new Date().toISOString()
   };
   await writeStoreValue("permissions", [...current, grant]);
@@ -1855,7 +1856,12 @@ async function installPackage(id: string): Promise<RegistryPackage[]> {
   }
 
   for (const scope of target.permissions_requested) {
-    await requestPermission({ scope, target: target.name, note: `Requested by package "${target.name}" (${target.id}).` });
+    await requestPermission({
+      scope,
+      target: target.name,
+      note: `Requested by package "${target.name}" (${target.id}).`,
+      sourcePackageId: target.id
+    });
   }
 
   const installed = await listInstalledPackages();
@@ -1876,6 +1882,16 @@ async function installPackage(id: string): Promise<RegistryPackage[]> {
   return next;
 }
 
+/** Extracts the package id from the legacy note format written by
+ *  installPackage before grants carried `sourcePackageId`:
+ *  `Requested by package "<name>" (<id>).` Returns undefined for
+ *  user-created or otherwise non-package grants. */
+function grantSourcePackageId(grant: PermissionGrant): string | undefined {
+  if (grant.sourcePackageId) return grant.sourcePackageId;
+  const match = grant.note?.match(/^Requested by package ".*" \((.+)\)\.$/);
+  return match ? match[1] : undefined;
+}
+
 async function uninstallPackage(id: string): Promise<RegistryPackage[]> {
   const installed = await listInstalledPackages();
   const target = installed.find((item) => item.id === id);
@@ -1888,6 +1904,36 @@ async function uninstallPackage(id: string): Promise<RegistryPackage[]> {
   }
   const next = installed.filter((item) => item.id !== id);
   await writeStoreValue("installedPackages", next);
+
+  // Revoke package-originated permission grants for scopes this package
+  // requested, once no remaining installed package still needs them. The
+  // dedupe in requestPermission means a shared scope's single grant stays
+  // tagged with whichever package installed first, so the departing LAST
+  // requester takes the grant with it even if it isn't the tagged owner —
+  // provided that tagged owner is itself no longer installed.
+  if (target) {
+    const requestedScopes = new Set(target.permissions_requested);
+    const remainingScopes = new Set(next.flatMap((pkg) => pkg.permissions_requested));
+    const remainingIds = new Set(next.map((pkg) => pkg.id));
+    const grants = await listPermissions();
+    const revokable = grants.filter((grant) => {
+      const source = grantSourcePackageId(grant);
+      if (!source) return false; // user-created / non-package grant: never touch
+      if (!requestedScopes.has(grant.scope)) return false; // this package never requested it
+      if (remainingScopes.has(grant.scope)) return false; // another installed package still needs it
+      return source === id || !remainingIds.has(source); // tagged owner is us, or already gone
+    });
+    for (const grant of revokable) {
+      await revokePermission(grant.id);
+    }
+    if (revokable.length > 0) {
+      await appendAudit("info", "registry.uninstall.revoked", `Revoked ${revokable.length} permission grant(s) from ${target.name}.`, {
+        id,
+        scopes: revokable.map((grant) => grant.scope)
+      });
+    }
+  }
+
   await appendAudit("info", "registry.uninstall", `Uninstalled ${id}.`, { id });
   return next;
 }
