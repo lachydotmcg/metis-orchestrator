@@ -49,6 +49,8 @@ import type {
   OllamaPullProgress,
   McpProbeResult,
   McpTool,
+  ImportedImage,
+  ImageImportResult,
   PulseFeed,
   RegistryPackage,
   RegistryPackageKind,
@@ -7393,6 +7395,149 @@ async function listStyleCards(): Promise<StyleCard[]> {
   return Object.values(await readStyleCards());
 }
 
+// Hard cap on how many URLs a single import call will attempt — keeps a
+// pasted list (or a Pinterest board's worth of scraped links) from turning
+// into an unbounded fetch storm.
+const IMAGE_IMPORT_MAX_URLS = 20;
+// Long-edge cap for imported images, matching the gallery's existing
+// downscale-on-ingest behavior (see downscaleForStyleCardStorage).
+const IMAGE_IMPORT_MAX_EDGE = 1024;
+// Per-fetch timeout so one slow/hanging host can't stall the whole batch.
+const IMAGE_IMPORT_FETCH_TIMEOUT_MS = 12000;
+
+/** Fetches one URL and, if it's an image, downscales + re-encodes it to a
+ *  JPEG data URL via the same nativeImage pipeline used elsewhere for gallery
+ *  images (see decodeImageForPalette / downscaleForStyleCardStorage). Returns
+ *  null for anything that isn't a fetchable image — callers treat that as a
+ *  skip, never a fatal error. */
+async function fetchAndDownscaleImage(url: string): Promise<ImportedImage | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), IMAGE_IMPORT_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, { signal: controller.signal, headers: { accept: "image/*" } });
+    if (!response.ok) return null;
+    const contentType = response.headers.get("content-type") ?? "";
+    if (!contentType.startsWith("image/")) return null;
+    const arrayBuffer = await response.arrayBuffer();
+    if (arrayBuffer.byteLength === 0) return null;
+    const buffer = Buffer.from(arrayBuffer);
+    let image = nativeImage.createFromBuffer(buffer);
+    if (image.isEmpty()) return null;
+    const size = image.getSize();
+    const longestEdge = Math.max(size.width, size.height);
+    if (longestEdge > IMAGE_IMPORT_MAX_EDGE) {
+      image = image.resize(
+        size.width >= size.height ? { width: IMAGE_IMPORT_MAX_EDGE } : { height: IMAGE_IMPORT_MAX_EDGE }
+      );
+    }
+    const jpegBase64 = image.toJPEG(82).toString("base64");
+    if (!jpegBase64) return null;
+    return { src: `data:image/jpeg;base64,${jpegBase64}`, mimeType: "image/jpeg", sourceUrl: url };
+  } catch {
+    // Network error, abort/timeout, or unsupported/corrupt image bytes — skip, never throw.
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Imports a batch of direct image URLs (drag-and-drop-of-links fallback for
+ *  the gallery, docs/DRILL_PLAN.md Phase 2 L15). Never throws: per-URL
+ *  failures are silently skipped, and non-image links are counted into
+ *  `note` rather than treated as errors, since a mixed paste (some image
+ *  links, some page links) is the expected common case. */
+async function importImagesFromUrls(urls: string[]): Promise<ImageImportResult> {
+  try {
+    const candidates = Array.from(new Set(urls.map((url) => url.trim()).filter(Boolean))).slice(0, IMAGE_IMPORT_MAX_URLS);
+    if (candidates.length === 0) {
+      return { ok: false, images: [], error: "No URLs provided." };
+    }
+    const images: ImportedImage[] = [];
+    let skipped = 0;
+    for (const url of candidates) {
+      const imported = await fetchAndDownscaleImage(url);
+      if (imported) images.push(imported);
+      else skipped += 1;
+    }
+    const note = skipped > 0 ? `${skipped} link${skipped === 1 ? "" : "s"} were not usable images and were skipped.` : undefined;
+    await appendAudit(images.length > 0 ? "info" : "warning", "gallery.import-urls", `Imported ${images.length} image(s) from ${candidates.length} URL(s).`, {
+      requested: candidates.length,
+      imported: images.length,
+      skipped
+    });
+    return { ok: images.length > 0, images, note, error: images.length === 0 ? "None of the provided URLs resolved to a usable image." : undefined };
+  } catch (error) {
+    return { ok: false, images: [], error: error instanceof Error ? error.message : "Image import failed." };
+  }
+}
+
+/** Best-effort extraction of Pinterest CDN image URLs out of a board page's
+ *  raw HTML. Pinterest boards are a JS-rendered SPA — the server-sent HTML
+ *  usually does not contain the pin grid at all, so this deliberately does
+ *  NOT try to be a real scraper (headless rendering, pagination, auth). It
+ *  just regexes for any i.pinimg.com URLs that happen to be present in the
+ *  initial payload (e.g. inlined JSON/meta tags) and prefers higher-res
+ *  variants when both are found for the same pin. */
+function extractPinterestImageUrls(html: string): string[] {
+  const matches = html.match(/https:\/\/i\.pinimg\.com\/[^\s"'\\]+\.(?:jpg|jpeg|png|webp)/gi) ?? [];
+  const upgraded = matches.map((url) => url.replace(/\/\d+x(?:\d+)?\//, "/736x/"));
+  return Array.from(new Set(upgraded));
+}
+
+/** Best-effort Pinterest board import (docs/DRILL_PLAN.md Phase 2, L15).
+ *  Pinterest has no public unauthenticated API for board contents, and its
+ *  board pages are a JavaScript-rendered SPA that a plain HTML fetch mostly
+ *  can't see into, plus active anti-scraping/rate-limiting — so this is
+ *  explicitly a best-effort attempt that degrades gracefully rather than a
+ *  reliable importer. On any failure or empty result it returns a clear
+ *  `ok: false` with guidance to use the URL-list import instead. Never throws. */
+async function importFromPinterestBoard(boardUrl: string): Promise<ImageImportResult> {
+  const fallbackNote = "Pinterest blocks scraping; paste direct image URLs or drag images in instead.";
+  try {
+    const trimmed = boardUrl.trim();
+    if (!trimmed) return { ok: false, images: [], error: "No board URL provided.", note: fallbackNote };
+    let parsed: URL;
+    try {
+      parsed = new URL(trimmed);
+    } catch {
+      return { ok: false, images: [], error: "That doesn't look like a valid URL.", note: fallbackNote };
+    }
+    if (!/(^|\.)pinterest\.[a-z.]+$/i.test(parsed.hostname)) {
+      return { ok: false, images: [], error: "That doesn't look like a Pinterest URL.", note: fallbackNote };
+    }
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), IMAGE_IMPORT_FETCH_TIMEOUT_MS);
+    let html = "";
+    try {
+      const response = await fetch(parsed.toString(), {
+        signal: controller.signal,
+        headers: { accept: "text/html", "user-agent": "Mozilla/5.0 (compatible; MetisOrchestrator/1.0)" }
+      });
+      if (response.ok) html = await response.text();
+    } catch {
+      html = "";
+    } finally {
+      clearTimeout(timeout);
+    }
+    const imageUrls = html ? extractPinterestImageUrls(html) : [];
+    if (imageUrls.length === 0) {
+      await appendAudit("warning", "gallery.import-pinterest", "Pinterest board import found no images (expected — SPA + anti-scraping).", { boardUrl: trimmed });
+      return { ok: false, images: [], error: "Pinterest did not return images", note: fallbackNote };
+    }
+    const result = await importImagesFromUrls(imageUrls);
+    if (result.images.length === 0) {
+      return { ok: false, images: [], error: "Pinterest did not return images", note: fallbackNote };
+    }
+    await appendAudit("info", "gallery.import-pinterest", `Imported ${result.images.length} image(s) from a Pinterest board (best effort).`, {
+      boardUrl: trimmed,
+      imported: result.images.length
+    });
+    return { ok: true, images: result.images, note: result.note };
+  } catch (error) {
+    return { ok: false, images: [], error: error instanceof Error ? error.message : "Pinterest import failed.", note: fallbackNote };
+  }
+}
+
 /** Force-regenerates the style card for one image (docs/FABLE_PLANS.md section 23c) —
  *  unlike analyzeGalleryBoard, this does not skip images that already have a card.
  *  User edits are overwritten by design: reanalysing is an explicit request. */
@@ -7626,6 +7771,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-gallery:update-card", (_event, imageId: string, boardId: string, patch: StoredStyleCardPatch) => updateStyleCard(imageId, boardId, patch));
   ipcMain.handle("metis-gallery:delete-card", (_event, imageId: string) => deleteStyleCard(imageId));
   ipcMain.handle("metis-gallery:analyze-image", (_event, boardId: string, imageId: string) => analyzeGalleryImage(boardId, imageId));
+  ipcMain.handle("metis-gallery:import-urls", (_event, urls: string[]) => importImagesFromUrls(Array.isArray(urls) ? urls : []));
+  ipcMain.handle("metis-gallery:import-pinterest", (_event, boardUrl: string) => importFromPinterestBoard(typeof boardUrl === "string" ? boardUrl : ""));
   await createWindow();
 
   // Warm the live registry, model catalog, and Pulse feed on launch so the

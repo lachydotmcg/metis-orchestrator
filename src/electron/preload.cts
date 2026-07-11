@@ -8,6 +8,7 @@ import type {
   MetisFileReadResult,
   MetisFileWriteResult,
   McpProbeResult,
+  ImageImportResult,
   OllamaPullProgress,
   PermissionRequest,
   PermissionVerdict,
@@ -169,5 +170,7 @@ contextBridge.exposeInMainWorld("metisGallery", {
   cards: () => ipcRenderer.invoke("metis-gallery:cards") as Promise<StyleCard[]>,
   updateCard: (imageId: string, boardId: string, patch: { title?: string; caption?: string; moodTags?: string[] }) =>
     ipcRenderer.invoke("metis-gallery:update-card", imageId, boardId, patch) as Promise<StyleCard>,
-  deleteCard: (imageId: string) => ipcRenderer.invoke("metis-gallery:delete-card", imageId) as Promise<void>
+  deleteCard: (imageId: string) => ipcRenderer.invoke("metis-gallery:delete-card", imageId) as Promise<void>,
+  importUrls: (urls: string[]) => ipcRenderer.invoke("metis-gallery:import-urls", urls) as Promise<ImageImportResult>,
+  importPinterest: (boardUrl: string) => ipcRenderer.invoke("metis-gallery:import-pinterest", boardUrl) as Promise<ImageImportResult>
 });

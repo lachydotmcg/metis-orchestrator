@@ -11,6 +11,7 @@ import type {
   MetisFileReadResult,
   MetisFileWriteResult,
   McpProbeResult,
+  ImageImportResult,
   ModelCatalogState,
   OllamaListResult,
   OllamaPullProgress,
@@ -156,6 +157,8 @@ declare global {
       cards: () => Promise<StyleCard[]>;
       updateCard: (imageId: string, boardId: string, patch: { title?: string; caption?: string; moodTags?: string[] }) => Promise<StyleCard>;
       deleteCard: (imageId: string) => Promise<void>;
+      importUrls: (urls: string[]) => Promise<ImageImportResult>;
+      importPinterest: (boardUrl: string) => Promise<ImageImportResult>;
     };
   }
 }

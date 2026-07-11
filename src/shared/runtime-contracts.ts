@@ -256,6 +256,28 @@ export interface StyleCard {
   imageMime?: string;
 }
 
+/** A single image pulled in via the gallery's URL/Pinterest import path
+ *  (docs/DRILL_PLAN.md Phase 2, L15). `src` is a downscaled JPEG data URL,
+ *  mirroring the storage format used elsewhere for gallery images so the
+ *  renderer's existing image-handling code can consume it unchanged. */
+export interface ImportedImage {
+  src: string;
+  mimeType: string;
+  sourceUrl: string;
+}
+
+/** Result of `metis-gallery:import-urls` / `metis-gallery:import-pinterest`.
+ *  Never throws over IPC — every failure path comes back as `{ ok: false, error }`
+ *  with `images: []`. `note` carries non-fatal context (e.g. how many of the
+ *  supplied links weren't images, or why a Pinterest board came back empty) so
+ *  the renderer can show it alongside a partial/empty result. */
+export interface ImageImportResult {
+  ok: boolean;
+  error?: string;
+  images: ImportedImage[];
+  note?: string;
+}
+
 /** A single tool a probed MCP server reported via `tools/list`
  *  (docs/DRILL_PLAN.md Phase 4, MCP client wiring phase 1). */
 export interface McpTool {
