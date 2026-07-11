@@ -20,7 +20,8 @@ import type {
   SessionStreamEvent,
   SessionRunInput,
   StyleCard,
-  UpdateCheckResult
+  UpdateCheckResult,
+  UserQuestionAnswer
 } from "../shared/runtime-contracts";
 
 contextBridge.exposeInMainWorld("metisPolicy", {
@@ -59,7 +60,9 @@ contextBridge.exposeInMainWorld("metisSession", {
   },
   list: () => ipcRenderer.invoke("metis-session:list"),
   cancel: (projectPath?: string) => ipcRenderer.send("metis-session:cancel", projectPath),
-  answerQuestion: (id: string, answer: string) => ipcRenderer.send("metis-session:answer-question", id, answer)
+  // Widened to accept string[] additively (DRILL_PLAN B2.3a multi-question
+  // form) — existing callers passing a single string are unaffected.
+  answerQuestion: (id: string, answer: UserQuestionAnswer) => ipcRenderer.send("metis-session:answer-question", id, answer)
 });
 
 contextBridge.exposeInMainWorld("metisBus", {

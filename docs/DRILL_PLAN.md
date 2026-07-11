@@ -32,6 +32,10 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   options, allowCustom?}[]` to UserQuestionRequest (keep `text`/`options` for the 1-question
   case). (b) RENDERER: a popup that rises from the chatbox showing up to 4 questions, option
   chips per question + a custom free-text answer each; collects all answers then resolves.
+  STATUS: (a) BACKEND DONE — UserQuestionRequest gains optional questions[] (cap 4, each with
+  options + allowCustom), extractAskUserTag parses both legacy + batched forms, answer round
+  trip widened to UserQuestionAnswer = string | string[], prompt injection documents the
+  batched tag. (b) RENDERER popup still to build (UserQuestionCard renders 1 question today).
 - [ ] **B2.4 — "Would you like to allow this action" as a real on-screen popup.** RENDERER.
   The PermissionRequestCard (Allow once / Always allow / Deny) already exists but renders
   INLINE in the chat. Elevate it to a prominent floating popup overlay (rising near the

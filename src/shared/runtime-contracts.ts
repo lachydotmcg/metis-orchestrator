@@ -110,12 +110,26 @@ export interface InRunPermissionRequest {
 export type PermissionVerdict = "allow" | "always" | "deny";
 
 /** AskUserQuestion payload (docs/FABLE_PLANS.md section 24) — a stage model
- *  emitted `<ask_user>...</ask_user>` for a genuinely blocking decision. */
+ *  emitted `<ask_user>...</ask_user>` for a genuinely blocking decision.
+ *  `text`/`options` are the original single-question form and stay populated
+ *  even when `questions` is present (mirroring the first entry), so a
+ *  renderer that only knows the single-question shape keeps working
+ *  unchanged. */
 export interface UserQuestionRequest {
   id: string;
   text: string;
   options: string[];
+  /** Multi-question form (docs/DRILL_PLAN.md B2.3a) — up to 4 questions in
+   *  one popup, each with its own option chips and an optional free-text
+   *  answer. Undefined for the plain single-question path. */
+  questions?: Array<{ text: string; options: string[]; allowCustom?: boolean }>;
 }
+
+/** Shape a renderer may resolve an AskUserQuestion with: a single string for
+ *  the legacy one-question form, or a string array aligned index-for-index
+ *  with `UserQuestionRequest.questions` for the multi-question form
+ *  (docs/DRILL_PLAN.md B2.3a). Existing single-answer callers are unaffected. */
+export type UserQuestionAnswer = string | string[];
 
 export interface ProjectWorkspace {
   path: string;

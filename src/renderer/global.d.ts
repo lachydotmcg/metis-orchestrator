@@ -40,7 +40,8 @@ import type {
   SessionStreamEvent,
   SecretStatus,
   StyleCard,
-  UpdateCheckResult
+  UpdateCheckResult,
+  UserQuestionAnswer
 } from "../shared/runtime-contracts";
 
 declare global {
@@ -68,7 +69,9 @@ declare global {
       runStream: (input: SessionRunInput, onEvent: (event: SessionStreamEvent) => void) => Promise<SessionRun>;
       list: () => Promise<SessionRun[]>;
       cancel: (projectPath?: string) => void;
-      answerQuestion: (id: string, answer: string) => void;
+      // Widened to accept string[] additively (DRILL_PLAN B2.3a multi-question
+      // popup follow-up) — passing a single string still works unchanged.
+      answerQuestion: (id: string, answer: UserQuestionAnswer) => void;
     };
     metisBus?: {
       post: (input: { projectPath?: string; conversationId?: string; text: string }) => Promise<SessionDirective>;

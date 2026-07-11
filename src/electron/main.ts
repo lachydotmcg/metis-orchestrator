@@ -70,6 +70,7 @@ import type {
   Routine,
   StyleCard,
   UserQuestionRequest,
+  UserQuestionAnswer,
   ManagerChatMessage,
   ManagerChatResult,
   ManagerAction,
@@ -1450,15 +1451,48 @@ function stripThinkBlocks(value: string): string {
   return value.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 }
 
+const MAX_ASK_USER_QUESTIONS = 4;
+
+/** Parsed `<ask_user>` payload. `question`/`options` are always populated
+ *  (from the first entry when the multi form was used) for back-compat with
+ *  the original single-question call sites; `questions`, when present, is
+ *  the multi-question form (docs/DRILL_PLAN.md B2.3a), capped at
+ *  MAX_ASK_USER_QUESTIONS entries. */
+interface ParsedAskUserTag {
+  question: string;
+  options: string[];
+  questions?: Array<{ text: string; options: string[]; allowCustom?: boolean }>;
+}
+
 /** AskUserQuestion tag scan (docs/FABLE_PLANS.md section 24): looks for
- *  `<ask_user>{"question":"...","options":[...]}</ask_user>` anywhere in a
- *  stage's raw output. Fails soft — malformed JSON just means no question was
- *  detected, so the stage output passes through unchanged. */
-function extractAskUserTag(value: string): { question: string; options: string[] } | null {
+ *  either the single-question form
+ *  `<ask_user>{"question":"...","options":[...]}</ask_user>` or the
+ *  multi-question form (docs/DRILL_PLAN.md B2.3a)
+ *  `<ask_user>{"questions":[{"question"|"text":"...","options":[...],"allowCustom":true}]}</ask_user>`
+ *  anywhere in a stage's raw output. Extra questions past
+ *  MAX_ASK_USER_QUESTIONS are ignored. Fails soft — malformed JSON or an
+ *  empty result just means no question was detected, so the stage output
+ *  passes through unchanged. */
+function extractAskUserTag(value: string): ParsedAskUserTag | null {
   const match = /<ask_user>([\s\S]*?)<\/ask_user>/i.exec(value);
   if (!match) return null;
   try {
-    const parsed = JSON.parse(match[1].trim()) as { question?: unknown; options?: unknown };
+    const parsed = JSON.parse(match[1].trim()) as { question?: unknown; options?: unknown; questions?: unknown };
+    if (Array.isArray(parsed.questions)) {
+      const coerced: Array<{ text: string; options: string[]; allowCustom?: boolean }> = [];
+      for (const raw of parsed.questions) {
+        if (coerced.length >= MAX_ASK_USER_QUESTIONS) break;
+        if (!raw || typeof raw !== "object") continue;
+        const item = raw as { question?: unknown; text?: unknown; options?: unknown; allowCustom?: unknown };
+        const text =
+          typeof item.text === "string" ? item.text.trim() : typeof item.question === "string" ? item.question.trim() : "";
+        if (!text) continue;
+        const options = Array.isArray(item.options) ? item.options.filter((o): o is string => typeof o === "string") : [];
+        coerced.push(typeof item.allowCustom === "boolean" ? { text, options, allowCustom: item.allowCustom } : { text, options });
+      }
+      if (coerced.length === 0) return null;
+      return { question: coerced[0].text, options: coerced[0].options, questions: coerced };
+    }
     const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
     if (!question) return null;
     const options = Array.isArray(parsed.options) ? parsed.options.filter((item): item is string => typeof item === "string") : [];
@@ -1526,35 +1560,52 @@ function respondToPermissionPrompt(id: string, verdict: PermissionVerdict): void
 }
 
 const PENDING_QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
-const pendingUserQuestions = new Map<string, (answer: string) => void>();
+// Resolver accepts a single string (legacy single-question answer) or a
+// string[] aligned with `questions` (multi-question form, docs/DRILL_PLAN.md
+// B2.3a). Widened additively — every existing single-answer caller still
+// resolves with a plain string and keeps working unchanged.
+const pendingUserQuestions = new Map<string, (answer: UserQuestionAnswer) => void>();
 
 /** Pauses awaiting a renderer answer to an AskUserQuestion tag; on timeout,
- *  picks the first option (or a generic default) and reports that it did so
- *  via the returned `timedOut` flag so the caller can add a timeline line. */
+ *  picks the first option for each question (or a generic default) and
+ *  reports that it did so via the returned `timedOut` flag so the caller can
+ *  add a timeline line. `questions`, when passed, drives the multi-question
+ *  form (docs/DRILL_PLAN.md B2.3a, cap 4) in addition to the legacy
+ *  `text`/`options` pair; `answers` in the result is always populated (a
+ *  single-element array for the legacy path) so callers can treat both
+ *  uniformly, while `answer` keeps returning just the first one for
+ *  back-compat. */
 async function promptUserQuestion(
   stream: SessionStreamController | undefined,
   text: string,
-  options: string[]
-): Promise<{ answer: string; timedOut: boolean }> {
+  options: string[],
+  questions?: Array<{ text: string; options: string[]; allowCustom?: boolean }>
+): Promise<{ answer: string; answers: string[]; timedOut: boolean }> {
   const fallbackAnswer = options[0] ?? "(no preference given — use your best judgement)";
-  if (!stream) return { answer: fallbackAnswer, timedOut: false };
+  const fallbackAnswers =
+    questions && questions.length > 0
+      ? questions.map((q) => q.options[0] ?? "(no preference given — use your best judgement)")
+      : [fallbackAnswer];
+  if (!stream) return { answer: fallbackAnswer, answers: fallbackAnswers, timedOut: false };
   const id = randomUUID();
-  const question: UserQuestionRequest = { id, text, options };
+  const question: UserQuestionRequest =
+    questions && questions.length > 0 ? { id, text, options, questions } : { id, text, options };
   emitStream(stream, { kind: "user_question", question });
   return new Promise((resolveAnswer) => {
     const timer = setTimeout(() => {
       pendingUserQuestions.delete(id);
-      resolveAnswer({ answer: fallbackAnswer, timedOut: true });
+      resolveAnswer({ answer: fallbackAnswer, answers: fallbackAnswers, timedOut: true });
     }, PENDING_QUESTION_TIMEOUT_MS);
     pendingUserQuestions.set(id, (answer) => {
       clearTimeout(timer);
       pendingUserQuestions.delete(id);
-      resolveAnswer({ answer, timedOut: false });
+      const answers = Array.isArray(answer) ? answer : [answer];
+      resolveAnswer({ answer: answers[0] ?? fallbackAnswer, answers, timedOut: false });
     });
   });
 }
 
-function respondToUserQuestion(id: string, answer: string): void {
+function respondToUserQuestion(id: string, answer: UserQuestionAnswer): void {
   const resolver = pendingUserQuestions.get(id);
   if (resolver) resolver(answer);
 }
@@ -6279,10 +6330,11 @@ async function runOrchestratedStages(
     if (stage.templateRole === "plan" || stage.templateRole === "frontend") {
       stagePrompt += `\n\n${designSeedPromptLine(seed, { explicitStyle, replacesPrevious: seedReplacesPrevious })}`;
     }
-    // AskUserQuestion (docs/FABLE_PLANS.md section 24): models MAY emit this
-    // tag ONCE per stage for a genuinely blocking decision — never for "what
-    // would you like to build", since the model remains the creative lead.
-    stagePrompt += `\n\nIf, and only if, a genuinely blocking decision needs the user's input (not a creative choice you can make yourself), you may emit ONE tag anywhere in your output: <ask_user>{"question":"...","options":["a","b"]}</ask_user>. Otherwise never emit this tag — decide tastefully yourself and proceed.`;
+    // AskUserQuestion (docs/FABLE_PLANS.md section 24; multi-question form
+    // docs/DRILL_PLAN.md B2.3a): models MAY emit ONE tag per stage for a
+    // genuinely blocking decision — never for "what would you like to
+    // build", since the model remains the creative lead.
+    stagePrompt += `\n\nIf, and only if, a genuinely blocking decision needs the user's input (not a creative choice you can make yourself), you may emit ONE tag anywhere in your output, either a single question: <ask_user>{"question":"...","options":["a","b"]}</ask_user> or, if you have up to 4 related blocking questions, a batch in one tag: <ask_user>{"questions":[{"question":"...","options":["a","b"],"allowCustom":true}]}</ask_user> (max 4 questions; "allowCustom" just hints that a free-text answer is welcome). Otherwise never emit this tag — decide tastefully yourself and proceed.`;
     if (stage.templateRole === "plan") {
       emitTimeline(stream, timelineText("Planning the build and checking the constraints."));
     } else if (stage.templateRole === "frontend") {
@@ -6292,15 +6344,27 @@ async function runOrchestratedStages(
     }
     const stageCallContext: StageCallContext = { stream, stageId: stage.id, stageLabel: stage.label, scope };
     let attempt = await callStageWithFallback(stage.chain, stagePrompt, stage.gatewayPreference, stageCallContext, stageImages);
-    // Scan for an AskUserQuestion tag; if present, pause for an answer, strip
-    // the tag, append the answer to the stage prompt, and re-run once.
+    // Scan for an AskUserQuestion tag; if present, pause for an answer (or up
+    // to 4 answers for the multi-question form), strip the tag, append the
+    // Q&A to the stage prompt, and re-run once.
     const askedQuestion = extractAskUserTag(attempt.output);
     if (askedQuestion) {
-      const { answer, timedOut } = await promptUserQuestion(stream, askedQuestion.question, askedQuestion.options);
+      const { answer, answers, timedOut } = await promptUserQuestion(
+        stream,
+        askedQuestion.question,
+        askedQuestion.options,
+        askedQuestion.questions
+      );
       if (timedOut) {
         emitTimeline(stream, timelineText(`No answer in time — I picked "${answer}" and kept going.`));
       }
-      const continuationPrompt = `${stagePrompt}\n\nYou previously asked: "${askedQuestion.question}"\nUser answered: ${answer}\n\nContinue with the full stage output now (do not ask again).`;
+      const qaText =
+        askedQuestion.questions && askedQuestion.questions.length > 0
+          ? askedQuestion.questions
+              .map((q, i) => `You previously asked: "${q.text}"\nUser answered: ${answers[i] ?? answer}`)
+              .join("\n\n")
+          : `You previously asked: "${askedQuestion.question}"\nUser answered: ${answer}`;
+      const continuationPrompt = `${stagePrompt}\n\n${qaText}\n\nContinue with the full stage output now (do not ask again).`;
       attempt = await callStageWithFallback(stage.chain, continuationPrompt, stage.gatewayPreference, stageCallContext, stageImages);
     }
     await appendAudit(attempt.failed ? "error" : "info", "session.stage", `Stage ${stage.label} via ${stageModelLabel(attempt.ref)}.`, {
@@ -8740,7 +8804,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-permissions:request", (_event, request: PermissionRequest) => requestPermission(request));
   ipcMain.handle("metis-permissions:revoke", (_event, id: string) => revokePermission(id));
   ipcMain.on("metis-permissions:respond", (_event, id: string, verdict: PermissionVerdict) => respondToPermissionPrompt(id, verdict));
-  ipcMain.on("metis-session:answer-question", (_event, id: string, answer: string) => respondToUserQuestion(id, answer));
+  ipcMain.on("metis-session:answer-question", (_event, id: string, answer: UserQuestionAnswer) => respondToUserQuestion(id, answer));
   ipcMain.handle("metis-audit:list", (_event, limit?: number) => listAudit(limit));
   ipcMain.handle("metis-providers:list", () => listProviders());
   ipcMain.handle("metis-providers:health-check", (_event, provider: ProviderKey) => healthCheckProvider(provider));
