@@ -3826,6 +3826,20 @@ function SessionComposer({
                       <small>Index a repo, memory folder, or assets</small>
                     </span>
                   </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      setResourceMenuOpen(false);
+                      fileInputRef.current?.click();
+                    }}
+                  >
+                    <ImagePlus size={15} />
+                    <span>
+                      <strong>Attach images</strong>
+                      <small>Add reference images to this message</small>
+                    </span>
+                  </button>
                 </div>
               </>
             ) : null}
@@ -8888,11 +8902,6 @@ function MarketplaceWorkspace(): JSX.Element {
                         ))}
                       </span>
                     ) : null}
-                    {item.permissions_requested.length ? (
-                      <small className="marketplace-card-permissions">
-                        <Shield size={11} /> {item.permissions_requested.join(", ")}
-                      </small>
-                    ) : null}
                     {error ? <small className="marketplace-card-error">{error}</small> : null}
                     <button
                       type="button"
@@ -10961,7 +10970,7 @@ function ManagerWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void })
  *  backing bridge (Profile, Configuration, Personalization, Browser, Computer
  *  use, Hooks, Git, Worktrees) were dropped; every section below renders real
  *  content wired to an existing store key or window bridge. */
-type SettingsSection = "general" | "providers" | "appearance" | "chat" | "mcp" | "privacy" | "about";
+type SettingsSection = "general" | "providers" | "appearance" | "chat" | "mcp" | "privacy" | "audit" | "about";
 
 const SETTINGS_NAV: Array<{ group: string; icon: JSX.Element; label: string; section: SettingsSection }> = [
   { group: "Personal", icon: <ShieldCheck size={15} />, label: "General", section: "general" },
@@ -10970,16 +10979,18 @@ const SETTINGS_NAV: Array<{ group: string; icon: JSX.Element; label: string; sec
   { group: "Integrations", icon: <Cable size={15} />, label: "Providers", section: "providers" },
   { group: "Integrations", icon: <Plug size={15} />, label: "MCP servers", section: "mcp" },
   { group: "System", icon: <Shield size={15} />, label: "Privacy & Data", section: "privacy" },
+  { group: "System", icon: <ScrollText size={15} />, label: "Audit", section: "audit" },
   { group: "System", icon: <HelpCircle size={15} />, label: "About", section: "about" }
 ];
 
 const SETTINGS_SECTION_META: Record<SettingsSection, { subtitle: string; title: string }> = {
-  general: { title: "General", subtitle: "Runtime defaults, policy bridge, permissions, marketplace registry, and audit trail." },
+  general: { title: "General", subtitle: "Runtime defaults, policy bridge, permissions, and marketplace registry." },
   providers: { title: "Providers", subtitle: "Provider-level API keys and health checks used by every route." },
   appearance: { title: "Appearance", subtitle: "Accent color, density, and text size — applied app-wide, not just here." },
   chat: { title: "Chat", subtitle: "Route ceremony verbosity, streaming, and self-verification for new runs." },
   mcp: { title: "MCP servers", subtitle: "Installed Model Context Protocol connections available to routes." },
   privacy: { title: "Privacy & Data", subtitle: "What gets stored locally, audit retention, and data controls." },
+  audit: { title: "Audit", subtitle: "Recent events emitted by the policy bridge, permissions, and marketplace actions." },
   about: { title: "About", subtitle: "App version, update check, and project links." }
 };
 
@@ -11317,7 +11328,6 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
               <small>Marketplace registry</small>
               <h2>{registry.status}</h2>
             </span>
-            <span className="status-pill">{registry.packages.length} packages</span>
           </header>
           <label className="settings-field wide">
             <span>Static manifest URL</span>
@@ -11330,60 +11340,9 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
             </button>
           </div>
           {registry.error ? <p className="settings-warning">{registry.error}</p> : null}
-          <div className="registry-list">
-            {registry.packages.map((item) => {
-              const installed = installedIds.has(item.id);
-              return (
-                <div className="registry-row registry-row-detailed" key={item.id}>
-                  {item.ascii_art?.length ? (
-                    <pre className="registry-ascii" aria-hidden="true">{item.ascii_art.join("\n")}</pre>
-                  ) : null}
-                  <span>
-                    <strong>{item.name}</strong>
-                    <small>{item.kind} · {item.publisher} · v{item.version}</small>
-                    {item.description ? <p className="registry-description">{item.description}</p> : null}
-                    {item.tags.length ? (
-                      <span className="registry-tags">
-                        {item.tags.map((tag) => (
-                          <em key={tag}>{tag}</em>
-                        ))}
-                      </span>
-                    ) : null}
-                    {item.permissions_requested.length ? (
-                      <small className="registry-permissions">
-                        Requests: {item.permissions_requested.join(", ")}
-                      </small>
-                    ) : null}
-                  </span>
-                  <button type="button" onClick={() => void (installed ? uninstallRegistryPackage(item.id) : installRegistryPackage(item.id))} disabled={busy === `install-${item.id}` || busy === `uninstall-${item.id}`}>
-                    {installed ? "Remove" : "Install"}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-        </article>
-
-        <article className="settings-panel audit-panel">
-          <header>
-            <span>
-              <small>Audit trail</small>
-              <h2>Recent events</h2>
-            </span>
-            <span className="status-pill">{auditEvents.length}</span>
-          </header>
-          <div className="audit-list">
-            {auditEvents.length === 0 ? <p>No audit events recorded yet.</p> : null}
-            {auditEvents.map((event) => (
-              <div className={`audit-row ${event.level}`} key={event.id}>
-                <span>
-                  <strong>{event.kind}</strong>
-                  <small>{event.summary}</small>
-                </span>
-                <em>{new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</em>
-              </div>
-            ))}
-          </div>
+          <button type="button" className="registry-count-line" onClick={onOpenMcpMarketplace}>
+            {registry.packages.length} packages available, {installedIds.size} installed
+          </button>
         </article>
       </section>
       ) : null}
@@ -11620,9 +11579,9 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
           </header>
           <p>The audit trail keeps the most recent events emitted by the policy bridge, permissions, and marketplace actions — there's no separate retention window yet, events just age out as new ones arrive.</p>
           <div className="settings-actions">
-            <button type="button" onClick={() => setSection("general")}>
+            <button type="button" onClick={() => setSection("audit")}>
               <ScrollText size={15} />
-              View audit in General
+              View audit
             </button>
           </div>
         </article>
@@ -11644,6 +11603,32 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
               <Trash2 size={15} />
               Wipe local data
             </button>
+          </div>
+        </article>
+      </section>
+      ) : null}
+
+      {section === "audit" ? (
+      <section className="settings-grid">
+        <article className="settings-panel audit-panel">
+          <header>
+            <span>
+              <small>Audit trail</small>
+              <h2>Recent events</h2>
+            </span>
+            <span className="status-pill">{auditEvents.length}</span>
+          </header>
+          <div className="audit-list">
+            {auditEvents.length === 0 ? <p>No audit events recorded yet.</p> : null}
+            {auditEvents.map((event) => (
+              <div className={`audit-row ${event.level}`} key={event.id}>
+                <span>
+                  <strong>{event.kind}</strong>
+                  <small>{event.summary}</small>
+                </span>
+                <em>{new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</em>
+              </div>
+            ))}
           </div>
         </article>
       </section>

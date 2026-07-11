@@ -7037,7 +7037,6 @@ button.pulse-tile:hover {
 .settings-panel > .provider-list,
 .settings-panel > .permission-presets,
 .settings-panel > .grant-list,
-.settings-panel > .registry-list,
 .settings-panel > .audit-list,
 .settings-panel > .settings-warning {
   margin-inline: 12px;
@@ -7282,7 +7281,6 @@ button.pulse-tile:hover {
 
 .settings-actions button,
 .provider-actions button,
-.registry-row button,
 .grant-row button {
   display: inline-flex;
   gap: 7px;
@@ -7300,7 +7298,6 @@ button.pulse-tile:hover {
 
 .settings-actions button:hover,
 .provider-actions button:hover,
-.registry-row button:hover,
 .grant-row button:hover,
 .permission-presets button:hover {
   background: var(--line);
@@ -7308,7 +7305,6 @@ button.pulse-tile:hover {
 
 .settings-actions button:disabled,
 .provider-actions button:disabled,
-.registry-row button:disabled,
 .grant-row button:disabled {
   cursor: default;
   opacity: 0.46;
@@ -7336,7 +7332,6 @@ button.pulse-tile:hover {
 
 .provider-list,
 .grant-list,
-.registry-list,
 .audit-list,
 .permission-presets {
   display: grid;
@@ -7352,7 +7347,6 @@ button.pulse-tile:hover {
 
 .provider-row,
 .grant-row,
-.registry-row,
 .audit-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(150px, 240px) auto;
@@ -7365,14 +7359,12 @@ button.pulse-tile:hover {
 }
 
 .grant-row,
-.registry-row,
 .audit-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .provider-row span,
 .grant-row span,
-.registry-row span,
 .audit-row span {
   display: grid;
   gap: 4px;
@@ -7381,7 +7373,6 @@ button.pulse-tile:hover {
 
 .provider-row strong,
 .grant-row strong,
-.registry-row strong,
 .audit-row strong {
   overflow: hidden;
   color: white;
@@ -7392,7 +7383,6 @@ button.pulse-tile:hover {
 
 .provider-row small,
 .grant-row small,
-.registry-row small,
 .audit-row small {
   overflow: hidden;
   color: var(--muted);
@@ -7402,49 +7392,20 @@ button.pulse-tile:hover {
   white-space: nowrap;
 }
 
-.registry-row-detailed {
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-}
-
-.registry-ascii {
-  margin: 2px 0 0;
-  padding: 6px 8px;
+.registry-count-line {
+  margin-inline: 12px 12px;
+  padding: 8px 10px;
   color: var(--soft);
-  background: var(--frame);
-  border: 1px solid var(--line-soft);
-  border-radius: 8px;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 10px;
-  line-height: 1.25;
-  white-space: pre;
-}
-
-.registry-description {
-  margin: 2px 0 0;
-  color: var(--soft);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.registry-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.registry-tags em {
-  padding: 2px 7px;
-  color: var(--muted);
   background: var(--node);
-  border: 1px solid var(--line-soft);
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-style: normal;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12px;
+  text-align: left;
 }
 
-.registry-permissions {
-  color: var(--faint);
+.registry-count-line:hover {
+  color: white;
+  background: var(--line);
 }
 
 .permission-presets {
@@ -7622,7 +7583,6 @@ html.density-compact .settings-panel > .settings-two,
 html.density-compact .settings-panel > .provider-list,
 html.density-compact .settings-panel > .permission-presets,
 html.density-compact .settings-panel > .grant-list,
-html.density-compact .settings-panel > .registry-list,
 html.density-compact .settings-panel > .audit-list {
   margin-inline: 10px;
 }

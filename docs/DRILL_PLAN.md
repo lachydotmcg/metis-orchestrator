@@ -53,17 +53,17 @@
   label + node sublabel "Board · loads first"). Keep it short and neutral.
 - [x] **L26 — Sidebar order:** New session, Orchestration, Manager, Marketplace, then the
   More tab containing: Routines, To Do List, Gallery, Graph View, Benchmark. Exactly that.
-- [ ] **L2 — The composer "+" button should accept image files too.** Today + adds
+- [x] **L2 — The composer "+" button should accept image files too.** Today + adds
   files/folders as workspace resources; when an image is picked it should become a chat
   attachment (same pathway as the ImagePlus button). Merge the flows: images → attachments,
   everything else → resources.
-- [ ] **L21 — Marketplace: permissions only on expand.** Package cards should NOT show
+- [x] **L21 — Marketplace: permissions only on expand.** Package cards should NOT show
   permissions_requested chips in the grid; show them only in the expanded/detail view.
-- [ ] **L19 — Settings registry section is overloaded** ("a million things pasted in").
+- [x] **L19 — Settings registry section is overloaded** ("a million things pasted in").
   Slim the General>Marketplace-registry panel to: source URL + refresh + a count line.
   The full package list moves to its own Settings section ("Registry") or just links to
   the Marketplace. No giant package dump inside General.
-- [ ] **L22 — Audit trail gets its own Settings section** (move it out of General; keep a
+- [x] **L22 — Audit trail gets its own Settings section** (move it out of General; keep a
   small link from General).
 - [x] **L20 — Uninstalling a package must revoke the scoped grants it requested.**
   installPackage calls requestPermission per scope; uninstallPackage must remove/revoke
