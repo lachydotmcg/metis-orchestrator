@@ -8698,9 +8698,28 @@ a:focus-visible,
 
 .rec-chain {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: stretch;
   margin-bottom: 12px;
+}
+
+.bench-plan-toggle {
+  margin-bottom: 10px;
+}
+
+.rec-slot-empty {
+  border-style: dashed;
+  opacity: 0.7;
+}
+
+.rec-slot-empty strong {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.bench-role-filter {
+  margin-bottom: 10px;
 }
 
 .rec-arrow {

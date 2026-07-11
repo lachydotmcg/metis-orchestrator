@@ -71,7 +71,7 @@
 
 ## PHASE 1 — Models & gateways expansion (L10, L17) — RESEARCH ROUND
 
-- [ ] **L10 — Way more models + way more gateways.** Do real research (WebSearch, and
+- [x] **L10 — Way more models + way more gateways.** Do real research (WebSearch, and
   Lachy's browser via the claude-in-chrome tools if needed):
   - GPT-5.6 is out with THREE variants — add all three to MODEL_LIBRARY + the registry
     catalog (best-effort ids, like the existing zoo).
@@ -86,7 +86,7 @@
     Cerebras, Mistral's API, xAI direct — pick what's real and wire route entries.
   - Update BOTH the in-app MODEL_LIBRARY/PRETTY names AND the metis-registry
     catalog/models.json (push the registry; Lachy granted bypass).
-- [ ] **L17 — MANY more local models, and role-aware Benchmark recommendations:**
+- [x] **L17 — MANY more local models, and role-aware Benchmark recommendations:**
   - Expand LOCAL_MODELS well beyond 7 entries: Qwen3 family, Llama 3.3, Gemma 3 (incl.
     vision), Phi-4, Mistral Small, DeepSeek-R1 distills at multiple sizes, Ornith, LLaVA,
     moondream, nomic-embed-text (as the embed model), etc., each with vram + ollamaTag.

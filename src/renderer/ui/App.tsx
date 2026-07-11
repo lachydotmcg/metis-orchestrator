@@ -564,15 +564,25 @@ const MODEL_LIBRARY: ModelRef[] = [
   { provider: "claude", model: "Sonnet 5" },
   { provider: "claude", model: "Fable 5" },
   { provider: "claude", model: "Haiku 4.5" },
+  { provider: "openai", model: "GPT-5.6 Sol" },
+  { provider: "openai", model: "GPT-5.6 Terra" },
+  { provider: "openai", model: "GPT-5.6 Luna" },
   { provider: "openai", model: "GPT-5.1" },
   { provider: "openai", model: "GPT-5 mini" },
+  { provider: "gemini", model: "3.1 Pro" },
+  { provider: "gemini", model: "3.5 Flash" },
   { provider: "gemini", model: "2.5 Pro" },
   { provider: "gemini", model: "2.5 Flash" },
-  { provider: "grok", model: "Grok 4" },
+  { provider: "grok", model: "Grok 4.5" },
+  { provider: "grok", model: "Grok 4.3" },
+  { provider: "deepseek", model: "V4 Pro" },
+  { provider: "deepseek", model: "V4 Flash" },
   { provider: "deepseek", model: "V3" },
   { provider: "deepseek", model: "R1" },
+  { provider: "qwen", model: "Qwen3.7 Max" },
   { provider: "qwen", model: "Qwen2.5 72B" },
   { provider: "qwen", model: "Qwen3 4B" },
+  { provider: "glm", model: "GLM-5.2" },
   { provider: "glm", model: "GLM-4.6" }
 ];
 
@@ -642,15 +652,46 @@ const GPUS: Gpu[] = [
   { id: "cpu", label: "CPU only", vram: 0, note: "system RAM" }
 ];
 
-type LocalModel = { name: string; params: string; vram: number; quant: string; tps: number; role: string; provider?: ProviderId; ollamaTag?: string };
+type LocalModel = {
+  name: string;
+  params: string;
+  vram: number;
+  quant: string;
+  tps: number;
+  role: string;
+  roles?: string[];
+  provider?: ProviderId;
+  ollamaTag?: string;
+};
 const LOCAL_MODELS: LocalModel[] = [
-  { name: "Qwen2.5 7B", params: "7B", vram: 6, quant: "Q4_K_M", tps: 52, role: "fast router / general", provider: "qwen", ollamaTag: "qwen2.5:7b" },
-  { name: "Llama 3.1 8B", params: "8B", vram: 6.5, quant: "Q4_K_M", tps: 47, role: "general chat", ollamaTag: "llama3.1:8b" },
-  { name: "GLM-4 9B", params: "9B", vram: 7, quant: "Q4_K_M", tps: 41, role: "chat / agentic", provider: "glm", ollamaTag: "glm4:9b" },
-  { name: "DeepSeek-R1 Distill 14B", params: "14B", vram: 10, quant: "Q4_K_M", tps: 28, role: "reasoning", provider: "deepseek", ollamaTag: "deepseek-r1:14b" },
-  { name: "Qwen2.5 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 18, role: "strong coding", provider: "qwen", ollamaTag: "qwen2.5:32b" },
-  { name: "Ornith 1.0 35B", params: "35B", vram: 22, quant: "Q4_K_M", tps: 16, role: "RL-tuned coding agent" },
-  { name: "Qwen2.5 72B", params: "72B", vram: 42, quant: "Q4_K_M", tps: 9, role: "near-frontier local", provider: "qwen", ollamaTag: "qwen2.5:72b" }
+  { name: "Qwen3 1.7B", params: "1.7B", vram: 2, quant: "Q4_K_M", tps: 95, role: "tiny fast router", roles: ["router"], provider: "qwen", ollamaTag: "qwen3:1.7b" },
+  { name: "Qwen3 4B", params: "4B", vram: 3.5, quant: "Q4_K_M", tps: 78, role: "fast router / general", roles: ["router", "general"], provider: "qwen", ollamaTag: "qwen3:4b" },
+  { name: "Phi-4 Mini 3.8B", params: "3.8B", vram: 3, quant: "Q4_K_M", tps: 70, role: "router / low-VRAM chat", roles: ["router", "general"], ollamaTag: "phi4-mini" },
+  { name: "Qwen2.5 7B", params: "7B", vram: 6, quant: "Q4_K_M", tps: 52, role: "fast router / general", roles: ["router", "general"], provider: "qwen", ollamaTag: "qwen2.5:7b" },
+  { name: "Llama 3.1 8B", params: "8B", vram: 6.5, quant: "Q4_K_M", tps: 47, role: "general chat", roles: ["general"], ollamaTag: "llama3.1:8b" },
+  { name: "Qwen3 8B", params: "8B", vram: 6.5, quant: "Q4_K_M", tps: 45, role: "general / agentic", roles: ["general", "coding"], provider: "qwen", ollamaTag: "qwen3:8b" },
+  { name: "GLM-4 9B", params: "9B", vram: 7, quant: "Q4_K_M", tps: 41, role: "chat / agentic", roles: ["general", "coding"], provider: "glm", ollamaTag: "glm4:9b" },
+  { name: "Gemma 3 12B", params: "12B", vram: 9, quant: "Q4_K_M", tps: 34, role: "general / planning", roles: ["general", "planning"], ollamaTag: "gemma3:12b" },
+  { name: "Mistral Small 24B", params: "24B", vram: 15, quant: "Q4_K_M", tps: 24, role: "coding / tool use", roles: ["coding", "planning"], ollamaTag: "mistral-small:24b" },
+  { name: "DeepSeek-R1 Distill 14B", params: "14B", vram: 10, quant: "Q4_K_M", tps: 28, role: "reasoning", roles: ["planning"], provider: "deepseek", ollamaTag: "deepseek-r1:14b" },
+  { name: "Phi-4 14B", params: "14B", vram: 10, quant: "Q4_K_M", tps: 27, role: "reasoning / math", roles: ["planning", "coding"], ollamaTag: "phi4" },
+  { name: "Qwen3 14B", params: "14B", vram: 10, quant: "Q4_K_M", tps: 26, role: "planning / agentic", roles: ["planning", "coding"], provider: "qwen", ollamaTag: "qwen3:14b" },
+  { name: "Qwen2.5 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 18, role: "strong coding", roles: ["coding"], provider: "qwen", ollamaTag: "qwen2.5:32b" },
+  { name: "Qwen3 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 17, role: "strong coding / planning", roles: ["coding", "planning"], provider: "qwen", ollamaTag: "qwen3:32b" },
+  { name: "QwQ 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 15, role: "deep reasoning", roles: ["planning"], provider: "qwen", ollamaTag: "qwq:32b" },
+  { name: "DeepSeek-R1 Distill 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 16, role: "reasoning", roles: ["planning"], provider: "deepseek", ollamaTag: "deepseek-r1:32b" },
+  { name: "Gemma 3 27B", params: "27B", vram: 17, quant: "Q4_K_M", tps: 19, role: "general / vision-adjacent", roles: ["general", "planning"], ollamaTag: "gemma3:27b" },
+  { name: "Ornith 1.0 35B", params: "35B", vram: 22, quant: "Q4_K_M", tps: 16, role: "RL-tuned coding agent", roles: ["coding"] },
+  { name: "Qwen2.5 72B", params: "72B", vram: 42, quant: "Q4_K_M", tps: 9, role: "near-frontier local", roles: ["planning", "general"], provider: "qwen", ollamaTag: "qwen2.5:72b" },
+  { name: "DeepSeek-R1 Distill 70B", params: "70B", vram: 42, quant: "Q4_K_M", tps: 8, role: "near-frontier reasoning", roles: ["planning"], provider: "deepseek", ollamaTag: "deepseek-r1:70b" },
+  { name: "Llama 4 Scout 109B MoE", params: "109B MoE", vram: 36, quant: "Q4_K_M", tps: 22, role: "near-frontier MoE, fast", roles: ["general", "planning"], ollamaTag: "llama4:scout" },
+  { name: "Moondream 2", params: "1.8B", vram: 2, quant: "Q4_K_M", tps: 60, role: "tiny vision captioner", roles: ["vision"], ollamaTag: "moondream" },
+  { name: "LLaVA 13B", params: "13B", vram: 9, quant: "Q4_K_M", tps: 30, role: "vision + language", roles: ["vision"], ollamaTag: "llava:13b" },
+  { name: "Qwen3-VL 8B", params: "8B", vram: 6.5, quant: "Q4_K_M", tps: 40, role: "vision-language", roles: ["vision"], provider: "qwen", ollamaTag: "qwen3-vl:8b" },
+  { name: "Qwen3-VL 32B", params: "32B", vram: 20, quant: "Q4_K_M", tps: 15, role: "strong vision-language", roles: ["vision"], provider: "qwen", ollamaTag: "qwen3-vl:32b" },
+  { name: "Nomic Embed Text", params: "137M", vram: 1, quant: "F16", tps: 200, role: "text embeddings", roles: ["embeddings"], ollamaTag: "nomic-embed-text" },
+  { name: "MxBai Embed Large", params: "335M", vram: 1, quant: "F16", tps: 160, role: "text embeddings, higher quality", roles: ["embeddings"], ollamaTag: "mxbai-embed-large" },
+  { name: "Qwen3 Embedding 4B", params: "4B", vram: 3.5, quant: "Q4_K_M", tps: 90, role: "multilingual embeddings", roles: ["embeddings"], provider: "qwen", ollamaTag: "qwen3-embedding:4b" }
 ];
 
 type Fit = "great" | "tight" | "over" | "cpu";
@@ -666,6 +707,33 @@ function fitFor(vram: number, modelVram: number): Fit {
 
 function fitLabel(fit: Fit): string {
   return fit === "great" ? "Great fit" : fit === "tight" ? "Tight" : fit === "cpu" ? "CPU · slow" : "Needs more VRAM";
+}
+
+// Benchmark role filter chips (docs/DRILL_PLAN.md Phase 1, L10/L17). "all" shows
+// every model; the rest filter LOCAL_MODELS by its `roles` tag.
+const BENCHMARK_ROLE_FILTERS: Array<{ key: string; label: string }> = [
+  { key: "all", label: "All" },
+  { key: "router", label: "Router" },
+  { key: "coding", label: "Coding" },
+  { key: "planning", label: "Planning" },
+  { key: "vision", label: "Vision" },
+  { key: "embeddings", label: "Embeddings" }
+];
+
+// Stable module-level default for the "run local-first vs. cloud-heavy" toggle,
+// persisted via useAppStoreState so it survives restarts.
+const DEFAULT_BENCHMARK_LOCAL_FIRST = true;
+
+/** Picks the strongest fitting model tagged with `role` for the given GPU —
+ *  prefers a "great" fit over "tight", then the largest model that still fits.
+ *  Returns undefined when nothing tagged for that role fits at all (caller
+ *  should show "none fits this GPU" rather than fall back to a bad pick). */
+function pickBestForRole(models: ScoredModel[], role: string): ScoredModel | undefined {
+  const tagged = models.filter((model) => model.roles?.includes(role) && model.fit !== "over" && model.fit !== "cpu");
+  if (tagged.length === 0) return undefined;
+  const great = tagged.filter((model) => model.fit === "great");
+  const pool = great.length ? great : tagged;
+  return pool.reduce((best, model) => (model.vram > best.vram ? model : best), pool[0]);
 }
 
 // New installs start with a single empty board and no seeded sample images —
@@ -4503,21 +4571,47 @@ const PRETTY_MODEL_NAMES: Record<string, string> = {
   "claude-opus-4-8": "Claude Opus 4.8",
   "claude-opus-4-6": "Claude Opus 4.6",
   "claude-sonnet-5": "Claude Sonnet 5",
+  "claude-fable-5": "Claude Fable 5",
   "claude-haiku-4-5": "Claude Haiku 4.5",
+  "gemini-3.1-pro": "Gemini 3.1 Pro",
+  "gemini-3.5-flash": "Gemini 3.5 Flash",
   "gemini-2.5-pro": "Gemini 2.5 Pro",
   "gemini-2.5-flash": "Gemini 2.5 Flash",
   "gemini-2.0-flash": "Gemini 2.0 Flash",
-  "deepseek-chat": "DeepSeek V3",
-  "deepseek-reasoner": "DeepSeek R1",
+  "deepseek-chat": "DeepSeek V4 Flash",
+  "deepseek-reasoner": "DeepSeek V4 Pro",
   "deepseek-ai/deepseek-v3.1": "DeepSeek V3.1 (NVIDIA)",
+  "x-ai/grok-4.5": "Grok 4.5",
+  "x-ai/grok-4.3": "Grok 4.3",
+  "z-ai/glm-5.2": "GLM 5.2",
+  "moonshotai/kimi-k2.6": "Kimi K2.6",
   "llama-3.3-70b-versatile": "Llama 3.3 70B (Groq)",
+  "gpt-5.6-sol": "GPT-5.6 Sol",
+  "gpt-5.6-terra": "GPT-5.6 Terra",
+  "gpt-5.6-luna": "GPT-5.6 Luna",
   "gpt-5.1": "GPT-5.1",
   "gpt-5": "GPT-5",
   "gpt-4.1": "GPT-4.1",
   "gpt-4o": "GPT-4o",
+  "qwen3:1.7b": "Qwen3 1.7B",
+  "qwen3:4b": "Qwen3 4B",
   "qwen3:8b": "Qwen3 8B",
   "qwen3:14b": "Qwen3 14B",
   "qwen3:32b": "Qwen3 32B",
+  "qwen3-vl:8b": "Qwen3-VL 8B",
+  "qwen3-vl:32b": "Qwen3-VL 32B",
+  "qwen3-embedding:0.6b": "Qwen3 Embedding 0.6B",
+  "qwen3-embedding:4b": "Qwen3 Embedding 4B",
+  "nomic-embed-text": "Nomic Embed Text",
+  "mxbai-embed-large": "MxBai Embed Large",
+  "moondream": "Moondream 2",
+  "llava:13b": "LLaVA 13B",
+  "phi4": "Phi-4 14B",
+  "phi4-mini": "Phi-4 Mini 3.8B",
+  "mistral-small:24b": "Mistral Small 24B",
+  "gemma3:12b": "Gemma 3 12B",
+  "gemma3:27b": "Gemma 3 27B",
+  "deepseek-r1:14b": "DeepSeek R1 Distill 14B",
   "llama3.1:8b": "Llama 3.1 8B",
   "llama3.1:70b": "Llama 3.1 70B",
   "mistral:7b": "Mistral 7B"
@@ -7637,6 +7731,8 @@ function BenchmarkWorkspace({
 }): JSX.Element {
   const setWizard = onWizardChange;
   const [gpuId, setGpuId] = useState("rtx3060");
+  const [roleFilter, setRoleFilter] = useState("all");
+  const [localFirst, setLocalFirst] = useAppStoreState("benchmarkLocalFirst", DEFAULT_BENCHMARK_LOCAL_FIRST);
   const runChecks = ["Preflight hardware check", "Prompt suite loaded", "Simulated decode/VRAM capture", "Recommendation generated"];
 
   useEffect(() => {
@@ -7656,10 +7752,25 @@ function BenchmarkWorkspace({
 
   const gpu = GPUS.find((item) => item.id === gpuId) ?? GPUS[0];
   const scored: ScoredModel[] = useMemo(() => LOCAL_MODELS.map((model) => ({ ...model, fit: fitFor(gpu.vram, model.vram) })), [gpu.vram]);
-  const greatFits = scored.filter((model) => model.fit === "great");
-  const usableFits = scored.filter((model) => model.fit === "great" || model.fit === "tight");
-  const router = greatFits[0] ?? usableFits[0] ?? scored[0];
-  const workhorse = usableFits[usableFits.length - 1] ?? router;
+  const visibleScored = useMemo(
+    () => (roleFilter === "all" ? scored : scored.filter((model) => model.roles?.includes(roleFilter))),
+    [scored, roleFilter]
+  );
+
+  // General-purpose pool excludes vision/embeddings specialists — those get
+  // their own recommendation slots below, picked purely by role tag.
+  const generalPool = scored.filter((model) => !model.roles || model.roles.some((role) => role !== "vision" && role !== "embeddings"));
+  const greatGeneral = generalPool.filter((model) => model.fit === "great");
+  const usableGeneral = generalPool.filter((model) => model.fit === "great" || model.fit === "tight");
+  const router = greatGeneral.find((model) => model.roles?.includes("router")) ?? greatGeneral[0] ?? usableGeneral[0] ?? generalPool[0];
+  // Local-first weights the workhorse toward the biggest great-fit general model
+  // (more capability handled on-device); Cloud-heavy keeps the local footprint
+  // to just the router and lets cloud handle everything past that.
+  const workhorse = localFirst
+    ? greatGeneral.slice().sort((a, b) => b.vram - a.vram)[0] ?? usableGeneral[usableGeneral.length - 1] ?? router
+    : router;
+  const visionPick = pickBestForRole(scored, "vision");
+  const embeddingsPick = pickBestForRole(scored, "embeddings");
 
   const [ollamaInfo, setOllamaInfo] = useState<OllamaListResult | null>(null);
   const [pullProgress, setPullProgress] = useState<Record<string, OllamaPullProgress>>({});
@@ -7687,20 +7798,32 @@ function BenchmarkWorkspace({
     });
   }, []);
 
+  // Cloud-heavy keeps the install list to router + embeddings (cloud handles
+  // coding/planning/vision); Local-first also pulls the workhorse and a vision
+  // model so Gallery + Knowledge Banks work fully offline.
+  const recommendedModels = useMemo(() => {
+    const picks = localFirst ? [router, workhorse, visionPick, embeddingsPick] : [router, embeddingsPick];
+    return picks.filter((model): model is ScoredModel => Boolean(model));
+  }, [localFirst, router, workhorse, visionPick, embeddingsPick]);
+
   const installTargets = useMemo(() => {
-    const tags = [router.ollamaTag, workhorse.ollamaTag].filter((tag): tag is string => Boolean(tag));
-    return Array.from(new Set(tags)).map((tag) => {
-      const source = tag === router.ollamaTag ? router : workhorse;
-      return { tag, name: source.name };
-    });
-  }, [router, workhorse]);
+    const seen = new Set<string>();
+    const targets: Array<{ tag: string; name: string }> = [];
+    for (const model of recommendedModels) {
+      if (!model.ollamaTag || seen.has(model.ollamaTag)) continue;
+      seen.add(model.ollamaTag);
+      targets.push({ tag: model.ollamaTag, name: model.name });
+    }
+    return targets;
+  }, [recommendedModels]);
 
   const manualModels = useMemo(() => {
     const names = new Set<string>();
-    if (!router.ollamaTag) names.add(router.name);
-    if (!workhorse.ollamaTag) names.add(workhorse.name);
+    for (const model of recommendedModels) {
+      if (!model.ollamaTag) names.add(model.name);
+    }
     return Array.from(names);
-  }, [router, workhorse]);
+  }, [recommendedModels]);
 
   function targetStatus(tag: string): "installed" | "downloading" | "error" | "pending" {
     if (ollamaInfo?.installed.includes(tag)) return "installed";
@@ -7812,14 +7935,44 @@ function BenchmarkWorkspace({
             <span><Sparkles size={15} /> Recommended setup</span>
             <em className="auto-tag">Auto-picked</em>
           </header>
+          <div className="chip-row bench-plan-toggle" role="group" aria-label="Local-first or cloud-heavy plan">
+            <button
+              type="button"
+              className={localFirst ? "preset-chip active" : "preset-chip"}
+              aria-pressed={localFirst}
+              onClick={() => setLocalFirst(true)}
+            >
+              Local-first
+            </button>
+            <button
+              type="button"
+              className={!localFirst ? "preset-chip active" : "preset-chip"}
+              aria-pressed={!localFirst}
+              onClick={() => setLocalFirst(false)}
+            >
+              Cloud-heavy
+            </button>
+          </div>
           <div className="rec-chain">
             <RecSlot role="Router" model={router} />
             <ArrowRight className="rec-arrow" size={16} />
-            <RecSlot role="Workhorse" model={workhorse} />
+            {localFirst ? (
+              <>
+                <RecSlot role="Workhorse" model={workhorse} />
+                <ArrowRight className="rec-arrow" size={16} />
+              </>
+            ) : null}
+            <RecSlot role="Vision (for Gallery)" model={visionPick} />
             <ArrowRight className="rec-arrow" size={16} />
-            <RecSlot role="Fallback" cloud="Sonnet 4.6" provider="claude" />
+            <RecSlot role="Embeddings (for Knowledge Banks)" model={embeddingsPick} />
+            <ArrowRight className="rec-arrow" size={16} />
+            <RecSlot role="Fallback" cloud="Sonnet 5" provider="claude" />
           </div>
-          <p className="bench-summary">Matched to your {gpu.label}. Local models handle fast / private work; hard prompts escalate to a cloud fallback.</p>
+          <p className="bench-summary">
+            {localFirst
+              ? `Matched to your ${gpu.label}. Local models handle fast / private work, vision, and embeddings; hard prompts escalate to a cloud fallback.`
+              : `Matched to your ${gpu.label}. Only a router and embeddings model run locally — cloud models handle coding, planning, and vision.`}
+          </p>
           <div className="bench-actions">
             <button className="primary-action" type="button" onClick={applySetup}>
               {locked ? "Use this setup" : "Update setup"} <ArrowRight size={16} />
@@ -7836,10 +7989,23 @@ function BenchmarkWorkspace({
       <section className="bench-panel">
         <header className="bench-panel-head">
           <span><HardDrive size={15} /> Local models for {gpu.label}</span>
-          <em className="bench-count">{scored.filter((model) => model.fit !== "over").length} run here</em>
+          <em className="bench-count">{visibleScored.filter((model) => model.fit !== "over").length} run here</em>
         </header>
+        <div className="chip-row bench-role-filter" role="group" aria-label="Filter local models by role">
+          {BENCHMARK_ROLE_FILTERS.map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              className={roleFilter === filter.key ? "preset-chip active" : "preset-chip"}
+              aria-pressed={roleFilter === filter.key}
+              onClick={() => setRoleFilter(filter.key)}
+            >
+              {filter.label}
+            </button>
+          ))}
+        </div>
         <div className="model-table">
-          {scored.map((model) => (
+          {visibleScored.map((model) => (
             <div key={model.name} className={`model-row ${model.fit}`}>
               <span className="model-id">
                 <span className="model-logo">{model.provider ? <img alt="" src={PROVIDERS[model.provider].logo} /> : <Cpu size={16} />}</span>
@@ -7875,7 +8041,7 @@ function BenchmarkWorkspace({
           {ollamaReachable && allInstalled ? <em className="auto-tag">Ready</em> : null}
         </header>
         <p className="bench-note">
-          Pulls the router and workhorse above straight from Ollama, with live progress. &ldquo;Use this setup&rdquo; already completes setup either way &mdash; installing just gets the models onto disk.
+          Pulls the recommended models above straight from Ollama, with live progress. &ldquo;Use this setup&rdquo; already completes setup either way &mdash; installing just gets the models onto disk.
         </p>
 
         {!ollamaReachable ? (
@@ -8005,12 +8171,13 @@ function BenchmarkWorkspace({
 
 function RecSlot({ role, model, cloud, provider }: { role: string; model?: ScoredModel; cloud?: string; provider?: ProviderId }): JSX.Element {
   const logoProvider = model?.provider ?? provider;
+  const label = model ? model.name : (cloud ?? "None fits this GPU");
   return (
-    <span className="rec-slot">
+    <span className={model || cloud ? "rec-slot" : "rec-slot rec-slot-empty"}>
       <small>{role}</small>
       <span className="rec-slot-main">
         <span className="model-logo">{logoProvider ? <img alt="" src={PROVIDERS[logoProvider].logo} /> : <Cpu size={15} />}</span>
-        <strong>{model ? model.name : cloud}</strong>
+        <strong>{label}</strong>
       </span>
     </span>
   );
