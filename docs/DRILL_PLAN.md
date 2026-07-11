@@ -103,7 +103,7 @@
   bytes as an image input to vision-capable models on the front-end stage (reuse the
   SessionAttachment/ProviderImageInput plumbing; cap 1-2 reference images; text fallback
   for non-vision providers).
-- [ ] **L12b — Configurable VISION model in Orchestration.** A vision-model setting (which
+- [x] **L12b — Configurable VISION model in Orchestration.** A vision-model setting (which
   model captions gallery images and receives image inputs) editable from Orchestration
   (and/or Settings). Today detectOllamaVisionModel hardcodes discovery; make the choice
   explicit with auto-detect as default.

@@ -5426,6 +5426,28 @@ details.artifact-row[open] summary {
   font-weight: 700;
 }
 
+.manager-chat-head-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.manager-model-select.custom-select {
+  width: auto;
+}
+
+.manager-model-select .custom-select-trigger {
+  min-height: 28px;
+  padding: 0 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.manager-model-select .custom-select-menu {
+  min-width: 180px;
+}
+
 .manager-chat-clear {
   display: flex;
   align-items: center;
@@ -10795,6 +10817,21 @@ a:focus-visible,
   margin: 3px 0 0;
   color: var(--muted);
   font-size: 11px;
+}
+
+.palette-option-select {
+  display: grid;
+  gap: 5px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.palette-option-select small {
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 400;
 }
 
 .palette-tabs {

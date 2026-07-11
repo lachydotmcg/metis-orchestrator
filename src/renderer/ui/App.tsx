@@ -694,6 +694,53 @@ const LOCAL_MODELS: LocalModel[] = [
   { name: "Qwen3 Embedding 4B", params: "4B", vram: 3.5, quant: "Q4_K_M", tps: 90, role: "multilingual embeddings", roles: ["embeddings"], provider: "qwen", ollamaTag: "qwen3-embedding:4b" }
 ];
 
+// Manager base-model picker (Manager tab, L12): null means the default
+// Manager chain; otherwise this pins the Manager to a specific model, mirroring
+// the shape SessionComposer's modelOverride builds from a picked ModelRef.
+type ManagerModelChoice = { provider: ProviderKey; model: string } | null;
+const DEFAULT_MANAGER_MODEL: ManagerModelChoice = null;
+const MANAGER_MODEL_OPTIONS: SelectOption[] = [
+  { value: "auto", label: "Auto" },
+  ...MODEL_LIBRARY.map((ref) => ({
+    value: `${ref.provider}:${ref.model}`,
+    label: `${PROVIDERS[ref.provider].label} ${ref.model}`
+  }))
+];
+
+/** Encodes a ManagerModelChoice into a MANAGER_MODEL_OPTIONS value string. */
+function managerModelOptionValue(choice: ManagerModelChoice): string {
+  if (!choice) return "auto";
+  const brand = CATALOG_PROVIDER_TO_BRAND[choice.provider];
+  return `${brand}:${choice.model}`;
+}
+
+/** Decodes a MANAGER_MODEL_OPTIONS value string back into a ManagerModelChoice. */
+function managerModelFromOptionValue(value: string): ManagerModelChoice {
+  if (value === "auto") return null;
+  const idx = value.indexOf(":");
+  if (idx < 0) return null;
+  const brand = value.slice(0, idx) as ProviderId;
+  const model = value.slice(idx + 1);
+  const provider = PROVIDER_CONNECTIONS[brand];
+  if (!provider || !model) return null;
+  return { provider, model };
+}
+
+// Vision model picker (Orchestration workspace, L12b): "" means auto-detect
+// (the backend picks a vision model itself); otherwise this is an Ollama tag.
+// The gallery image-analysis path is Ollama-only and the backend resolver
+// treats this value as an Ollama tag, so ONLY local vision models are offered —
+// a cloud value would never be installed and would silently fall back to auto.
+const DEFAULT_VISION_MODEL = "";
+const VISION_MODEL_OPTIONS: SelectOption[] = [
+  { value: "", label: "Auto-detect" },
+  ...LOCAL_MODELS.filter((model) => model.roles?.includes("vision")).map((model) => ({
+    value: model.ollamaTag ?? model.name,
+    label: model.name,
+    hint: model.role
+  }))
+];
+
 type Fit = "great" | "tight" | "over" | "cpu";
 type ScoredModel = LocalModel & { fit: Fit };
 
@@ -6351,6 +6398,7 @@ function Palette({
   const [addingSkill, setAddingSkill] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillDescription, setNewSkillDescription] = useState("");
+  const [visionModel, setVisionModel] = useAppStoreState<string>("visionModel", DEFAULT_VISION_MODEL);
 
   const skills = useMemo<PaletteSkill[]>(() => {
     const builtins = [...new Set([...SKILL_LIBRARY, ...gallerySkills])].map((name) => ({ name, source: "builtin" as const, gallery: galleryVisuals[name] }));
@@ -6394,6 +6442,12 @@ function Palette({
         <h2>Library</h2>
         <p>Drag onto the pipeline to wire it up</p>
       </header>
+
+      <label className="palette-option-select" title="Captions gallery images (local vision model).">
+        Vision model
+        <CustomSelect ariaLabel="Vision model" value={visionModel} onChange={setVisionModel} options={VISION_MODEL_OPTIONS} />
+        <small>Captions gallery images (local vision model).</small>
+      </label>
 
       <div className="palette-tabs" role="tablist">
         <button type="button" role="tab" aria-selected={tab === "skills"} className={tab === "skills" ? "active" : ""} onClick={() => setTab("skills")}>
@@ -10608,6 +10662,7 @@ const EMPTY_MANAGER_CHAT: ManagerChatMessage[] = [];
  *  store key so the conversation survives navigation and app restarts. */
 function ManagerChat(): JSX.Element {
   const [messages, setMessages] = useAppStoreState<ManagerChatMessage[]>("managerChat", EMPTY_MANAGER_CHAT);
+  const [managerModel, setManagerModel] = useAppStoreState<ManagerModelChoice>("managerModel", DEFAULT_MANAGER_MODEL);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -10648,9 +10703,18 @@ function ManagerChat(): JSX.Element {
         <span className="manager-chat-title">
           <Sparkles size={14} /> Chat with Manager
         </span>
-        <button type="button" className="ghost manager-chat-clear" onClick={clearChat} disabled={messages.length === 0 && !error}>
-          <RotateCcw size={12} /> New chat
-        </button>
+        <div className="manager-chat-head-actions">
+          <CustomSelect
+            ariaLabel="Manager base model"
+            className="manager-model-select"
+            value={managerModelOptionValue(managerModel)}
+            onChange={(value) => setManagerModel(managerModelFromOptionValue(value))}
+            options={MANAGER_MODEL_OPTIONS}
+          />
+          <button type="button" className="ghost manager-chat-clear" onClick={clearChat} disabled={messages.length === 0 && !error}>
+            <RotateCcw size={12} /> New chat
+          </button>
+        </div>
       </div>
       <div className="manager-chat-list" ref={listRef}>
         {messages.length === 0 ? (
