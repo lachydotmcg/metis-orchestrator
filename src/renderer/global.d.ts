@@ -2,6 +2,7 @@ import type { RouteDecision } from "../shared/policy-contract";
 import type {
   AuditEvent,
   CatalogModel,
+  ConversationExportResult,
   ConversationRecord,
   LabExperimentResult,
   ManagerAction,
@@ -80,6 +81,7 @@ declare global {
       deleteProject: (projectPath?: string) => Promise<ConversationRecord[]>;
       rename: (id: string, title: string) => Promise<ConversationRecord[]>;
       archive: (id: string, archived: boolean) => Promise<ConversationRecord[]>;
+      exportMarkdown: (input?: { conversationId?: string }) => Promise<ConversationExportResult>;
     };
     metisLab?: {
       runExperiment: (prompt?: string) => Promise<LabExperimentResult>;

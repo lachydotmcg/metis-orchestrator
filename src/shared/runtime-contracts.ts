@@ -882,6 +882,15 @@ export interface ConversationRecord {
   autoTitleAttempted?: boolean;
 }
 
+/** Result of a Markdown export request (Settings > Privacy > Export). Never throws;
+ *  cancelled dialogs and failures both come back as ok: false. */
+export interface ConversationExportResult {
+  ok: boolean;
+  path?: string;
+  cancelled?: boolean;
+  error?: string;
+}
+
 /** A routine = a saved prompt that runs automatically on a schedule, with
  *  results landing in a dedicated conversation per routine (history = audit).
  *  See docs/FABLE_PLANS.md section 12. */

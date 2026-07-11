@@ -13,6 +13,7 @@ import type { RouteDecision } from "../shared/policy-contract.js";
 import type {
   AuditEvent,
   AgentOperation,
+  ConversationExportResult,
   ConversationRecord,
   ConversationTurnRecord,
   LabExperimentResult,
@@ -3810,6 +3811,70 @@ async function archiveConversation(id: string, archived: boolean): Promise<Conve
     archived
   });
   return next;
+}
+
+function conversationToMarkdown(record: ConversationRecord): string {
+  const lines: string[] = [];
+  lines.push(`# ${record.title || "Untitled conversation"}`);
+  lines.push("");
+  const meta = [`Created ${record.createdAt}`, `Updated ${record.updatedAt}`];
+  if (record.projectPath) meta.push(`Project: ${record.projectPath}`);
+  lines.push(`_${meta.join(" · ")}_`);
+  lines.push("");
+  for (const turn of record.turns) {
+    lines.push(turn.role === "user" ? "## You" : "## Metis");
+    lines.push(`_${turn.createdAt}_`);
+    lines.push("");
+    lines.push((turn.content ?? "").trim() || "_(empty)_");
+    if (turn.run) {
+      const runMeta: string[] = [];
+      if (turn.run.pipelineName) runMeta.push(`pipeline: ${turn.run.pipelineName}`);
+      if (turn.run.routeLabel) runMeta.push(`route: ${turn.run.routeLabel}`);
+      if (runMeta.length > 0) {
+        lines.push("");
+        lines.push(`> ${runMeta.join(" · ")}`);
+      }
+    }
+    lines.push("");
+  }
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+async function exportConversationsMarkdown(conversationId?: string): Promise<ConversationExportResult> {
+  try {
+    const conversations = await readConversations();
+    let markdown: string;
+    let defaultName: string;
+    let auditSummary: string;
+
+    if (conversationId) {
+      const conversation = conversations.find((item) => item.id === conversationId);
+      if (!conversation) return { ok: false, error: "That conversation no longer exists." };
+      markdown = conversationToMarkdown(conversation);
+      defaultName = `${slugify(conversation.title || "conversation")}.md`;
+      auditSummary = `Exported conversation "${conversation.title}" to Markdown.`;
+    } else {
+      if (conversations.length === 0) return { ok: false, error: "There are no conversations to export." };
+      markdown = conversations.map((conversation) => conversationToMarkdown(conversation)).join("\n---\n\n");
+      defaultName = "metis-conversations.md";
+      auditSummary = `Exported ${conversations.length} conversation${conversations.length === 1 ? "" : "s"} to Markdown.`;
+    }
+
+    const result = await dialog.showSaveDialog({
+      title: "Export conversation as Markdown",
+      defaultPath: defaultName,
+      filters: [{ name: "Markdown", extensions: ["md"] }, { name: "All Files", extensions: ["*"] }]
+    });
+    if (result.canceled || !result.filePath) return { ok: false, cancelled: true };
+
+    await mkdir(dirname(result.filePath), { recursive: true });
+    await writeFile(result.filePath, markdown, "utf8");
+    await appendAudit("info", "conversation.export", auditSummary, { conversationId, path: result.filePath });
+
+    return { ok: true, path: result.filePath };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 function conversationProjectMatches(conversation: ConversationRecord, projectPath?: string): boolean {
@@ -8064,6 +8129,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-conversations:delete-project", (_event, projectPath?: string) => deleteProjectConversations(projectPath));
   ipcMain.handle("metis-conversations:rename", (_event, id: string, title: string) => renameConversation(id, title));
   ipcMain.handle("metis-conversations:archive", (_event, id: string, archived: boolean) => archiveConversation(id, archived));
+  ipcMain.handle("metis-conversations:export", (_event, input?: { conversationId?: string }) => exportConversationsMarkdown(input?.conversationId));
   ipcMain.handle("metis-lab:run-experiment", (_event, prompt?: string) => runLabExperiment(prompt));
   ipcMain.handle("metis-project:get-workspace", () => readProjectWorkspace());
   ipcMain.handle("metis-project:snapshot", () => snapshotCurrentProject());
