@@ -157,7 +157,7 @@
 
 ## PHASE 5 — Managed agents phase B (Traycer-informed; Lachy's north star)
 
-- [ ] **N-agent fan-out on one codebase.** Reference: traycer.ai (Lachy: "what I wanted
+- [x] **N-agent fan-out on one codebase.** Reference: traycer.ai (Lachy: "what I wanted
   already exists"). Build: task decomposition fans out to multiple named sub-agents
   (Nyx/Talos/Echo/Atlas/Juno identities exist), each claiming disjoint FILE TERRITORIES
   via a file-claim ledger on the directive bus; each agent renders as its own side-chat

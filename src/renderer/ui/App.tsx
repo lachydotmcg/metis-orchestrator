@@ -4177,7 +4177,44 @@ function PreviewRail({
  *  - failures render the failure detail in the AI slot with a warning tint.
  *  Collapsed by default once resolved (complete/failed); the active (still
  *  "start") call stays expanded so its activity is visible without a click. */
-function SideChatCard({ call }: { call: StageCallEvent["call"] }): JSX.Element {
+/** Resolves a fan-out sub-agent's dot color by name, sharing the stable hue
+ *  palette from MANAGED_AGENT_IDENTITIES (docs/DRILL_PLAN.md Phase 5, sub-round
+ *  5c). Falls back to a neutral color for names outside the known roster —
+ *  auto-named agents aren't guaranteed to line up with the fixed identities. */
+function agentDotColor(name: string): string {
+  const identity = MANAGED_AGENT_IDENTITIES.find((agent) => agent.name === name);
+  return identity ? `hsl(${identity.hue} 45% 62%)` : "var(--faint)";
+}
+
+/** Small name + colour-dot badge for a fan-out sub-agent, reused on side-chat
+ *  cards/groups and on the run's agent roster (5c). */
+function AgentBadge({ name }: { name: string }): JSX.Element {
+  return (
+    <span className="agent-badge">
+      <span className="agent-badge-dot" style={{ background: agentDotColor(name) }} aria-hidden="true" />
+      {name}
+    </span>
+  );
+}
+
+/** Buckets side-chat calls by `agentName` for the fan-out grouped view (5c),
+ *  preserving first-appearance order for both groups and calls within a
+ *  group. Calls with no agentName land in a single unlabeled bucket. */
+function groupSideChatCallsByAgent(calls: StageCallEvent["call"][]): { key: string; name?: string; calls: StageCallEvent["call"][] }[] {
+  const order: string[] = [];
+  const buckets = new Map<string, StageCallEvent["call"][]>();
+  for (const call of calls) {
+    const key = call.agentName ?? "";
+    if (!buckets.has(key)) {
+      buckets.set(key, []);
+      order.push(key);
+    }
+    buckets.get(key)!.push(call);
+  }
+  return order.map((key) => ({ key: key || "unassigned", name: key || undefined, calls: buckets.get(key) ?? [] }));
+}
+
+function SideChatCard({ call, showAgentBadge = true }: { call: StageCallEvent["call"]; showAgentBadge?: boolean }): JSX.Element {
   const resolved = call.status !== "start";
   const [expanded, setExpanded] = useState(!resolved);
   const [promptExpanded, setPromptExpanded] = useState(false);
@@ -4195,6 +4232,7 @@ function SideChatCard({ call }: { call: StageCallEvent["call"] }): JSX.Element {
         <ChevronRight className={`stage-caret ${expanded ? "open" : ""}`} size={13} />
         <span className={`side-chat-dot ${call.status}`} aria-hidden="true" />
         <span className="side-chat-stage">{call.stageLabel}</span>
+        {call.agentName && showAgentBadge ? <AgentBadge name={call.agentName} /> : null}
         <span className="side-chat-model">{modelName}</span>
         <span className="side-chat-route">{providerLabel(call.provider)}</span>
       </button>
@@ -4272,6 +4310,19 @@ function SideChatStack({
         <div className="side-chat-stack-body">
           {calls.length === 0 ? (
             <p className="side-chat-empty">No model calls yet.</p>
+          ) : calls.some((call) => call.agentName) ? (
+            groupSideChatCallsByAgent(calls).map((group) => (
+              <div className="side-chat-agent-group" key={group.key}>
+                {group.name ? (
+                  <div className="side-chat-agent-group-head">
+                    <AgentBadge name={group.name} />
+                  </div>
+                ) : null}
+                {group.calls.map((call) => (
+                  <SideChatCard key={call.id} call={call} showAgentBadge={!group.name} />
+                ))}
+              </div>
+            ))
           ) : (
             calls.map((call) => <SideChatCard key={call.id} call={call} />)
           )}
@@ -4770,14 +4821,68 @@ function RunProposedActions({ run, onNavigate }: { run: SessionRun; onNavigate: 
   );
 }
 
+/** Compact roster row for a completed fan-out build (docs/DRILL_PLAN.md Phase
+ *  5, sub-round 5c): one chip per sub-agent, reusing the slim-op-line visual
+ *  language so it sits quietly above the run's normal output. Undefined
+ *  `run.fanout` (every ordinary single-pipeline run) means the caller never
+ *  mounts this at all. */
+function FanoutRoster({ agents }: { agents: NonNullable<SessionRun["fanout"]>["agents"] }): JSX.Element {
+  return (
+    <div className="fanout-roster" aria-label="Fan-out agents">
+      <div className="fanout-roster-head">
+        <Waypoints size={13} />
+        <span>Split across {agents.length} agent{agents.length === 1 ? "" : "s"}</span>
+      </div>
+      <div className="fanout-roster-list">
+        {agents.map((agent) => (
+          <FanoutAgentChip key={agent.name} agent={agent} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FanoutAgentChip({ agent }: { agent: { name: string; task: string; claimedPaths: string[] } }): JSX.Element {
+  const [expanded, setExpanded] = useState(false);
+  const hasPaths = agent.claimedPaths.length > 0;
+  return (
+    <div className={`fanout-chip ${expanded ? "open" : ""}`}>
+      <button
+        type="button"
+        className="fanout-chip-head"
+        onClick={() => hasPaths && setExpanded((value) => !value)}
+        aria-expanded={hasPaths ? expanded : undefined}
+      >
+        <span className="fanout-chip-dot" style={{ background: agentDotColor(agent.name) }} aria-hidden="true" />
+        <span className="fanout-chip-name">{agent.name}</span>
+        <span className="fanout-chip-task">{agent.task}</span>
+        <span className="fanout-chip-count">
+          claimed {agent.claimedPaths.length} file{agent.claimedPaths.length === 1 ? "" : "s"}
+        </span>
+        {hasPaths ? <ChevronRight className={`stage-caret ${expanded ? "open" : ""}`} size={12} /> : null}
+      </button>
+      {expanded && hasPaths ? (
+        <ul className="fanout-chip-paths">
+          {agent.claimedPaths.map((path) => (
+            <li key={path}>{path}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: SessionRun; onNavigate?: (nav: NavKey) => void }): JSX.Element {
   const warnings = visibleRunWarnings(run.warnings);
   const showRouteTrace = shouldShowRouteTrace(run, warnings);
   const navigate = onNavigate ?? (() => {});
+  const fanoutAgents = run.fanout?.agents;
+  const roster = fanoutAgents?.length ? <FanoutRoster agents={fanoutAgents} /> : null;
 
   if (run.timeline?.length) {
     return (
       <>
+        {roster}
         <RunTimeline run={run} events={run.timeline} warnings={warnings} />
         <RunProposedActions run={run} onNavigate={navigate} />
       </>
@@ -4787,6 +4892,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
   if (run.stages && run.stages.length > 0) {
     return (
       <>
+        {roster}
         <Markdown>{run.assistantText}</Markdown>
         {run.stages.map((stage) => (
           <StageBlock stage={stage} key={stage.id} />
@@ -4811,6 +4917,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
   const source = responseSource(run);
   return (
     <>
+      {roster}
       <AssistantResponse source={source}>{showRouteTrace ? opening : run.assistantText}</AssistantResponse>
       {run.modelThoughts ? <ModelThoughts text={run.modelThoughts} /> : null}
       {run.projectResult ? <ProjectArtifacts run={run} /> : null}

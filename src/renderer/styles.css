@@ -2971,6 +2971,148 @@ p {
   font-size: 12.5px;
 }
 
+/* Fan-out agent badge (docs/DRILL_PLAN.md Phase 5, sub-round 5c) — shared by
+   side-chat cards/groups and the run's agent roster. Absent agentName means
+   this never renders, so an ordinary single-pipeline run is untouched. */
+.agent-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  align-items: center;
+  padding: 1px 7px;
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--soft);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
+.agent-badge-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.side-chat-agent-group {
+  display: grid;
+  gap: 8px;
+}
+
+.side-chat-agent-group-head {
+  display: flex;
+  align-items: center;
+  padding: 2px 2px 0 2px;
+}
+
+/* Fan-out roster (5c): sits above a completed run's normal output when
+   run.fanout is present, listing the sub-agents the build was split across. */
+.fanout-roster {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.fanout-roster-head {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.fanout-roster-head svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.fanout-roster-list {
+  display: grid;
+  gap: 4px;
+}
+
+.fanout-chip {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.fanout-chip-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 6px 9px;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+  background: transparent;
+  border: 0;
+}
+
+.fanout-chip-head[aria-expanded] {
+  cursor: pointer;
+}
+
+.fanout-chip-dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+}
+
+.fanout-chip-name {
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.fanout-chip-task {
+  overflow: hidden;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fanout-chip-count {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.fanout-chip-head .stage-caret {
+  flex: 0 0 auto;
+  transition: transform 150ms ease;
+}
+
+.fanout-chip-head .stage-caret.open {
+  transform: rotate(90deg);
+}
+
+.fanout-chip-paths {
+  margin: 0;
+  padding: 0 9px 8px 30px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+  list-style: disc;
+}
+
+.fanout-chip-paths li {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Side-chat mini transcript (docs/FABLE_PLANS.md §26 restyle): the router
    speaks as a compact right-aligned user bubble, the model answers left-
    aligned in plain markdown — a smaller-scale echo of the main chat so a
