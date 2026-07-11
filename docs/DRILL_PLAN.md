@@ -17,7 +17,7 @@ free-text field, off `UserQuestionRequest` + the `<ask_user>` parser (main.ts ~1
 ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the CLOSED
 `manager-fab` (~11464) is a plain button and does NOT drag.
 
-- [ ] **B2.5 — Manager FAB draggable (Lachy: I STILL want to move the little widget).**
+- [x] **B2.5 — Manager FAB draggable (Lachy: I STILL want to move the little widget).**
   RENDERER. The little closed-state launcher (`manager-fab`, App.tsx ~11464) is a fixed
   button with only onClick. Make it draggable: reuse `managerWidgetPos`/clamp, add a
   click-vs-drag threshold (a small movement = reposition, a clean click = open). ALSO

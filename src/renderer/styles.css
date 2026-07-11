@@ -5797,8 +5797,6 @@ details.artifact-row[open] summary {
 
 .manager-fab {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
   z-index: 38;
   display: grid;
   place-items: center;
@@ -5809,10 +5807,21 @@ details.artifact-row[open] summary {
   border: none;
   border-radius: 999px;
   box-shadow: 0 16px 34px rgb(0 0 0 / 0.5);
+  cursor: grab;
+  touch-action: none;
   /* This is a floating overlay that can end up positioned anywhere on screen, including under
      the frameless titlebar's OS drag strip (see `.titlebar` above) — without this, a click here
      can get swallowed as a native window-drag instead of reaching the button. */
   -webkit-app-region: no-drag;
+  /* Same Chromium compositing-layer fix as `.manager-widget` below: the fab now moves via plain
+     left/top inline-style writes (see setFabPos in ManagerWidget) instead of a static right/bottom
+     CSS corner, so without a forced layer its no-drag hit-test region can go stale after a drag and
+     a later pointerdown lands back in the OS titlebar drag strip instead of the button. */
+  transform: translateZ(0);
+}
+
+.manager-fab.dragging {
+  cursor: grabbing;
 }
 
 .manager-fab:hover {

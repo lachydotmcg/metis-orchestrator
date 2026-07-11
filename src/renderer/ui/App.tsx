@@ -11360,11 +11360,45 @@ function clampManagerWidgetSize(size: ManagerWidgetSize): ManagerWidgetSize {
   };
 }
 
+/** Top-left position of the closed-state Manager launcher (the small circular fab), persisted so it
+ *  survives navigation and app restarts (see `managerFabPos` in useAppStoreState). Kept separate from
+ *  ManagerWidgetPos/clampManagerWidgetPos because the fab is a small fixed-size circle, not the big
+ *  resizable widget — reusing the widget's clamp would size the drag bounds wrong. */
+type ManagerFabPos = { x: number; y: number };
+
+const MANAGER_FAB_SIZE = 52;
+const MANAGER_FAB_MARGIN = 16;
+// Matches the fab's original fixed CSS corner (right: 24px, bottom: 24px) so switching to
+// left/top positioning doesn't move it until the user actually drags it.
+const MANAGER_FAB_CORNER_OFFSET = 24;
+// Total pointer travel (px) before a press-and-hold on the fab becomes a drag instead of a click.
+const MANAGER_FAB_DRAG_THRESHOLD = 5;
+
+/** Keeps the fab fully on-screen no matter where it was last dragged to. */
+function clampManagerFabPos(pos: ManagerFabPos): ManagerFabPos {
+  const maxX = Math.max(MANAGER_FAB_MARGIN, window.innerWidth - MANAGER_FAB_SIZE - MANAGER_FAB_MARGIN);
+  const maxY = Math.max(MANAGER_FAB_MARGIN, window.innerHeight - MANAGER_FAB_SIZE - MANAGER_FAB_MARGIN);
+  return {
+    x: Math.min(Math.max(pos.x, MANAGER_FAB_MARGIN), maxX),
+    y: Math.min(Math.max(pos.y, MANAGER_FAB_MARGIN), maxY)
+  };
+}
+
+/** Sensible resting anchor: bottom-right of the viewport, same corner as the old fixed CSS. */
+function defaultManagerFabPos(): ManagerFabPos {
+  return clampManagerFabPos({
+    x: window.innerWidth - MANAGER_FAB_SIZE - MANAGER_FAB_CORNER_OFFSET,
+    y: window.innerHeight - MANAGER_FAB_SIZE - MANAGER_FAB_CORNER_OFFSET
+  });
+}
+
 /** App-level floating Manager chat: a draggable, minimizable widget that hosts the exact same
  *  <ManagerChat /> component the Manager tab uses, so both share the `managerChat` store key and
  *  history. Mounted once at the App root (outside the per-view <main> content) so it overlays every
  *  nav view. Its own open/minimized/position state persists via useAppStoreState so it survives
- *  navigation and app restarts (docs/FABLE_PLANS.md — floating widget round of work). */
+ *  navigation and app restarts (docs/FABLE_PLANS.md — floating widget round of work). Note the closed
+ *  state (the small circular fab) has its own independent draggable position — see `managerFabPos`
+ *  below — since it's a different-shaped launcher, not the widget itself. */
 function ManagerWidget({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX.Element {
   const [open, setOpen] = useAppStoreState<boolean>("managerWidgetOpen", false);
   const [minimized, setMinimized] = useAppStoreState<boolean>("managerWidgetMinimized", false);
@@ -11372,10 +11406,18 @@ function ManagerWidget({ onNavigate }: { onNavigate: (nav: NavKey) => void }): J
   const [size, setSize] = useAppStoreState<ManagerWidgetSize>("managerWidgetSize", DEFAULT_MANAGER_WIDGET_SIZE);
   const [isDragging, setIsDragging] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
+  const [fabPos, setFabPos] = useAppStoreState<ManagerFabPos | null>("managerFabPos", null);
+  const [isFabDragging, setIsFabDragging] = useState(false);
   const dragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const resizeRef = useRef<{ pointerId: number; startX: number; startY: number; startWidth: number; startHeight: number } | null>(null);
+  const fabDragRef = useRef<{ pointerId: number; startX: number; startY: number; originX: number; originY: number; dragged: boolean } | null>(null);
+  // Set right before a completed drag's trailing native `click` event (pointer capture keeps the
+  // button as that click's target no matter where the pointer ended up) so handleFabClick can
+  // swallow just that one click instead of re-opening the widget after a drag.
+  const fabJustDraggedRef = useRef(false);
 
   const resolvedPos = pos ?? defaultManagerWidgetPos(size);
+  const resolvedFabPos = fabPos ?? defaultManagerFabPos();
 
   // Re-clamp on window resize so the widget never ends up stranded off-screen (e.g. after
   // shrinking the window while it was parked near a since-vanished edge).
@@ -11386,6 +11428,15 @@ function ManagerWidget({ onNavigate }: { onNavigate: (nav: NavKey) => void }): J
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, [minimized, size, setPos]);
+
+  // Same re-clamp for the closed-state fab, sized for its own small fixed footprint.
+  useEffect(() => {
+    function handleFabResize(): void {
+      setFabPos((current) => (current ? clampManagerFabPos(current) : current));
+    }
+    window.addEventListener("resize", handleFabResize);
+    return () => window.removeEventListener("resize", handleFabResize);
+  }, [setFabPos]);
 
   // Re-clamp the position whenever the persisted size changes (e.g. right after a corner-drag
   // resize) so a widget that just grew can't spill off the right/bottom edge of the viewport.
@@ -11459,9 +11510,71 @@ function ManagerWidget({ onNavigate }: { onNavigate: (nav: NavKey) => void }): J
     }
   }
 
+  // Click-vs-drag: pointer down never opens the widget by itself. Only once movement crosses
+  // MANAGER_FAB_DRAG_THRESHOLD does it become a drag (mirrors handleHeaderPointerDown/Move/endDrag
+  // above); short of that threshold, pointer up resolves it as a plain click that opens the widget.
+  function handleFabPointerDown(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const startPos = fabPos ?? defaultManagerFabPos();
+    if (!fabPos) setFabPos(startPos);
+    fabDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      originX: startPos.x,
+      originY: startPos.y,
+      dragged: false
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function handleFabPointerMove(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const drag = fabDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.dragged) {
+      if (Math.hypot(dx, dy) < MANAGER_FAB_DRAG_THRESHOLD) return;
+      drag.dragged = true;
+      setIsFabDragging(true);
+    }
+    setFabPos(clampManagerFabPos({ x: drag.originX + dx, y: drag.originY + dy }));
+  }
+
+  function endFabDrag(event: ReactPointerEvent<HTMLButtonElement>): void {
+    const drag = fabDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    fabDragRef.current = null;
+    setIsFabDragging(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    if (drag.dragged) fabJustDraggedRef.current = true;
+  }
+
+  function handleFabClick(): void {
+    // Suppress the native click that trails a completed drag; a real click (mouse click that never
+    // crossed the threshold, or a keyboard Enter/Space activation, which never touches fabDragRef
+    // at all) opens the widget as normal.
+    if (fabJustDraggedRef.current) {
+      fabJustDraggedRef.current = false;
+      return;
+    }
+    setOpen(true);
+  }
+
   if (!open) {
     return (
-      <button type="button" className="manager-fab" aria-label="Open Manager chat" onClick={() => setOpen(true)}>
+      <button
+        type="button"
+        className={`manager-fab ${isFabDragging ? "dragging" : ""}`}
+        aria-label="Open Manager chat"
+        style={{ left: resolvedFabPos.x, top: resolvedFabPos.y }}
+        onPointerDown={handleFabPointerDown}
+        onPointerMove={handleFabPointerMove}
+        onPointerUp={endFabDrag}
+        onPointerCancel={endFabDrag}
+        onClick={handleFabClick}
+      >
         <Bot size={20} />
       </button>
     );
