@@ -7579,6 +7579,75 @@ button.pulse-tile:hover {
   color: #ffd8a3 !important;
 }
 
+/* ---- Settings > MCP servers > Test connection ---- */
+
+.mcp-probe-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.mcp-probe-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 180px;
+}
+
+.mcp-probe-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.mcp-probe-result {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.mcp-probe-result svg {
+  flex-shrink: 0;
+}
+
+.mcp-probe-ok {
+  color: #b7e1ca;
+}
+
+.mcp-probe-error {
+  align-items: center;
+  color: #d89aa0;
+  font-size: 12px;
+}
+
+.mcp-probe-tools {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-probe-tools li {
+  padding: 2px 8px;
+  color: var(--soft);
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+}
+
 /* ---- Settings > Search (nav filter empty state) ---- */
 
 .settings-nav-empty {

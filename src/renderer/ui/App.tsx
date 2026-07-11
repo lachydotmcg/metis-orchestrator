@@ -108,6 +108,7 @@ import type {
   GraphPipelineStage,
   ManagerAction,
   ManagerChatMessage,
+  McpProbeResult,
   ModelCatalogState,
   OllamaListResult,
   OllamaPullProgress,
@@ -772,6 +773,11 @@ const BENCHMARK_ROLE_FILTERS: Array<{ key: string; label: string }> = [
 // persisted via useAppStoreState so it survives restarts.
 const DEFAULT_BENCHMARK_LOCAL_FIRST = true;
 
+// Prerequisite skills recommended alongside the model install in onboarding.
+// Matched case-insensitively against registry package names — see
+// matchSkillPackage below (docs/DRILL_PLAN.md Phase 4 follow-up).
+const RECOMMENDED_ONBOARDING_SKILLS: readonly string[] = ["Planning", "Agentic Tasks", "UI Design"];
+
 /** Picks the strongest fitting model tagged with `role` for the given GPU —
  *  prefers a "great" fit over "tight", then the largest model that still fits.
  *  Returns undefined when nothing tagged for that role fits at all (caller
@@ -782,6 +788,14 @@ function pickBestForRole(models: ScoredModel[], role: string): ScoredModel | und
   const great = tagged.filter((model) => model.fit === "great");
   const pool = great.length ? great : tagged;
   return pool.reduce((best, model) => (model.vram > best.vram ? model : best), pool[0]);
+}
+
+/** Case-insensitive name match for a recommended onboarding skill against
+ *  the registry's "skill" packages — used to wire the onboarding chips up
+ *  to a real one-click install (docs/DRILL_PLAN.md Phase 4 follow-up). */
+function matchSkillPackage(skillName: string, packages: RegistryPackage[]): RegistryPackage | undefined {
+  const needle = skillName.trim().toLowerCase();
+  return packages.find((pkg) => pkg.kind === "skill" && pkg.name.trim().toLowerCase() === needle);
 }
 
 // New installs start with a single empty board and no seeded sample images —
@@ -7912,12 +7926,28 @@ function BenchmarkWorkspace({
 
   const [ollamaInfo, setOllamaInfo] = useState<OllamaListResult | null>(null);
   const [pullProgress, setPullProgress] = useState<Record<string, OllamaPullProgress>>({});
+  const [skillRegistry, setSkillRegistry] = useState<RegistryPackage[]>([]);
+  const [installedSkillIds, setInstalledSkillIds] = useState<Set<string>>(new Set());
+  const [skillInstallState, setSkillInstallState] = useState<Record<string, "installing" | "installed" | "failed">>({});
 
   useEffect(() => {
     if (!window.metisOllama) return;
     let alive = true;
     void window.metisOllama.list().then((info) => {
       if (alive) setOllamaInfo(info);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!window.metisRegistry) return;
+    let alive = true;
+    void Promise.all([window.metisRegistry.list(), window.metisRegistry.listInstalled()]).then(([reg, installed]) => {
+      if (!alive) return;
+      setSkillRegistry(reg.packages);
+      setInstalledSkillIds(new Set(installed.map((item) => item.id)));
     });
     return () => {
       alive = false;
@@ -7963,6 +7993,28 @@ function BenchmarkWorkspace({
     return Array.from(names);
   }, [recommendedModels]);
 
+  const recommendedSkillMatches = useMemo(
+    () => RECOMMENDED_ONBOARDING_SKILLS.map((name) => ({ name, pkg: matchSkillPackage(name, skillRegistry) })),
+    [skillRegistry]
+  );
+
+  function skillStatus(pkg: RegistryPackage): "installed" | "installing" | "failed" | "pending" {
+    if (installedSkillIds.has(pkg.id)) return "installed";
+    return skillInstallState[pkg.id] ?? "pending";
+  }
+
+  async function installSkillPackage(pkg: RegistryPackage): Promise<void> {
+    if (!window.metisRegistry) return;
+    setSkillInstallState((current) => ({ ...current, [pkg.id]: "installing" }));
+    try {
+      await window.metisRegistry.install(pkg.id);
+      setInstalledSkillIds((current) => new Set(current).add(pkg.id));
+      setSkillInstallState((current) => ({ ...current, [pkg.id]: "installed" }));
+    } catch {
+      setSkillInstallState((current) => ({ ...current, [pkg.id]: "failed" }));
+    }
+  }
+
   function targetStatus(tag: string): "installed" | "downloading" | "error" | "pending" {
     if (ollamaInfo?.installed.includes(tag)) return "installed";
     const progress = pullProgress[tag];
@@ -7987,6 +8039,9 @@ function BenchmarkWorkspace({
   function installRecommendedSetup(): void {
     for (const target of installTargets) {
       if (targetStatus(target.tag) !== "installed") pullTag(target.tag);
+    }
+    for (const match of recommendedSkillMatches) {
+      if (match.pkg && skillStatus(match.pkg) === "pending") void installSkillPackage(match.pkg);
     }
   }
 
@@ -8261,14 +8316,58 @@ function BenchmarkWorkspace({
 
         <div className="install-skills">
           <small className="install-skills-label">Recommended skills</small>
-          <div className="chip-row">
-            {["Planning", "Agentic Tasks", "UI Design"].map((skill) => (
-              <span key={skill} className="preset-chip">
-                {skill}
-              </span>
-            ))}
-          </div>
-          <p className="bench-note">Manage skill installs in the Marketplace.</p>
+          {window.metisRegistry ? (
+            <div className="install-rows">
+              {recommendedSkillMatches.map(({ name, pkg }) => {
+                const status = pkg ? skillStatus(pkg) : "unmatched";
+                return (
+                  <div key={name} className={`install-row ${status === "unmatched" ? "manual" : status}`}>
+                    <span className="install-model">
+                      <strong>{name}</strong>
+                      <small>{pkg ? `${pkg.publisher} · v${pkg.version}` : "no matching registry package"}</small>
+                    </span>
+                    <span className="install-state">
+                      {!pkg ? (
+                        <small className="install-pending">Not in registry</small>
+                      ) : status === "installed" ? (
+                        <span className="install-installed">
+                          <CheckCircle2 size={14} /> Installed
+                        </span>
+                      ) : status === "installing" ? (
+                        <span className="install-progress">
+                          <Loader2 size={13} className="spin" /> <small>installing</small>
+                        </span>
+                      ) : status === "failed" ? (
+                        <span className="install-error">
+                          <ShieldAlert size={13} /> Install failed
+                          <button type="button" className="ghost-action install-retry" onClick={() => void installSkillPackage(pkg)}>
+                            <RefreshCw size={12} /> Retry
+                          </button>
+                        </span>
+                      ) : (
+                        <button type="button" className="ghost-action" onClick={() => void installSkillPackage(pkg)}>
+                          <Download size={13} /> Install
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="chip-row">
+              {RECOMMENDED_ONBOARDING_SKILLS.map((skill) => (
+                <span key={skill} className="preset-chip">
+                  {skill}
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="bench-note">
+            {window.metisRegistry
+              ? "“Install recommended setup” above also installs any matched skills; unmatched ones can be added from the Marketplace."
+              : "Electron registry bridge unavailable in this preview — manage skill installs in the Marketplace."}
+          </p>
         </div>
       </section>
 
@@ -11551,6 +11650,7 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
   const [testPrompt, setTestPrompt] = useState("Summarise these notes into five bullets.");
   const [policyDecision, setPolicyDecision] = useState<PolicyDecisionResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [mcpProbes, setMcpProbes] = useState<Record<string, { status: "loading" | "done"; result?: McpProbeResult }>>({});
   const secretMap = useMemo(() => new Map(secrets.map((secret) => [secret.provider, secret])), [secrets]);
   const installedIds = useMemo(() => new Set(installedPackages.map((item) => item.id)), [installedPackages]);
   const mcpPackages = useMemo(() => installedPackages.filter((item) => item.kind === "mcp"), [installedPackages]);
@@ -11687,6 +11787,13 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
     await runBusy(`uninstall-${id}`, async () => {
       await window.metisRegistry?.uninstall(id);
     });
+  }
+
+  async function testMcpConnection(id: string): Promise<void> {
+    if (!window.metisMcp) return;
+    setMcpProbes((current) => ({ ...current, [id]: { status: "loading" } }));
+    const result = await window.metisMcp.probe(id);
+    setMcpProbes((current) => ({ ...current, [id]: { status: "done", result } }));
   }
 
   async function runPolicyTest(): Promise<void> {
@@ -12053,19 +12160,57 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
             <p>No MCP servers installed — add one from the Marketplace.</p>
           ) : (
             <div className="registry-list">
-              {mcpPackages.map((item) => (
-                <div className="registry-row registry-row-detailed" key={item.id}>
-                  <span>
-                    <strong>{item.name}</strong>
-                    <small>{item.publisher} · v{item.version}</small>
-                    {item.description ? <p className="registry-description">{item.description}</p> : null}
-                    {item.source_url ? <code>{item.source_url}</code> : null}
-                  </span>
-                </div>
-              ))}
+              {mcpPackages.map((item) => {
+                const probe = mcpProbes[item.id];
+                return (
+                  <div className="registry-row registry-row-detailed mcp-probe-row" key={item.id}>
+                    <span>
+                      <strong>{item.name}</strong>
+                      <small>{item.publisher} · v{item.version}</small>
+                      {item.description ? <p className="registry-description">{item.description}</p> : null}
+                      {item.source_url ? <code>{item.source_url}</code> : null}
+                    </span>
+                    <div className="mcp-probe-actions">
+                      <button
+                        type="button"
+                        className="ghost-action"
+                        disabled={!window.metisMcp || probe?.status === "loading"}
+                        onClick={() => void testMcpConnection(item.id)}
+                        title={!window.metisMcp ? "Requires the desktop app — unavailable in this preview" : "Spawn the server and list its tools"}
+                      >
+                        {probe?.status === "loading" ? <Loader2 size={14} className="spin" /> : <Plug size={14} />}
+                        Test connection
+                      </button>
+                      {!window.metisMcp ? <small className="mcp-probe-note">Needs the desktop app</small> : null}
+                      {probe?.status === "done" && probe.result ? (
+                        probe.result.ok ? (
+                          <div className="mcp-probe-result mcp-probe-ok">
+                            <Check size={13} />
+                            <span>{probe.result.tools?.length ?? 0} tools</span>
+                            {probe.result.tools && probe.result.tools.length > 0 ? (
+                              <ul className="mcp-probe-tools">
+                                {probe.result.tools.map((tool) => (
+                                  <li key={tool.name} title={tool.description ?? tool.name}>
+                                    {tool.name}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <p className="mcp-probe-result mcp-probe-error">
+                            <X size={13} /> {probe.result.error ?? "Connection failed"}
+                          </p>
+                        )
+                      ) : null}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
           {!window.metisRegistry ? <p className="settings-warning">Electron registry bridge unavailable in this preview — showing local state only.</p> : null}
+          {mcpPackages.length > 0 ? <p className="settings-hint">Servers that need credentials will fail "Test connection" until placeholder tokens in their config are filled in.</p> : null}
           <div className="settings-actions">
             <button type="button" onClick={onOpenMcpMarketplace}>
               <Plug size={15} />
