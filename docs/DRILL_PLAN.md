@@ -228,10 +228,13 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ## PHASE 6 — Reliability & scale
 
-- [ ] **§19 phase 2 — key POOLS.** Multiple keys/accounts per provider (ProviderAccount:
+- [x] **§19 phase 2 — key POOLS.** Multiple keys/accounts per provider (ProviderAccount:
   provider, keyRef, label, cooldownUntil, usedToday), rotation across pooled accounts
   before falling to the next provider, per-account cooldowns (today they're per-provider),
-  pool UI in Settings>Providers with per-account health.
+  pool UI in Settings>Providers with per-account health. Backend engine e10daf6; pool UI
+  (Add key, editable label, cooldown pill, usedToday, remove) shipped. REMAINING: per-account
+  SECRET entry needs a desktop bridge (metisSecrets is single-key today) — UI shows an honest
+  Key-not-linked state rather than faking storage. NEEDS LIVE TEST.
 - [ ] **§16 phase 2 — Knowledge Banks.** Graph View as the bank front-end (chunks as
   openable nodes), conversation embedding (index past conversations, retrieve into chat),
   and per-bank selection. Builds on the shipped phase-1 embeddings.

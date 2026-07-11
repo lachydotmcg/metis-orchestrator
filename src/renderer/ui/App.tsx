@@ -118,6 +118,7 @@ import type {
   PermissionScope,
   PolicyDecisionResult,
   PolicyStatus,
+  ProviderAccount,
   ProviderKey,
   ProviderStatus,
   ProjectSnapshot,
@@ -208,6 +209,8 @@ type CustomSkill = { id: string; name: string; description?: string };
 // update before it's ever persisted. Module-level constants keep the reference stable.
 const EMPTY_CUSTOM_SKILLS: CustomSkill[] = [];
 const EMPTY_STARRED_PACKAGES: string[] = [];
+// Stable module-level fallback for useAppStoreState("providerAccounts", ...) — see comment above.
+const DEFAULT_PROVIDER_ACCOUNTS: ProviderAccount[] = [];
 
 type GhostDrag = { payload: DragPayload };
 type RouteTestState = { agentId: string; status: "running" | "complete" | "error"; startedAt: number; completedAt?: number; message?: string };
@@ -10123,6 +10126,10 @@ function todoId(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+function providerAccountId(): string {
+  return `acct-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 const DEFAULT_TODO_BOARD: TodoBoard = {
   columns: [
     {
@@ -11759,6 +11766,10 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
   // merge) — without this, an existing install upgrading to this build would
   // see chatVerbosity/streamingEnabled render as an empty "Select" control.
   const settings = useMemo(() => ({ ...DEFAULT_SETTINGS, ...rawSettings }), [rawSettings]);
+  // Key-pool accounts (docs/DRILL_PLAN.md Phase 6 §19) — same "providerAccounts" store
+  // key main.ts's effectiveAccountsForProvider reads, so an add/remove here takes effect
+  // on the next run without any dedicated bridge round trip.
+  const [providerAccounts, setProviderAccounts] = useAppStoreState("providerAccounts", DEFAULT_PROVIDER_ACCOUNTS);
   const [rawAppearance, setAppearance] = useAppStoreState("appearance", DEFAULT_APPEARANCE);
   const appearance = useMemo(() => ({ ...DEFAULT_APPEARANCE, ...rawAppearance }), [rawAppearance]);
   // "Is this done?" critic loop (docs/FABLE_PLANS.md §22) — a top-level store
@@ -11872,6 +11883,32 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
     await runBusy(`secret-${provider}`, async () => {
       await window.metisSecrets?.delete(provider);
     });
+  }
+
+  // Key-pool accounts have no secret bridge of their own yet — main.ts owns
+  // providerAccounts as a bookkeeping list (label, cooldown, usedToday) and a
+  // separate per-account secret store keyed by account id, but no renderer
+  // bridge exposes writing that secret store (only the classic per-provider
+  // metisSecrets). Adding an account here reserves a pool slot the owner can
+  // wire a key into once that bridge lands; it never touches localStorage.
+  function addProviderAccount(provider: ProviderKey): void {
+    setProviderAccounts((current) => {
+      const existingCount = current.filter((account) => account.provider === provider).length;
+      const id = providerAccountId();
+      // keyRef mirrors id (docs/DRILL_PLAN.md Phase 6 §19 / ProviderAccount comment in
+      // runtime-contracts.ts): this account resolves against the per-account secret
+      // store keyed by its own id, never the "provider-default" sentinel.
+      const next: ProviderAccount = { id, provider, label: `Account ${existingCount + 2}`, keyRef: id };
+      return [...current, next];
+    });
+  }
+
+  function removeProviderAccount(id: string): void {
+    setProviderAccounts((current) => current.filter((account) => account.id !== id));
+  }
+
+  function renameProviderAccount(id: string, label: string): void {
+    setProviderAccounts((current) => current.map((account) => (account.id === id ? { ...account, label } : account)));
   }
 
   async function healthCheck(provider: ProviderKey): Promise<void> {
@@ -12139,29 +12176,76 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
             {PROVIDER_KEYS.map((provider) => {
               const status = providers.find((item) => item.provider === provider);
               const secret = secretMap.get(provider);
+              const pool = providerAccounts.filter((account) => account.provider === provider);
               return (
-                <div className="provider-row" key={provider}>
-                  <span>
-                    <strong>{status?.label ?? PROVIDER_LABELS[provider]}</strong>
-                    <small>{status?.detail ?? "Waiting for Electron runtime."}</small>
-                  </span>
-                  {provider !== "ollama" ? (
-                    <input
-                      type="password"
-                      value={secretDrafts[provider] ?? ""}
-                      placeholder={secret?.hasSecret ? "Key saved" : "Paste API key"}
-                      onChange={(event) => setSecretDrafts((current) => ({ ...current, [provider]: event.target.value }))}
-                    />
-                  ) : null}
-                  <div className="provider-actions">
-                    <button type="button" onClick={() => void healthCheck(provider)} disabled={busy === `health-${provider}`}>Check</button>
+                <div className="provider-group" key={provider}>
+                  <div className="provider-row">
+                    <span>
+                      <strong>{status?.label ?? PROVIDER_LABELS[provider]}</strong>
+                      <small>{status?.detail ?? "Waiting for Electron runtime."}</small>
+                    </span>
                     {provider !== "ollama" ? (
-                      <>
-                        <button type="button" onClick={() => void saveSecret(provider)} disabled={!secretDrafts[provider]?.trim() || busy === `secret-${provider}`}>Save</button>
-                        <button type="button" onClick={() => void clearSecret(provider)} disabled={!secret?.hasSecret || busy === `secret-${provider}`}>Clear</button>
-                      </>
+                      <input
+                        type="password"
+                        value={secretDrafts[provider] ?? ""}
+                        placeholder={secret?.hasSecret ? "Key saved" : "Paste API key"}
+                        onChange={(event) => setSecretDrafts((current) => ({ ...current, [provider]: event.target.value }))}
+                      />
                     ) : null}
+                    <div className="provider-actions">
+                      <button type="button" onClick={() => void healthCheck(provider)} disabled={busy === `health-${provider}`}>Check</button>
+                      {provider !== "ollama" ? (
+                        <>
+                          <button type="button" onClick={() => void saveSecret(provider)} disabled={!secretDrafts[provider]?.trim() || busy === `secret-${provider}`}>Save</button>
+                          <button type="button" onClick={() => void clearSecret(provider)} disabled={!secret?.hasSecret || busy === `secret-${provider}`}>Clear</button>
+                        </>
+                      ) : null}
+                    </div>
                   </div>
+                  {provider !== "ollama" ? (
+                    <div className="provider-pool">
+                      <div className="provider-pool-header">
+                        <small>
+                          {pool.length === 0
+                            ? "No extra keys. The key above is the only account."
+                            : `${pool.length} extra ${pool.length === 1 ? "key" : "keys"} in the pool.`}
+                          {" "}Extra keys rotate in automatically when one hits its quota.
+                        </small>
+                        <button type="button" className="ghost-action" onClick={() => addProviderAccount(provider)}>
+                          <Plus size={13} />
+                          Add key
+                        </button>
+                      </div>
+                      {pool.length > 0 ? (
+                        <div className="provider-pool-list">
+                          {pool.map((account) => {
+                            const now = Date.now();
+                            const cooling = account.cooldownUntil && account.cooldownUntil > now;
+                            return (
+                              <div className="provider-pool-row" key={account.id}>
+                                <input
+                                  type="text"
+                                  value={account.label ?? ""}
+                                  placeholder="Label"
+                                  onChange={(event) => renameProviderAccount(account.id, event.target.value)}
+                                />
+                                <span className="pool-key-indicator" title="No per-account key bridge yet. This slot is reserved for a future desktop update.">
+                                  Key not linked
+                                </span>
+                                <span className={`pool-status ${cooling ? "cooling" : "available"}`}>
+                                  {cooling ? `Cooling until ${new Date(account.cooldownUntil as number).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "Available"}
+                                </span>
+                                {typeof account.usedToday === "number" ? <span className="pool-used">{account.usedToday} used today</span> : null}
+                                <button type="button" className="ghost-action" onClick={() => removeProviderAccount(account.id)} title="Remove this pool slot">
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                 </div>
               );
             })}

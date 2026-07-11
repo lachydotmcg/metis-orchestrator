@@ -7658,6 +7658,112 @@ button.pulse-tile:hover {
   white-space: nowrap;
 }
 
+/* ---- Provider key-pool (Settings > Providers, docs/DRILL_PLAN.md Phase 6 §19) ---- */
+
+.provider-group {
+  display: grid;
+  gap: 8px;
+}
+
+.provider-pool {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.provider-pool-header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.provider-pool-header small {
+  flex: 1 1 240px;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.provider-pool-header .ghost-action {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.provider-pool-list {
+  display: grid;
+  gap: 6px;
+}
+
+.provider-pool-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.provider-pool-row input {
+  min-height: 30px;
+  padding: 0 8px;
+  color: white;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+.provider-pool-row input:focus {
+  border-color: #555;
+  box-shadow: 0 0 0 3px rgb(174 183 198 / 0.12);
+}
+
+.pool-key-indicator {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pool-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.pool-status.available {
+  color: #d8ffee;
+  background: rgb(42 106 74 / 0.25);
+}
+
+.pool-status.cooling {
+  color: #ffe6b3;
+  background: rgb(115 93 43 / 0.25);
+}
+
+.pool-used {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.provider-pool-row .ghost-action {
+  min-height: 28px;
+  padding: 0 8px;
+}
+
 .registry-count-line {
   margin-inline: 12px 12px;
   padding: 8px 10px;
