@@ -77,6 +77,13 @@ contextBridge.exposeInMainWorld("metisConversations", {
   exportMarkdown: (input?: { conversationId?: string }) => ipcRenderer.invoke("metis-conversations:export", input) as Promise<ConversationExportResult>
 });
 
+contextBridge.exposeInMainWorld("metisKnowledge", {
+  searchConversations: (query: string, topK?: number) =>
+    ipcRenderer.invoke("metis-knowledge:searchConversations", query, topK) as Promise<
+      { conversationId: string; ordinal: number; text: string; score: number }[]
+    >
+});
+
 contextBridge.exposeInMainWorld("metisLab", {
   runExperiment: (prompt?: string) => ipcRenderer.invoke("metis-lab:run-experiment", prompt)
 });

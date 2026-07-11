@@ -194,6 +194,10 @@
 - [ ] **§16 phase 2 — Knowledge Banks.** Graph View as the bank front-end (chunks as
   openable nodes), conversation embedding (index past conversations, retrieve into chat),
   and per-bank selection. Builds on the shipped phase-1 embeddings.
+  STATUS: conversation-indexing BACKEND shipped (buildOrLoadConversationIndex +
+  retrieveConversationContext, ipc metis-knowledge:searchConversations, preload bridge) —
+  NEEDS LIVE TEST vs a real nomic-embed-text Ollama. REMAINING (renderer follow-up):
+  retrieve-into-chat surfacing, Graph View chunk nodes, per-bank selection.
 - [ ] **Parallel sessions live test note** — needs Lachy's Electron app; keep the checklist
   in FABLE_PLANS and verify opportunistically if he runs the app during the drill.
 - [ ] **Auto-update download** — wire electron-updater + electron-builder publish config

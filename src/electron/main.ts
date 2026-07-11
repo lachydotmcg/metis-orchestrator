@@ -5035,6 +5035,129 @@ async function retrieveKnowledgeForPrompt(root: string | undefined, query: strin
   }
 }
 
+// --- Knowledge Banks phase 2: local embeddings retrieval over past
+// conversations (docs/DRILL_PLAN.md Phase 6 §16 phase 2), mirroring the
+// phase 1 file-retrieval code path directly above. STRICTLY ADDITIVE and a
+// no-op whenever Ollama/the embed model/conversations/the retrieval result
+// are unavailable — every function here fails soft (returns null/[] on any
+// error) so a broken embed can never break a run. Not wired into any
+// prompt-assembly site yet — only reachable via the
+// metis-knowledge:searchConversations IPC handle, for a renderer follow-up
+// (retrieve-into-chat UI, per-bank surfacing) to build on.
+type RetrievedConversationChunk = { conversationId: string; ordinal: number; text: string; score: number };
+
+/** Splits a conversation's turns into KnowledgeChunk-shaped items. Chunks on
+ *  message boundaries first (each turn is its own logical unit), then
+ *  sub-chunks any single turn whose content exceeds KNOWLEDGE_CHUNK_SIZE
+ *  using chunkFileText's paragraph/line packer. Empty turns are skipped. */
+function conversationToChunks(conversation: ConversationRecord): KnowledgeChunk[] {
+  const chunks: KnowledgeChunk[] = [];
+  let ordinal = 0;
+  for (const turn of conversation.turns) {
+    if (turn.role !== "user" && turn.role !== "assistant") continue;
+    const text = turn.content.trim();
+    if (text.length === 0) continue;
+    if (text.length <= KNOWLEDGE_CHUNK_SIZE) {
+      chunks.push({ path: `conversation:${conversation.id}#${ordinal}`, ordinal, text });
+      ordinal += 1;
+      continue;
+    }
+    for (const sub of chunkFileText(`conversation:${conversation.id}`, text)) {
+      chunks.push({ path: `conversation:${conversation.id}#${ordinal}`, ordinal, text: sub.text });
+      ordinal += 1;
+    }
+  }
+  return chunks;
+}
+
+/** Cheap, order-independent signature over the stored conversation set (id +
+ *  message count + last-updated per conversation), used to decide whether a
+ *  cached conversation index is still fresh without re-embedding everything.
+ *  Mirrors knowledgeSourceSignature above. */
+function conversationIndexSignature(conversations: ConversationRecord[]): string {
+  const parts = conversations.map((conversation) => `${conversation.id}:${conversation.turns.length}:${conversation.updatedAt}`);
+  return sha256(parts.sort().join("|"));
+}
+
+function conversationIndexCachePath(): string {
+  return dataPath("knowledge", "conversations.json");
+}
+
+/** Builds (or reuses a cached) local embeddings index over stored
+ *  conversations. Returns null whenever there is nothing to index or
+ *  embedding is unavailable — callers must treat null as "no knowledge bank"
+ *  and change nothing about the run. Never throws. Mirrors
+ *  buildOrLoadKnowledgeIndex above exactly, at a distinct cache path so the
+ *  two indexes never collide. */
+async function buildOrLoadConversationIndex(): Promise<KnowledgeIndex | null> {
+  try {
+    const conversations = await readConversations();
+    if (conversations.length === 0) return null;
+    const signature = conversationIndexSignature(conversations);
+    const cachePath = conversationIndexCachePath();
+    try {
+      const cached = JSON.parse(await readFile(cachePath, "utf8")) as KnowledgeIndex;
+      if (cached.signature === signature && cached.model === KNOWLEDGE_EMBED_MODEL && Array.isArray(cached.chunks)) {
+        return cached;
+      }
+    } catch {
+      /* no usable cache — fall through to (re)build */
+    }
+    const allChunks: KnowledgeChunk[] = [];
+    for (const conversation of conversations) {
+      for (const chunk of conversationToChunks(conversation)) {
+        if (allChunks.length >= KNOWLEDGE_MAX_CHUNKS) break;
+        allChunks.push(chunk);
+      }
+      if (allChunks.length >= KNOWLEDGE_MAX_CHUNKS) break;
+    }
+    if (allChunks.length === 0) return null;
+    const vectors = await embedTexts(allChunks.map((chunk) => chunk.text));
+    if (!vectors || vectors.length !== allChunks.length) return null;
+    const index: KnowledgeIndex = {
+      signature,
+      model: KNOWLEDGE_EMBED_MODEL,
+      chunks: allChunks.map((chunk, i) => ({ ...chunk, vector: vectors[i] }))
+    };
+    try {
+      await mkdir(dirname(cachePath), { recursive: true });
+      await writeFile(cachePath, JSON.stringify(index), "utf8");
+    } catch {
+      /* cache write failure is non-fatal — the index is still usable this run */
+    }
+    return index;
+  } catch {
+    return null;
+  }
+}
+
+/** Retrieves the top-K most relevant chunks from the conversation knowledge
+ *  index for `query`, building/loading the index lazily on first call (never
+ *  auto-built at startup). Returns [] on ANY failure or when the
+ *  index/embedding is unavailable, or when nothing clears the similarity
+ *  floor — mirrors retrieveKnowledge above exactly. */
+async function retrieveConversationContext(query: string, topK: number = KNOWLEDGE_TOP_K): Promise<RetrievedConversationChunk[]> {
+  try {
+    const index = await buildOrLoadConversationIndex();
+    if (!index || index.chunks.length === 0) return [];
+    const queryVectors = await embedTexts([query]);
+    if (!queryVectors || queryVectors.length === 0) return [];
+    const queryVector = queryVectors[0];
+    const scored = index.chunks
+      .map((chunk) => ({
+        conversationId: chunk.path.replace(/^conversation:/, "").split("#")[0],
+        ordinal: chunk.ordinal,
+        text: chunk.text,
+        score: cosineSimilarity(queryVector, chunk.vector)
+      }))
+      .filter((chunk) => chunk.score >= KNOWLEDGE_SIMILARITY_FLOOR)
+      .sort((a, b) => b.score - a.score);
+    return scored.slice(0, topK);
+  } catch {
+    return [];
+  }
+}
+
 // Gate for the full multi-stage build pipeline. Router judgement
 // (decision.task_type) is now the SOLE signal for the non-forced path — no
 // more regex-sniffing the prompt for imperative build verbs. That keyword
@@ -8580,6 +8703,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-conversations:rename", (_event, id: string, title: string) => renameConversation(id, title));
   ipcMain.handle("metis-conversations:archive", (_event, id: string, archived: boolean) => archiveConversation(id, archived));
   ipcMain.handle("metis-conversations:export", (_event, input?: { conversationId?: string }) => exportConversationsMarkdown(input?.conversationId));
+  ipcMain.handle("metis-knowledge:searchConversations", (_event, query: string, topK?: number) => retrieveConversationContext(query, topK));
   ipcMain.handle("metis-lab:run-experiment", (_event, prompt?: string) => runLabExperiment(prompt));
   ipcMain.handle("metis-project:get-workspace", () => readProjectWorkspace());
   ipcMain.handle("metis-project:snapshot", () => snapshotCurrentProject());
