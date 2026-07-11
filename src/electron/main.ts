@@ -5173,10 +5173,38 @@ type ManagerTodoCard = { done?: boolean; assignee?: { kind?: string } };
 type ManagerTodoColumn = { id?: string; title?: string; cards?: ManagerTodoCard[] };
 type ManagerTodoBoard = { columns?: ManagerTodoColumn[] };
 
-function managerChatChain(): StageModelRef[] {
+/** Shape of the renderer-set `managerModel` app-store key: an explicit model
+ *  to place at the head of the Manager chat chain, or null for the default
+ *  chain. Kept loose (not trusted) since it's read back out of JSON on disk. */
+type ManagerModelOverride = { provider?: string; model?: string } | null;
+
+/** Resolves the `managerModel` app-store override into a StageModelRef, or
+ *  null if unset/invalid. Guarded end to end — a missing/malformed store
+ *  value (or an unrecognized provider key) never throws; it just means "no
+ *  override", and managerChatChain falls back to its default chain. */
+async function resolveManagerModelOverride(): Promise<StageModelRef | null> {
+  try {
+    const override = await readStoreValue<ManagerModelOverride>("managerModel", null);
+    if (!override || typeof override.model !== "string" || !override.model.trim()) return null;
+    const provider = override.provider as ProviderKey | undefined;
+    if (!provider || !(provider in providerInfo)) return null;
+    return { provider, model: override.model.trim() };
+  } catch {
+    return null;
+  }
+}
+
+/** Builds the Manager chat model chain: Claude -> DeepSeek -> local Ollama by
+ *  default so it works whichever keys are set, with the owner's `managerModel`
+ *  override (if any) placed at the head and de-duplicated out of the default
+ *  entries so it isn't tried twice. */
+async function managerChatChain(): Promise<StageModelRef[]> {
   const claude: StageModelRef = { provider: "anthropic", model: providerInfo.anthropic.defaultModel ?? "claude-sonnet-4-6" };
   const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-chat" };
-  return [claude, deepseek, localStageRef()];
+  const base: StageModelRef[] = [claude, deepseek, localStageRef()];
+  const override = await resolveManagerModelOverride();
+  if (!override) return base;
+  return [override, ...base.filter((ref) => ref.provider !== override.provider || ref.model !== override.model)];
 }
 
 /** Builds the live-context block injected into the Manager system prompt:
@@ -5248,7 +5276,7 @@ async function runManagerChat(history: ManagerChatMessage[]): Promise<ManagerCha
       .map((turn) => `${turn.role === "user" ? "Owner" : "Manager"}: ${turn.content}`)
       .join("\n\n");
     const prompt = [system, "", "Conversation so far:", transcript || "(no prior turns)", "", "Manager:"].join("\n");
-    const result = await callStageWithFallback(managerChatChain(), prompt);
+    const result = await callStageWithFallback(await managerChatChain(), prompt);
     if (result.failed || !result.output.trim()) {
       const detail = result.notes.join(" ") || "No model in the chain produced a reply.";
       await appendAudit("warning", "manager.chat", "Manager chat turn failed.", { notes: result.notes });
@@ -6441,6 +6469,46 @@ const VISION_MODEL_PRIORITY = ["gemma", "qwen-vl", "qwen2-vl", "qwen2.5vl", "lla
 
 let cachedVisionModel: string | null | undefined; // undefined = not yet detected this run
 
+/** Resolves the vision model to use for gallery captioning/analysis, honoring
+ *  the owner's `visionModel` app-store override (renderer-set picker) when
+ *  present, and otherwise falling back to the existing auto-detect. If a
+ *  configured value is set but Ollama's `/api/tags` is reachable and doesn't
+ *  list it, the override is treated as stale (e.g. the model was removed) and
+ *  we fall back to auto-detect rather than hard-failing the analyze — the
+ *  store read itself is also guarded so a malformed/missing value can never
+ *  break analysis. */
+async function resolveConfiguredVisionModel(): Promise<string | null> {
+  let configured = "";
+  try {
+    configured = (await readStoreValue<string>("visionModel", "")).trim();
+  } catch {
+    configured = "";
+  }
+  if (!configured) {
+    return detectOllamaVisionModel();
+  }
+  try {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
+    if (response.ok) {
+      const payload = (await response.json()) as { models?: Array<{ name?: string; model?: string }> };
+      const installed = (payload.models ?? []).map((entry) => entry.name ?? entry.model).filter(Boolean) as string[];
+      if (installed.length && !installed.includes(configured)) {
+        await appendAudit(
+          "warning",
+          "gallery.vision",
+          `Configured vision model "${configured}" isn't installed in Ollama; falling back to auto-detect.`,
+          { configured }
+        );
+        return detectOllamaVisionModel();
+      }
+    }
+  } catch {
+    // Ollama /api/tags unreachable or returned something unexpected — trust the
+    // configured value as-is (it may be a cloud vision model, not a local tag).
+  }
+  return configured;
+}
+
 /** Detects an installed Ollama vision-capable model by scanning `/api/tags`,
  *  cached per app run. Never downloads anything. Returns null on any failure
  *  or when no vision-capable family is installed (fail soft). */
@@ -6864,7 +6932,7 @@ async function readGalleryBoards(): Promise<StoredGalleryBoard[]> {
  *  installed. Fails soft to a palette-only (or fully empty) card. */
 async function generateStyleCard(image: StoredGalleryImage, boardId: string): Promise<StyleCard> {
   const { palette, base64, storageImage } = await extractPaletteFromImage(image.src);
-  const visionModel = await detectOllamaVisionModel();
+  const visionModel = await resolveConfiguredVisionModel();
   if (visionModel && base64) {
     const captioned = await captionImageWithVisionModel(visionModel, base64);
     if (captioned) {
