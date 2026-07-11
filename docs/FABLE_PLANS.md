@@ -5,30 +5,36 @@
 > operating protocol for the autonomous run. This header below is older context; the memory
 > file `metis-orchestrator.md` has the full history. Work DRILL_PLAN.md top to bottom.
 
-> ## ▶ POST-COMPACT / NEW-SESSION HANDOFF (updated 2026-07-08; latest commit 5e14c1c)
+> ## ▶ POST-COMPACT / NEW-SESSION HANDOFF (updated 2026-07-11; latest commit 0f1ded4, ~42 drill commits)
 > Read this first, then the numbered sections as needed. Working arrangement: **Fable diagnoses/
-> plans/verifies; Sonnet subagents implement.** Every subagent brief MUST include: "do all work
-> yourself — Agent tool forbidden" and "never git stash/checkout/restore/reset/commit". Coordinator
-> commits + pushes after EVERY verified round (quote-free commit messages — PS 5.1 mangles quotes,
-> including double quotes inside a here-string). Build check: `npm run build`. Repo pushes to
-> github.com/lachydotmcg/metis-orchestrator; registry clone lives in the session scratchpad
-> (re-clone github.com/lachydotmcg/metis-registry if absent). Memory file `metis-orchestrator.md`
-> has the full history; this doc has the designs.
-> **Shipped 2026-07-08 (loop drill):** gateways-not-models (nvidia/groq out of the model picker,
-> gateway plumbing intact), edit-routing reliability (conversational edits on a non-empty folder
-> force the non-destructive edit branch), To-Do central feed with per-card assignees
-> (You/Manager/conversation/agent) + filter, Manager AI (suggestion-first chips + My Queue over the
-> shared todoBoard, §11), and the Pulse GX-Corner bento (§8, hero/news/community/what's-new/Discord
-> tiles; Lachy still to supply the Discord png + invite).
-> **Open work, in order:** (1) §16 Knowledge Banks — embeddings via Ollama, retrieval + "grounded on
-> N chunks" lines, Graph View as the front-end (doc viewer + file nodes are the first brick); (2)
-> onboarding tutorial (§17/§18) — benchmark picks the best models for the hardware, one Install
-> button pulls models + prerequisite skills; (3) §19 phase 2 key pools — multi-key per provider,
-> per-account quota; (4) managed agents phase B (§3) — sub-agent fan-out into the side-chat surface
-> + file-claim ledger; (5) §20 leftovers — grouped-chip grammar for retrieval / "Ran N agents"; (6)
-> smaller: /orchestration autocomplete hint, Marketplace/Settings registry-view unification, gemma
-> vision caption pass. Also still un-run: parallel-sessions LIVE test (code present; needs a full
-> `npm run dev` Electron session — build → switch conversations → return).
+> plans/verifies + commits; Sonnet subagents implement.** Every subagent brief MUST include: "do all
+> work yourself — Agent tool forbidden" and "never run any git command". Coordinator commits + pushes
+> after EVERY verified round (`npm run build` must exit 0 first; commit messages QUOTE-FREE — PS 5.1
+> mangles quotes, even double quotes inside a here-string). ONE App.tsx writer at a time; backend
+> main.ts + registry + docs may parallel a renderer agent. Two agents touching shared build files ->
+> verify the disjoint half with `npx tsc -p tsconfig.electron.json --noEmit` and path-stage only the
+> finished files. Repo -> github.com/lachydotmcg/metis-orchestrator; registry clone in scratchpad
+> (re-clone github.com/lachydotmcg/metis-registry if absent). Source of truth = **docs/DRILL_PLAN.md**.
+> **Shipped in the drill (Phases 0-5 + parts of 6/8):** full Phase 0 batch; L4 chat fast-lane, L5
+> instant-stop AbortControllers, vision+manager model pickers, M3 manager actions, MCP probe/test,
+> image import, auto-title; managed-agents fan-out engine (5a, off by default via fanoutEnabled) +
+> per-agent side-chat viz (5c) + agent-to-agent directive bus (5b: SessionDirective kind +
+> fromAgent/toAgent + consumerAgent delivery); §20 Ran-N-agents chip; conversation export (bridge +
+> Privacy button); §19 key POOLS (backend engine e10daf6 + Settings pool UI 1537515; per-account
+> SECRET bridge still TODO — UI shows honest Key-not-linked); §16 knowledge banks phase-2 CONVERSATION
+> index backend (buildOrLoadConversationIndex + retrieveConversationContext + ipc, 85f1f6d); release
+> packaging scaffold (electron-builder.yml + tag-triggered CI + RELEASING.md, e5f0c09 — needs
+> `npm i -D electron-builder` + committed lockfile before CI npm ci passes); B2.3a multi-question
+> ask_user backend (questions[] cap 4 + UserQuestionAnswer, d15923e); B2.5 draggable manager FAB (0f1ded4).
+> **Open work, in order — ★ LACHY BATCH 2 (top of DRILL_PLAN) FIRST:** B2.3+B2.4 chatbox popup
+> (multi-question UI + elevate PermissionRequestCard to an on-screen popup — IN FLIGHT) -> B2.2
+> Benchmark Recommended-setup Model text cutoff (CSS) -> B2.1 move vision picker Settings->Gallery.
+> THEN Phase 8: Ctrl+K global search, streaming Manager chat, per-conversation token/cost line,
+> prompt templates, first-run tour, crash/last-errors view, routine templates; §16 renderer
+> follow-up (retrieve-into-chat + Graph chunk nodes + per-bank selection); 5c agent-to-agent thread
+> render. BLOCKED on Lachy: cut a GitHub Release (tag > 0.1.0) to light the update badge + enable
+> electron-updater auto-download; Discord invite; logo + screenshots for README. Still un-run: all
+> NEEDS-LIVE-TEST items need a real `npm run dev` Electron session (+ Ollama/keys).
 
 Written 2026-07-02 by Claude Fable 5. Division of labour: this doc is the thinking; Opus/Sonnet
 sessions action individual sections. Each section is self-contained enough to hand to a cold agent.
