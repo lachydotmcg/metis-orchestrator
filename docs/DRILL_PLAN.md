@@ -185,7 +185,7 @@
 
 ## PHASE 7 — Product & business (L23, L24)
 
-- [ ] **L23 — The Metis Subscription plan.** A real monetisation design doc
+- [x] **L23 — The Metis Subscription plan.** A real monetisation design doc
   (docs/BUSINESS_PLAN.md): free tier (local-first is free forever — that's the hook),
   a Pro tier (suggested ~$10-15/mo: cloud routing convenience, pooled managed keys,
   priority registry features, sync), and a metered token wallet for people without their
