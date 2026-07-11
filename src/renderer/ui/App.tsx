@@ -106,6 +106,7 @@ import type {
   ConversationTurnRecord,
   GraphPipelineConfig,
   GraphPipelineStage,
+  ManagerAction,
   ManagerChatMessage,
   ModelCatalogState,
   OllamaListResult,
@@ -1671,7 +1672,7 @@ export function App(): JSX.Element {
         <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} galleryVisuals={galleryVisuals} />
       ) : null}
       </div>
-      <ManagerWidget />
+      <ManagerWidget onNavigate={setActiveNav} />
     </div>
   );
 }
@@ -10651,7 +10652,105 @@ type ManagerSuggestion = { id: string; text: string; actionLabel: string; action
  *  (ollama) are never unkeyed in the sense this suggestion means. */
 const MANAGER_KEYABLE_PROVIDERS: ProviderKey[] = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
 
-const EMPTY_MANAGER_CHAT: ManagerChatMessage[] = [];
+/** Local extension of the shared `ManagerChatMessage` that also carries any actions the
+ *  Manager proposed on that turn (docs/DRILL_PLAN.md Phase 3 M3 part 2). The proposals
+ *  themselves persist with the message under the shared `managerChat` store key — they're
+ *  small and worth keeping across reloads — but the per-card approve/dismiss UI state
+ *  (ManagerActionCard) stays local component state and is never persisted. */
+type ManagerChatEntry = ManagerChatMessage & { actions?: ManagerAction[] };
+
+const EMPTY_MANAGER_CHAT: ManagerChatEntry[] = [];
+
+/** Human label for a proposed action's approval card. Mirrors the wording the Manager's
+ *  system prompt (main.ts managerSystemPrompt) was told to justify with `reason`, so the
+ *  label plus reason read as one sentence. */
+function managerActionLabel(action: ManagerAction): string {
+  if (action.kind === "add_todo") {
+    return `Add todo: "${action.title ?? ""}"`;
+  }
+  if (action.kind === "run_in_project") {
+    const project = action.projectPath ? projectNameFromPath(action.projectPath) : "current project";
+    const prompt = (action.prompt ?? "").trim();
+    const shortPrompt = prompt.length > 80 ? `${prompt.slice(0, 77)}...` : prompt;
+    return `Run in ${project}: "${shortPrompt}"`;
+  }
+  return `Open ${action.view ?? "view"}`;
+}
+
+type ManagerActionCardStatus =
+  | { kind: "idle" }
+  | { kind: "pending" }
+  | { kind: "done"; message: string }
+  | { kind: "error"; message: string }
+  | { kind: "dismissed" };
+
+/** One proposed-action approval card under a Manager reply (docs/DRILL_PLAN.md Phase 3 M3
+ *  part 2). Mirrors PermissionRequestCard's grammar: a slim accent-bordered row while
+ *  pending a verdict, collapsing to a one-line resolved record afterward. Approve calls
+ *  `metisManager.runAction`, which re-validates server-side — this card never runs anything
+ *  on its own, and never auto-resolves. */
+function ManagerActionCard({ action, onNavigate }: { action: ManagerAction; onNavigate: (nav: NavKey) => void }): JSX.Element {
+  const [status, setStatus] = useState<ManagerActionCardStatus>({ kind: "idle" });
+  const available = Boolean(window.metisManager);
+
+  async function approve(): Promise<void> {
+    if (!available) return;
+    setStatus({ kind: "pending" });
+    try {
+      const result = await window.metisManager!.runAction(action);
+      if (!result.ok) {
+        setStatus({ kind: "error", message: result.error ?? "Action failed." });
+        return;
+      }
+      if (action.kind === "add_todo") {
+        setStatus({ kind: "done", message: "Added to your board." });
+      } else if (action.kind === "open_view") {
+        if (result.view) onNavigate(result.view as NavKey);
+        setStatus({ kind: "done", message: `Opened ${result.view ?? action.view ?? "view"}.` });
+      } else {
+        setStatus({ kind: "done", message: "Started a run." });
+      }
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  function dismiss(): void {
+    setStatus({ kind: "dismissed" });
+  }
+
+  if (status.kind === "done" || status.kind === "dismissed") {
+    return (
+      <div className="manager-action-card resolved">
+        <Check size={12} />
+        <span>{status.kind === "dismissed" ? "Dismissed" : status.message}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="manager-action-card" role="group" aria-label="Proposed action">
+      <div className="manager-action-card-body">
+        <span className="manager-action-card-label">{managerActionLabel(action)}</span>
+        {action.reason ? <span className="manager-action-card-reason">{action.reason}</span> : null}
+        {status.kind === "error" ? <span className="manager-action-card-error">{status.message}</span> : null}
+      </div>
+      {available ? (
+        <div className="manager-action-card-actions">
+          <button type="button" onClick={() => void approve()} disabled={status.kind === "pending"}>
+            {status.kind === "pending" ? <Loader2 size={12} className="spin" /> : <Check size={12} />}
+            Approve
+          </button>
+          <button type="button" className="dismiss" onClick={dismiss} disabled={status.kind === "pending"}>
+            <X size={12} /> Dismiss
+          </button>
+        </div>
+      ) : (
+        <small className="manager-action-card-disabled">Approving needs the desktop app.</small>
+      )}
+    </div>
+  );
+}
 
 /** The Manager tab's primary surface: a real chat with "Metis Manager", backed
  *  by the metis-manager:chat IPC (main.ts builds live project/todo context and
@@ -10659,9 +10758,11 @@ const EMPTY_MANAGER_CHAT: ManagerChatMessage[] = [];
  *  its own component — not inlined into ManagerWorkspace — so a future
  *  floating widget (a separate round of work) can mount this exact component
  *  instead of duplicating the chat logic. Persists to the shared `managerChat`
- *  store key so the conversation survives navigation and app restarts. */
-function ManagerChat(): JSX.Element {
-  const [messages, setMessages] = useAppStoreState<ManagerChatMessage[]>("managerChat", EMPTY_MANAGER_CHAT);
+ *  store key so the conversation survives navigation and app restarts.
+ *  `onNavigate` lets an approved open_view action switch the app's active nav — both callers
+ *  (the Manager tab and the floating widget) thread through their own navigation setter. */
+function ManagerChat({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX.Element {
+  const [messages, setMessages] = useAppStoreState<ManagerChatEntry[]>("managerChat", EMPTY_MANAGER_CHAT);
   const [managerModel, setManagerModel] = useAppStoreState<ManagerModelChoice>("managerModel", DEFAULT_MANAGER_MODEL);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
@@ -10683,7 +10784,9 @@ function ManagerChat(): JSX.Element {
     setError(null);
     try {
       const result = await window.metisManager!.chat(next);
-      if (result.reply) setMessages((current) => [...current, { role: "assistant" as const, content: result.reply }]);
+      if (result.reply || result.actions?.length) {
+        setMessages((current) => [...current, { role: "assistant" as const, content: result.reply, actions: result.actions }]);
+      }
       if (result.error) setError(result.error);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -10728,7 +10831,14 @@ function ManagerChat(): JSX.Element {
                 </div>
               ) : (
                 <div className="manager-chat-reply">
-                  <Markdown>{message.content}</Markdown>
+                  {message.content ? <Markdown>{message.content}</Markdown> : null}
+                  {message.actions?.length ? (
+                    <div className="manager-action-list">
+                      {message.actions.map((action, actionIndex) => (
+                        <ManagerActionCard key={actionIndex} action={action} onNavigate={onNavigate} />
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
               )}
             </div>
@@ -10833,7 +10943,7 @@ function clampManagerWidgetSize(size: ManagerWidgetSize): ManagerWidgetSize {
  *  history. Mounted once at the App root (outside the per-view <main> content) so it overlays every
  *  nav view. Its own open/minimized/position state persists via useAppStoreState so it survives
  *  navigation and app restarts (docs/FABLE_PLANS.md — floating widget round of work). */
-function ManagerWidget(): JSX.Element {
+function ManagerWidget({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX.Element {
   const [open, setOpen] = useAppStoreState<boolean>("managerWidgetOpen", false);
   const [minimized, setMinimized] = useAppStoreState<boolean>("managerWidgetMinimized", false);
   const [pos, setPos] = useAppStoreState<ManagerWidgetPos | null>("managerWidgetPos", null);
@@ -10966,7 +11076,7 @@ function ManagerWidget(): JSX.Element {
       </div>
       {!minimized ? (
         <div className="manager-widget-body">
-          <ManagerChat />
+          <ManagerChat onNavigate={onNavigate} />
         </div>
       ) : null}
       {!minimized ? (
@@ -11107,7 +11217,7 @@ function ManagerWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void })
       </header>
 
       <div className="manager-body">
-        <ManagerChat />
+        <ManagerChat onNavigate={onNavigate} />
 
         <aside className={`manager-side ${sidePanelOpen ? "open" : "collapsed"}`} aria-label="What I noticed">
           <button type="button" className="manager-side-toggle" onClick={() => setSidePanelOpen((value) => !value)} aria-expanded={sidePanelOpen}>

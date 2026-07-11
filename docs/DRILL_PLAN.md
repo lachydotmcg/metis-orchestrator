@@ -121,7 +121,7 @@
   the Manager's model (chain head) from the Manager tab (a compact model picker in the
   chat header) and/or via an Orchestration "Manager" node. Persist to a store key the
   backend reads (managerChatChain consults it first).
-- [ ] **M3 — Manager ACTIONS (the big one).** The Manager can actually DO things, each
+- [x] **M3 — Manager ACTIONS (the big one).** The Manager can actually DO things, each
   routed through the permission ceremony (gatePermission / approval chips):
   - "Fire a prompt into project X" → dispatches a real session run into that folder.
   - "Add/assign todos" → writes the shared board.

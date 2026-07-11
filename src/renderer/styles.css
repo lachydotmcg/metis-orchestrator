@@ -5549,6 +5549,100 @@ details.artifact-row[open] summary {
   font-size: 11px;
 }
 
+/* ---- Manager action approval cards (docs/DRILL_PLAN.md Phase 3 M3 part 2) ----
+   Mirrors .permission-card's grammar: slim, accent-left-border while pending a verdict,
+   collapsing to a one-line resolved record once approved or dismissed. */
+
+.manager-action-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.manager-action-card {
+  display: grid;
+  gap: 8px;
+  padding: 9px 11px;
+  color: var(--soft);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.manager-action-card.resolved {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 11px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.manager-action-card.resolved svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.manager-action-card-body {
+  display: grid;
+  gap: 3px;
+}
+
+.manager-action-card-label {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.manager-action-card-reason {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.manager-action-card-error {
+  color: #e0556a;
+  font-size: 11.5px;
+}
+
+.manager-action-card-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.manager-action-card-actions button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 9px;
+  color: var(--soft);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-size: 11.5px;
+}
+
+.manager-action-card-actions button:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.manager-action-card-actions button:disabled {
+  opacity: 0.6;
+}
+
+.manager-action-card-actions button.dismiss {
+  color: var(--faint);
+}
+
+.manager-action-card-disabled {
+  color: var(--faint);
+  font-size: 11px;
+}
+
 /* ---- Floating Manager widget (app-level, overlays every nav view) ---- */
 
 .manager-fab {
