@@ -28,6 +28,35 @@ export interface SecretStatus {
   updatedAt?: string;
 }
 
+/** One key/account within a provider's key POOL (docs/DRILL_PLAN.md Phase 6,
+ *  §19 phase 2 — "Never Run Dry" grows from per-provider to per-account
+ *  cooldown). A provider with no pooled accounts configured still works
+ *  exactly as before: main.ts treats its single existing secret as an
+ *  implicit one-account pool (see effectiveAccountsForProvider), so this type
+ *  and its store are purely additive.
+ *
+ *  `keyRef` is how the actual secret is looked up at call time — either the
+ *  literal sentinel "provider-default" (this account IS the provider's
+ *  existing single-key secret, back-compat path) or this account's own id,
+ *  which resolves against a separate per-account secret store keyed by
+ *  account id (never the provider's classic secret store). Either way the
+ *  raw secret value never lives on this object or in any log line.
+ *
+ *  `cooldownUntil`/`usedToday`/`lastUsed` mirror in-memory run state back to
+ *  disk on a best-effort basis (see markAccountCooldown/recordAccountUsage in
+ *  main.ts) purely so a later pool-management UI has something to render;
+ *  the in-memory maps in main.ts remain the source of truth during a run.
+ *  `usedToday` resets lazily (on next read) at UTC midnight. */
+export interface ProviderAccount {
+  id: string;
+  provider: ProviderKey;
+  label?: string;
+  keyRef: string;
+  cooldownUntil?: number;
+  usedToday?: number;
+  lastUsed?: number;
+}
+
 export interface ProviderStatus {
   provider: ProviderKey;
   label: string;

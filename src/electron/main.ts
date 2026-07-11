@@ -27,6 +27,7 @@ import type {
   OrchestrationStage,
   PolicyDecisionResult,
   PolicyStatus,
+  ProviderAccount,
   ProviderImageInput,
   ProviderInvokeInput,
   ProviderInvokeResult,
@@ -186,6 +187,237 @@ function formatCooldownDuration(untilMs: number): string {
   return `${minutes}m`;
 }
 
+// --- Key POOLS (docs/DRILL_PLAN.md Phase 6, §19 phase 2): multiple
+// keys/accounts per provider, each with its OWN quota/cooldown, rotating
+// across a provider's accounts before the chain falls to the next provider.
+// This is purely additive over the single-key system above: a provider with
+// zero pooled accounts configured still behaves byte-for-byte as before
+// (see effectiveAccountsForProvider's back-compat branch). The pool
+// management UI itself is a later renderer round — this is the backend
+// engine only.
+
+/** keyRef sentinel meaning "this account IS the provider's existing single
+ *  key" (the back-compat implicit account synthesized when no real pool is
+ *  configured). Any other keyRef is treated as a real pooled account id and
+ *  resolved against the separate per-account secret store below. */
+const IMPLICIT_ACCOUNT_KEYREF = "provider-default";
+
+function implicitAccountId(provider: ProviderKey): string {
+  return `implicit:${provider}`;
+}
+
+function isSameUtcDay(a: number, b: number): boolean {
+  const da = new Date(a);
+  const db = new Date(b);
+  return da.getUTCFullYear() === db.getUTCFullYear() && da.getUTCMonth() === db.getUTCMonth() && da.getUTCDate() === db.getUTCDate();
+}
+
+async function readProviderAccounts(): Promise<ProviderAccount[]> {
+  const raw = await readStoreValue<unknown>("providerAccounts", []);
+  if (!Array.isArray(raw)) return [];
+  const now = Date.now();
+  const valid: ProviderAccount[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const candidate = entry as Partial<ProviderAccount>;
+    if (typeof candidate.id !== "string" || typeof candidate.provider !== "string" || typeof candidate.keyRef !== "string") continue;
+    if (!(candidate.provider in providerInfo)) continue;
+    const account: ProviderAccount = {
+      id: candidate.id,
+      provider: candidate.provider as ProviderKey,
+      keyRef: candidate.keyRef,
+      label: typeof candidate.label === "string" ? candidate.label : undefined,
+      cooldownUntil: typeof candidate.cooldownUntil === "number" ? candidate.cooldownUntil : undefined,
+      usedToday: typeof candidate.usedToday === "number" ? candidate.usedToday : 0,
+      lastUsed: typeof candidate.lastUsed === "number" ? candidate.lastUsed : undefined
+    };
+    // Lazy UTC-midnight reset (docs/DRILL_PLAN.md Phase 6): usedToday only
+    // reflects calls made since the account's lastUsed's UTC day.
+    if (account.lastUsed !== undefined && !isSameUtcDay(account.lastUsed, now)) {
+      account.usedToday = 0;
+    }
+    valid.push(account);
+  }
+  return valid;
+}
+
+async function writeProviderAccounts(accounts: ProviderAccount[]): Promise<void> {
+  await writeStoreValue("providerAccounts", accounts);
+}
+
+/** Per-account in-memory cooldown map, mirroring providerCooldowns above but
+ *  keyed by account id instead of provider — this is the real granularity
+ *  quota rotation now operates at. Seeded from any persisted cooldownUntil
+ *  still in the future (see effectiveAccountsForProvider) so a cooldown
+ *  survives an app restart, same intent as the provider-level map already
+ *  had informally via re-triggering on the next 429. */
+const accountCooldowns = new Map<string, number>();
+
+function markAccountCooldown(accountId: string, error: unknown): number {
+  const retryAfterSeconds = error instanceof ProviderHttpError ? error.retryAfterSeconds : undefined;
+  const durationMs = typeof retryAfterSeconds === "number" && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : DEFAULT_COOLDOWN_MS;
+  const until = Date.now() + durationMs;
+  accountCooldowns.set(accountId, until);
+  void persistAccountCooldown(accountId, until);
+  return until;
+}
+
+function accountCooldownUntil(accountId: string): number | undefined {
+  const until = accountCooldowns.get(accountId);
+  if (!until) return undefined;
+  if (until <= Date.now()) {
+    accountCooldowns.delete(accountId);
+    return undefined;
+  }
+  return until;
+}
+
+function isAccountCooling(accountId: string): boolean {
+  return accountCooldownUntil(accountId) !== undefined;
+}
+
+/** Best-effort disk mirror of an account's cooldown, purely so a later pool
+ *  UI can show it without needing this process's in-memory state. Never
+ *  awaited by callers on the hot path — a persistence hiccup here must never
+ *  fail (or even slow down) the actual provider call. The implicit back-compat
+ *  account has no persisted record (id never matches a stored entry), so this
+ *  is a silent no-op for the single-key case, matching provider-level
+ *  cooldowns which were never persisted either. */
+async function persistAccountCooldown(accountId: string, until: number): Promise<void> {
+  try {
+    const accounts = await readProviderAccounts();
+    const idx = accounts.findIndex((account) => account.id === accountId);
+    if (idx === -1) return;
+    accounts[idx] = { ...accounts[idx], cooldownUntil: until };
+    await writeProviderAccounts(accounts);
+  } catch {
+    // Telemetry only; the in-memory accountCooldowns map remains authoritative.
+  }
+}
+
+/** Increments usedToday/lastUsed for a successful call against a real pooled
+ *  account. No-ops for the implicit back-compat account (nothing to persist —
+ *  it isn't a real store entry) and swallows any persistence error, since
+ *  this is telemetry for a future pool UI, never load-bearing for the call
+ *  that just succeeded. */
+async function recordAccountUsage(account: ProviderAccount | undefined): Promise<void> {
+  if (!account || account.keyRef === IMPLICIT_ACCOUNT_KEYREF) return;
+  try {
+    const accounts = await readProviderAccounts();
+    const idx = accounts.findIndex((entry) => entry.id === account.id);
+    if (idx === -1) return;
+    const existing = accounts[idx];
+    accounts[idx] = { ...existing, usedToday: (existing.usedToday ?? 0) + 1, lastUsed: Date.now() };
+    await writeProviderAccounts(accounts);
+  } catch {
+    // Telemetry only.
+  }
+}
+
+/** Resolves the effective account POOL for a provider: real pooled accounts
+ *  if any are configured, else a single synthesized implicit account
+ *  wrapping the existing single-key secrets path (back-compat — a provider
+ *  with zero pooled accounts behaves exactly as it did before this round).
+ *  Ollama has no key/account concept (local runtime), so it always returns
+ *  []; callers must keep treating ollama as they did before this round. */
+async function effectiveAccountsForProvider(provider: ProviderKey): Promise<ProviderAccount[]> {
+  if (provider === "ollama") return [];
+  const all = await readProviderAccounts();
+  const pooled = all.filter((account) => account.provider === provider);
+  if (pooled.length > 0) {
+    // Seed in-memory cooldowns from any persisted cooldownUntil still in the
+    // future so a restart doesn't forget an account was cooling.
+    const now = Date.now();
+    for (const account of pooled) {
+      if (account.cooldownUntil && account.cooldownUntil > now && !accountCooldowns.has(account.id)) {
+        accountCooldowns.set(account.id, account.cooldownUntil);
+      }
+    }
+    return pooled;
+  }
+  const configured = await isProviderConfigured(provider);
+  if (!configured) return [];
+  return [{ id: implicitAccountId(provider), provider, keyRef: IMPLICIT_ACCOUNT_KEYREF, label: "Default" }];
+}
+
+/** Picks the rotation order for a provider's non-cooling accounts: first
+ *  account not cooling, preferring least-recently-used for fairness (never
+ *  used = tried first). Callers walk this list in order, trying the next
+ *  entry only when the previous one hits a quota error — see
+ *  callStageWithFallback. */
+function orderAccountsForRotation(accounts: ProviderAccount[]): ProviderAccount[] {
+  return accounts
+    .filter((account) => !isAccountCooling(account.id))
+    .slice()
+    .sort((a, b) => (a.lastUsed ?? 0) - (b.lastUsed ?? 0));
+}
+
+/** Mirrors pooled per-account cooldown state onto the legacy per-provider
+ *  providerCooldowns map so every existing provider-level consumer (health
+ *  reporting, route resolution, chain-expansion ordering) keeps working
+ *  unchanged: a provider now only reads as "cooling" once ALL of its
+ *  accounts are cooling, and clears the moment any account becomes usable
+ *  again. No-op when there are no accounts at all (the legacy single-key
+ *  markProviderCooldown/providerCooldowns path — e.g. "not configured" or
+ *  ollama — remains the sole source of truth in that case). */
+async function syncProviderCooldownFromAccounts(provider: ProviderKey, accounts: ProviderAccount[]): Promise<void> {
+  if (provider === "ollama" || accounts.length === 0) return;
+  const untils = accounts.map((account) => accountCooldownUntil(account.id));
+  const allCooling = untils.every((until) => until !== undefined);
+  if (allCooling) {
+    providerCooldowns.set(provider, Math.max(...(untils as number[])));
+  } else {
+    providerCooldowns.delete(provider);
+  }
+}
+
+/** Separate per-account secret store, keyed by ProviderAccount.id — kept
+ *  entirely apart from the classic per-provider `secrets` store so the
+ *  back-compat implicit account (keyRef === IMPLICIT_ACCOUNT_KEYREF) never
+ *  collides with a real pooled account's own credential. Same
+ *  encrypt/decrypt helpers as the classic store; secrets are never logged
+ *  here either. */
+async function readAccountSecrets(): Promise<Partial<Record<string, StoredSecret>>> {
+  return readStoreValue<Partial<Record<string, StoredSecret>>>("account-secrets", {});
+}
+
+async function writeAccountSecrets(value: Partial<Record<string, StoredSecret>>): Promise<void> {
+  await writeStoreValue("account-secrets", value);
+}
+
+async function setAccountSecret(accountId: string, value: string): Promise<void> {
+  const store = await readAccountSecrets();
+  if (!value.trim()) {
+    delete store[accountId];
+  } else {
+    store[accountId] = encryptSecret(value.trim());
+  }
+  await writeAccountSecrets(store);
+}
+
+async function readAccountSecret(accountId: string): Promise<string | undefined> {
+  const store = await readAccountSecrets();
+  const secret = store[accountId];
+  if (!secret) return undefined;
+  try {
+    return decryptSecret(secret);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Resolves the actual secret value for one account, dispatching on keyRef:
+ *  the implicit back-compat account reads through the existing single-key
+ *  path (readProviderSecret, defined further below — safe forward reference
+ *  since this is only ever called at invoke time, never at module load), a
+ *  real pooled account reads its own entry in the account-secrets store. */
+async function resolveAccountSecret(account: ProviderAccount): Promise<string | undefined> {
+  if (account.keyRef === IMPLICIT_ACCOUNT_KEYREF) {
+    return readProviderSecret(account.provider);
+  }
+  return readAccountSecret(account.id);
+}
+
 /** Shared "does this provider have a usable credential" check — the same test
  *  the health system (listProviders/healthCheckProvider) uses, reused here so
  *  route resolution (docs/FABLE_PLANS.md section 21) and the health UI never
@@ -219,6 +451,17 @@ async function resolveModelRoute(access: ModelAccessRoute[], pinned?: ProviderKe
 
   const configuredFlags = await Promise.all(access.map((route) => isProviderConfigured(route.provider)));
   const configuredRoutes = access.filter((_, index) => configuredFlags[index]);
+
+  // Key POOLS (docs/DRILL_PLAN.md Phase 6): resync the legacy per-provider
+  // cooldown map from each route's pooled accounts first, so a provider only
+  // reads as cooling here once ALL of its accounts are — isProviderCooling
+  // below stays a plain sync read/writer pair, unchanged.
+  await Promise.all(
+    configuredRoutes.map(async (route) => {
+      const accounts = await effectiveAccountsForProvider(route.provider);
+      await syncProviderCooldownFromAccounts(route.provider, accounts);
+    })
+  );
 
   const healthyRoute = configuredRoutes.find((route) => !isProviderCooling(route.provider));
   if (healthyRoute) return healthyRoute;
@@ -425,9 +668,34 @@ async function deleteSecret(provider: ProviderKey): Promise<void> {
   await appendAudit("info", "secret.delete", `${providerInfo[provider].label} API key cleared.`, { provider });
 }
 
+/** Pooled-state suffix for the health `detail` string when a provider has a
+ *  real pool (>1 account) configured — e.g. "3/4 accounts available." Returns
+ *  "" for the back-compat single/implicit-account case so existing detail
+ *  text is untouched until a user actually adds a second account. */
+function poolDetailSuffix(accounts: ProviderAccount[]): string {
+  if (accounts.length <= 1) return "";
+  const available = accounts.filter((account) => !isAccountCooling(account.id)).length;
+  return ` (${available}/${accounts.length} accounts available)`;
+}
+
 async function listProviders(): Promise<ProviderStatus[]> {
   const secrets = await readSecrets();
   const secretStatuses = await listSecrets();
+  const providerKeys = Object.keys(providerInfo) as ProviderKey[];
+  // Key POOLS (docs/DRILL_PLAN.md Phase 6): resync every non-ollama
+  // provider's legacy cooldown entry from its pooled accounts before
+  // building statuses below, so this list reflects "all accounts cooling",
+  // not just the last single-key 429.
+  const poolByProvider = new Map<ProviderKey, ProviderAccount[]>();
+  await Promise.all(
+    providerKeys
+      .filter((provider) => provider !== "ollama")
+      .map(async (provider) => {
+        const accounts = await effectiveAccountsForProvider(provider);
+        await syncProviderCooldownFromAccounts(provider, accounts);
+        poolByProvider.set(provider, accounts);
+      })
+  );
   return (Object.entries(providerInfo) as Array<[ProviderKey, (typeof providerInfo)[ProviderKey]]>).map(([provider, info]) => {
     if (provider === "ollama") {
       return {
@@ -441,13 +709,14 @@ async function listProviders(): Promise<ProviderStatus[]> {
     }
     const configured = Boolean(secrets[provider]) || Boolean(secretStatuses.find((status) => status.provider === provider)?.hasSecret);
     const cooldownUntil = providerCooldownUntil(provider);
+    const poolSuffix = poolDetailSuffix(poolByProvider.get(provider) ?? []);
     if (cooldownUntil) {
       return {
         provider,
         label: info.label,
         configured,
         status: "unavailable",
-        detail: `Cooling down until ${new Date(cooldownUntil).toLocaleTimeString()} after a quota/rate-limit response.`,
+        detail: `Cooling down until ${new Date(cooldownUntil).toLocaleTimeString()} after a quota/rate-limit response.${poolSuffix}`,
         defaultModel: info.defaultModel
       };
     }
@@ -456,11 +725,12 @@ async function listProviders(): Promise<ProviderStatus[]> {
       label: info.label,
       configured,
       status: configured ? "available" : "not_configured",
-      detail: configured
-        ? secretStatuses.find((status) => status.provider === provider)?.storage === "environment"
-          ? "API key available from the launch environment."
-          : "API key stored locally."
-        : "Add a provider-level API key in Settings.",
+      detail:
+        (configured
+          ? secretStatuses.find((status) => status.provider === provider)?.storage === "environment"
+            ? "API key available from the launch environment."
+            : "API key stored locally."
+          : "Add a provider-level API key in Settings.") + poolSuffix,
       defaultModel: info.defaultModel
     };
   });
@@ -472,6 +742,9 @@ async function healthCheckProvider(provider: ProviderKey): Promise<ProviderStatu
   if (provider !== "ollama") {
     const secrets = await readSecrets();
     const configured = Boolean(secrets[provider]);
+    const accounts = await effectiveAccountsForProvider(provider);
+    await syncProviderCooldownFromAccounts(provider, accounts);
+    const poolSuffix = poolDetailSuffix(accounts);
     const cooldownUntil = providerCooldownUntil(provider);
     if (cooldownUntil) {
       return {
@@ -479,7 +752,7 @@ async function healthCheckProvider(provider: ProviderKey): Promise<ProviderStatu
         label: info.label,
         configured,
         status: "unavailable",
-        detail: `Cooling down until ${new Date(cooldownUntil).toLocaleTimeString()} after a quota/rate-limit response.`,
+        detail: `Cooling down until ${new Date(cooldownUntil).toLocaleTimeString()} after a quota/rate-limit response.${poolSuffix}`,
         defaultModel: info.defaultModel
       };
     }
@@ -488,7 +761,7 @@ async function healthCheckProvider(provider: ProviderKey): Promise<ProviderStatu
       label: info.label,
       configured,
       status: configured ? "available" : "not_configured",
-      detail: configured ? "Credential is present. Live API call is permission-gated." : "No provider-level API key is saved.",
+      detail: (configured ? "Credential is present. Live API call is permission-gated." : "No provider-level API key is saved.") + poolSuffix,
       defaultModel: info.defaultModel
     };
   }
@@ -651,7 +924,19 @@ function attachmentNoteFor(count: number): string {
  *  can abort it immediately instead of waiting for the call to finish. Callers
  *  that don't have a scope handy (e.g. the direct metis-providers:invoke IPC,
  *  Manager chat) simply omit it and get byte-identical behaviour to before. */
-async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStreamController, scope?: string): Promise<ProviderInvokeResult> {
+/** `accountOverride`, when given, is a specific pooled ProviderAccount
+ *  (docs/DRILL_PLAN.md Phase 6, §19 phase 2) to invoke through instead of the
+ *  provider's classic single-key secret — used by callStageWithFallback's
+ *  intra-provider account rotation. It is NOT part of ProviderInvokeInput (the
+ *  shared IPC contract), so ordinary callers (direct model test calls, etc.)
+ *  are completely unaffected: omitting it reproduces the exact pre-pool
+ *  behaviour (readProviderSecret(input.provider) + provider-level cooldown). */
+async function invokeProvider(
+  input: ProviderInvokeInput,
+  stream?: SessionStreamController,
+  scope?: string,
+  accountOverride?: ProviderAccount
+): Promise<ProviderInvokeResult> {
   validateProvider(input.provider);
   if (input.provider === "ollama") {
     const controller = scope ? registerAbortController(scope) : undefined;
@@ -726,12 +1011,14 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
     }
   }
 
-  const secret = await readProviderSecret(input.provider);
+  const secret = accountOverride ? await resolveAccountSecret(accountOverride) : await readProviderSecret(input.provider);
   if (!secret) {
     const audit = await appendAudit("warning", "provider.invoke.placeholder", `${providerInfo[input.provider].label} route prepared without a saved API key.`, {
       provider: input.provider,
       model: input.model,
       prompt_sha256: sha256(input.prompt)
+      // Deliberately no accountId/key material logged here — see the module
+      // header note on never logging secrets.
     });
     return {
       provider: input.provider,
@@ -750,6 +1037,7 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
       model: input.model,
       prompt_sha256: sha256(input.prompt)
     });
+    if (accountOverride) await recordAccountUsage(accountOverride);
     return {
       provider: input.provider,
       model: input.model,
@@ -761,13 +1049,35 @@ async function invokeProvider(input: ProviderInvokeInput, stream?: SessionStream
   } catch (error) {
     if (isAbortError(error)) throw cancellationError();
     if (isQuotaError(error)) {
-      const until = markProviderCooldown(input.provider, error);
-      await appendAudit("warning", "provider.invoke.cooldown", `${providerInfo[input.provider].label} hit a quota/rate limit — cooling down for ${formatCooldownDuration(until)}.`, {
-        provider: input.provider,
-        model: input.model,
-        error: error instanceof Error ? error.message : String(error),
-        cooldownUntil: new Date(until).toISOString()
-      });
+      // Key POOLS (docs/DRILL_PLAN.md Phase 6): a quota/429 cools down THIS
+      // account only, not the whole provider — markAccountCooldown, then
+      // resync the legacy per-provider map so health/route-resolution only
+      // see the provider as unavailable once every account is cooling.
+      if (accountOverride) {
+        const until = markAccountCooldown(accountOverride.id, error);
+        const siblingAccounts = await effectiveAccountsForProvider(input.provider);
+        await syncProviderCooldownFromAccounts(input.provider, siblingAccounts);
+        await appendAudit(
+          "warning",
+          "provider.invoke.cooldown",
+          `${providerInfo[input.provider].label} account "${accountOverride.label ?? accountOverride.id}" hit a quota/rate limit — cooling down for ${formatCooldownDuration(until)}.`,
+          {
+            provider: input.provider,
+            model: input.model,
+            accountId: accountOverride.id,
+            error: error instanceof Error ? error.message : String(error),
+            cooldownUntil: new Date(until).toISOString()
+          }
+        );
+      } else {
+        const until = markProviderCooldown(input.provider, error);
+        await appendAudit("warning", "provider.invoke.cooldown", `${providerInfo[input.provider].label} hit a quota/rate limit — cooling down for ${formatCooldownDuration(until)}.`, {
+          provider: input.provider,
+          model: input.model,
+          error: error instanceof Error ? error.message : String(error),
+          cooldownUntil: new Date(until).toISOString()
+        });
+      }
     }
     const audit = await appendAudit("error", "provider.invoke.error", `${providerInfo[input.provider].label} invocation failed.`, {
       provider: input.provider,
@@ -4848,6 +5158,16 @@ async function expandStageRef(ref: StageModelRef, preference?: ProviderKey[]): P
   }
 
   const configuredFlags = await Promise.all(model.access.map((route) => isProviderConfigured(route.provider)));
+  // Key POOLS (docs/DRILL_PLAN.md Phase 6): resync each route provider's
+  // legacy cooldown entry from its pooled accounts before the isProviderCooling
+  // ordering read below, so a provider with one still-usable account isn't
+  // pushed behind the "configured but cooling" bucket it no longer belongs in.
+  await Promise.all(
+    model.access.map(async (route) => {
+      const accounts = await effectiveAccountsForProvider(route.provider);
+      await syncProviderCooldownFromAccounts(route.provider, accounts);
+    })
+  );
   const withStatus = model.access.map((route, index) => ({ route, configured: configuredFlags[index], cooling: isProviderCooling(route.provider) }));
 
   // Preference entries win a slot in EXPLICIT order, each only once, and only
@@ -4931,13 +5251,25 @@ async function callStageWithFallback(
   // exhausted. Rotation/cooldown notes below are unaffected: they're keyed by
   // provider, same as before expansion.
   const chain = await expandChainByRoutes(rawChain, primaryPreference);
-  // "Never Run Dry" quota rotation (docs/FABLE_PLANS.md §19): a provider still
-  // cooling from a recent 429/quota failure is skipped outright rather than
-  // burning another call against it. `next` for the rotation note looks ahead
-  // to the next entry that isn't ALSO cooling, so the note names where we're
-  // actually headed.
+  // "Never Run Dry" quota rotation (docs/FABLE_PLANS.md §19), extended by Key
+  // POOLS (docs/DRILL_PLAN.md Phase 6, §19 phase 2): a provider still cooling
+  // from a recent 429/quota failure is skipped outright rather than burning
+  // another call against it — but "cooling" now means ALL of that provider's
+  // pooled accounts are cooling, not just its one classic key. `next` for the
+  // rotation note looks ahead to the next CHAIN entry (a different
+  // provider/model) that isn't ALSO cooling, so the note names where we're
+  // actually headed once this provider's whole account pool is exhausted.
   for (let i = 0; i < chain.length; i++) {
     const ref = chain[i];
+    // Resolve this provider's account pool (real pool if configured, else the
+    // single implicit back-compat account, else [] for ollama/unconfigured)
+    // and resync the legacy per-provider cooldown map from it before any
+    // isProviderCooling read below — same pattern as resolveModelRoute/
+    // expandStageRef/listProviders/healthCheckProvider above.
+    const accounts = await effectiveAccountsForProvider(ref.provider);
+    await syncProviderCooldownFromAccounts(ref.provider, accounts);
+    const isPooled = accounts.length > 1;
+
     const nextViable = chain.slice(i + 1).find((candidate) => !isProviderCooling(candidate.provider));
     if (isProviderCooling(ref.provider)) {
       const until = providerCooldownUntil(ref.provider)!;
@@ -4947,32 +5279,134 @@ async function callStageWithFallback(
       continue;
     }
     const next = chain[i + 1];
-    // Side-chat card (docs/FABLE_PLANS.md §26): each ATTEMPT (not each skipped
-    // cooling entry) gets its own call id, so a fallback rotation renders as a
-    // failed card followed by a fresh card for the next attempt.
-    const callId = randomUUID();
-    if (callContext?.stream) {
-      emitStream(callContext.stream, {
-        kind: "stage_call",
-        call: {
-          id: callId,
-          stageId: callContext.stageId,
-          stageLabel: callContext.stageLabel,
-          provider: ref.provider,
-          model: ref.model,
-          promptPreview: prompt.slice(0, 200),
-          prompt: prompt.slice(0, 2000),
-          status: "start",
-          agentName: callContext?.agentName
+
+    // Intra-provider account rotation (docs/DRILL_PLAN.md Phase 6): for a
+    // pooled provider, try each non-cooling account (least-recently-used
+    // first) before this chain entry is considered exhausted and the outer
+    // loop advances to the next provider/model. For ollama or a provider with
+    // zero/one account, this is a single [undefined]/[implicit-account]
+    // iteration — byte-identical to the pre-pool call path below.
+    const candidateAccounts: Array<ProviderAccount | undefined> =
+      ref.provider === "ollama" ? [undefined] : accounts.length > 0 ? orderAccountsForRotation(accounts) : [undefined];
+
+    let attemptResult: { ref: StageModelRef; output: string; notes: string[]; failed: false } | undefined;
+
+    for (let a = 0; a < candidateAccounts.length; a++) {
+      const account = candidateAccounts[a];
+      const attemptLabel = isPooled && account ? `${stageModelLabel(ref)} (${account.label ?? account.id})` : stageModelLabel(ref);
+      const nextAccount = candidateAccounts[a + 1];
+      const rotateHint = nextAccount
+        ? ` — rotated to ${stageModelLabel(ref)} (${nextAccount.label ?? nextAccount.id}).`
+        : next
+          ? ` — rotated to ${stageModelLabel(next)}.`
+          : ".";
+
+      // Side-chat card (docs/FABLE_PLANS.md §26): each ATTEMPT (not each
+      // skipped cooling entry) gets its own call id, so a fallback rotation
+      // renders as a failed card followed by a fresh card for the next
+      // attempt — including a same-provider account-to-account rotation.
+      const callId = randomUUID();
+      if (callContext?.stream) {
+        emitStream(callContext.stream, {
+          kind: "stage_call",
+          call: {
+            id: callId,
+            stageId: callContext.stageId,
+            stageLabel: callContext.stageLabel,
+            provider: ref.provider,
+            model: ref.model,
+            promptPreview: prompt.slice(0, 200),
+            prompt: prompt.slice(0, 2000),
+            status: "start",
+            agentName: callContext?.agentName
+          }
+        });
+      }
+      try {
+        // Stage calls never stream (only the chat path does) — pass no stream
+        // here, same as before this change; only the cancel scope + account
+        // override are new.
+        const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt, images }, undefined, callContext?.scope, account);
+        if (result.source === "placeholder" || !result.output.trim()) {
+          // Not a quota error (e.g. missing key, non-quota HTTP failure that
+          // invokeProvider already downgraded to a placeholder) — no account
+          // rotation for this case, same as the pre-pool behaviour: fall
+          // through to the next CHAIN entry, not the next account.
+          const note = `${attemptLabel} unavailable${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
+          notes.push(note);
+          if (callContext?.stream) {
+            emitStream(callContext.stream, {
+              kind: "stage_call",
+              call: {
+                id: callId,
+                stageId: callContext.stageId,
+                stageLabel: callContext.stageLabel,
+                provider: ref.provider,
+                model: ref.model,
+                promptPreview: prompt.slice(0, 200),
+                status: "failed",
+                detail: note,
+                agentName: callContext?.agentName
+              }
+            });
+          }
+          break;
         }
-      });
-    }
-    try {
-      // Stage calls never stream (only the chat path does) — pass no stream
-      // here, same as before this change; only the cancel scope is new.
-      const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt, images }, undefined, callContext?.scope);
-      if (result.source === "placeholder" || !result.output.trim()) {
-        const note = `${stageModelLabel(ref)} unavailable${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
+        const trimmedOutput = result.output.trim();
+        if (callContext?.stream) {
+          emitStream(callContext.stream, {
+            kind: "stage_call",
+            call: {
+              id: callId,
+              stageId: callContext.stageId,
+              stageLabel: callContext.stageLabel,
+              provider: ref.provider,
+              model: ref.model,
+              promptPreview: prompt.slice(0, 200),
+              status: "complete",
+              output: trimmedOutput.slice(0, 4000),
+              agentName: callContext?.agentName
+            }
+          });
+        }
+        attemptResult = { ref, output: trimmedOutput, notes, failed: false };
+        break;
+      } catch (error) {
+        // A Stop-button abort must surface as cancellation, never as a
+        // provider failure: rethrow immediately so the fallback chain never
+        // rotates to the next model/account and repair/recovery never treats
+        // this as "try again".
+        if (isCancellationError(error)) throw error;
+        if (isQuotaError(error)) {
+          // Quota errors are exactly the case that rotates within this
+          // provider's account pool first (docs/DRILL_PLAN.md Phase 6) —
+          // invokeProvider already cooled down THIS account (or, with no
+          // account override, the whole provider) and resynced the legacy
+          // map; read it back for the note/duration.
+          const until = account ? (accountCooldownUntil(account.id) ?? Date.now()) : (providerCooldownUntil(ref.provider) ?? Date.now());
+          const note = `${attemptLabel} is rate-limited (cooling ${formatCooldownDuration(until)})${rotateHint}`;
+          notes.push(note);
+          if (callContext?.stream) {
+            emitStream(callContext.stream, {
+              kind: "stage_call",
+              call: {
+                id: callId,
+                stageId: callContext.stageId,
+                stageLabel: callContext.stageLabel,
+                provider: ref.provider,
+                model: ref.model,
+                promptPreview: prompt.slice(0, 200),
+                status: "failed",
+                detail: note,
+                agentName: callContext?.agentName
+              }
+            });
+          }
+          // Loop to the next candidate account of the SAME provider (if any)
+          // before this chain entry is considered exhausted.
+          continue;
+        }
+        const note = `Failed to call ${attemptLabel} (${error instanceof Error ? error.message : String(error)})${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
         notes.push(note);
         if (callContext?.stream) {
           emitStream(callContext.stream, {
@@ -4990,72 +5424,14 @@ async function callStageWithFallback(
             }
           });
         }
-        continue;
-      }
-      const trimmedOutput = result.output.trim();
-      if (callContext?.stream) {
-        emitStream(callContext.stream, {
-          kind: "stage_call",
-          call: {
-            id: callId,
-            stageId: callContext.stageId,
-            stageLabel: callContext.stageLabel,
-            provider: ref.provider,
-            model: ref.model,
-            promptPreview: prompt.slice(0, 200),
-            status: "complete",
-            output: trimmedOutput.slice(0, 4000),
-            agentName: callContext?.agentName
-          }
-        });
-      }
-      return { ref, output: trimmedOutput, notes, failed: false };
-    } catch (error) {
-      // A Stop-button abort must surface as cancellation, never as a provider
-      // failure: rethrow immediately so the fallback chain never rotates to
-      // the next model and repair/recovery never treats this as "try again".
-      if (isCancellationError(error)) throw error;
-      if (isQuotaError(error)) {
-        const until = markProviderCooldown(ref.provider, error);
-        const note = `${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${next ? ` — rotated to ${stageModelLabel(next)}.` : "."}`;
-        notes.push(note);
-        if (callContext?.stream) {
-          emitStream(callContext.stream, {
-            kind: "stage_call",
-            call: {
-              id: callId,
-              stageId: callContext.stageId,
-              stageLabel: callContext.stageLabel,
-              provider: ref.provider,
-              model: ref.model,
-              promptPreview: prompt.slice(0, 200),
-              status: "failed",
-              detail: note,
-              agentName: callContext?.agentName
-            }
-          });
-        }
-        continue;
-      }
-      const note = `Failed to call ${stageModelLabel(ref)} (${error instanceof Error ? error.message : String(error)})${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`;
-      notes.push(note);
-      if (callContext?.stream) {
-        emitStream(callContext.stream, {
-          kind: "stage_call",
-          call: {
-            id: callId,
-            stageId: callContext.stageId,
-            stageLabel: callContext.stageLabel,
-            provider: ref.provider,
-            model: ref.model,
-            promptPreview: prompt.slice(0, 200),
-            status: "failed",
-            detail: note,
-            agentName: callContext?.agentName
-          }
-        });
+        break;
       }
     }
+
+    if (attemptResult) return attemptResult;
+    // Every candidate account for this provider is now exhausted (all cooling
+    // from quota errors, or a single non-quota failure) — the outer loop
+    // advances to the next chain entry, same control flow as before pools.
   }
   if (chain.every((ref) => isProviderCooling(ref.provider))) {
     notes.push("Every model in this stage's chain is currently cooling down from a rate limit.");
