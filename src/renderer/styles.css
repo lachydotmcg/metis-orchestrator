@@ -10364,6 +10364,15 @@ a:focus-visible,
   line-height: 1.35;
 }
 
+.marketplace-apply-success {
+  padding: 0 13px;
+  color: var(--accent);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
 .marketplace-empty {
   padding: 20px;
   color: var(--muted);
@@ -10455,6 +10464,7 @@ a:focus-visible,
 
 .marketplace-detail-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   margin-left: auto;

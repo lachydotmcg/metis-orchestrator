@@ -1210,6 +1210,20 @@ const SEED_NODES: GraphNode[] = [
 
 type PresetKey = "recommended" | "local" | "quality" | "speed";
 
+/** One stage of a seeded-registry-shaped preset payload (`metis.preset-*`, docs/DRILL_PLAN.md
+ *  Phase 4): {role, provider, model, fallback?}. Distinct from the in-app Publish wizard's
+ *  {nodes, saved_at} payload shape — loadPreset() branches on which one is stored. */
+type PresetStage = { role: string; provider: ProviderId; model: string; fallback?: ModelRef };
+
+/** What a marketplace preset package's `source_url` payload can parse into: either the
+ *  Publish-wizard shape ({nodes}) or the seeded-registry shape ({stages}), both optionally
+ *  carrying `prerequisiteSkills` to auto-install. Anything else is treated as invalid. */
+type MarketplacePresetPayload = {
+  nodes?: GraphNode[];
+  stages?: PresetStage[];
+  prerequisiteSkills?: string[];
+};
+
 const PRESETS: { key: PresetKey; label: string; note: string; router: ModelRef; pick: (role: string) => ModelRef }[] = [
   {
     key: "recommended",
@@ -1661,7 +1675,7 @@ export function App(): JSX.Element {
       ) : null}
       {activeNav === "benchmark" ? <BenchmarkWorkspace locked={benchmarkGateLocked} onComplete={() => setActiveNav("orchestration")} onWizardChange={setBenchmarkWizard} wizard={benchmarkWizard} /> : null}
       {activeNav === "gallery" ? <GalleryWorkspace boards={galleryBoards} onBoardsChange={setGalleryBoards} /> : null}
-      {activeNav === "marketplace" ? <MarketplaceWorkspace /> : null}
+      {activeNav === "marketplace" ? <MarketplaceWorkspace onNavigate={setActiveNav} /> : null}
       {activeNav === "routines" ? <RoutinesWorkspace onConversationOpen={openConversationById} /> : null}
       {activeNav === "todo" ? <TodoWorkspace storedConversations={storedConversations} /> : null}
       {activeNav === "manager" ? <ManagerWorkspace onNavigate={setActiveNav} /> : null}
@@ -5960,15 +5974,45 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
     }
   }
 
+  /** Applies a seeded-registry-shaped preset ({stages}) onto the CURRENT graph instead of
+   *  replacing it wholesale — there's no full GraphNode layout to load, just {role, provider,
+   *  model, fallback?} per stage, so match each stage onto the matching node (router stage ->
+   *  router node; role/intent match -> the agent node) the same way applyPreset(key) maps a
+   *  built-in preset's models onto the graph by intent. */
+  function applyPresetStages(stages: PresetStage[]): void {
+    const routerStage = stages.find((stage) => stage.role.toLowerCase().includes("router"));
+    setNodes((list) =>
+      list.map((node) => {
+        if (node.kind === "router") {
+          if (!routerStage) return node;
+          return { ...node, provider: routerStage.provider, model: routerStage.model, fallbacks: routerStage.fallback ? [routerStage.fallback] : node.fallbacks };
+        }
+        if (node.kind === "agent") {
+          const haystack = (node.intent ?? node.label).toLowerCase();
+          const stage = stages.find((entry) => entry !== routerStage && (haystack.includes(entry.role.toLowerCase()) || entry.role.toLowerCase().includes(haystack)));
+          if (!stage) return node;
+          return { ...node, provider: stage.provider, model: stage.model, fallbacks: stage.fallback ? [stage.fallback] : node.fallbacks };
+        }
+        return node;
+      })
+    );
+    setSelected(null);
+  }
+
   function loadPreset(): void {
     try {
       const raw = localStorage.getItem(PRESET_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { nodes?: GraphNode[] };
-      if (!parsed.nodes?.length) return;
-      setNodes(parsed.nodes);
-      setSelected(null);
-      fitTo(parsed.nodes);
+      const parsed = JSON.parse(raw) as { nodes?: GraphNode[]; stages?: PresetStage[] };
+      if (parsed.nodes?.length) {
+        setNodes(parsed.nodes);
+        setSelected(null);
+        fitTo(parsed.nodes);
+        return;
+      }
+      if (parsed.stages?.length) {
+        applyPresetStages(parsed.stages);
+      }
     } catch {
       /* ignore malformed presets */
     }
@@ -8908,6 +8952,71 @@ async function fetchGithubRepoStats(ref: GithubRepoRef): Promise<GithubRepoStats
   }
 }
 
+/** Result of applying a marketplace preset package to Orchestration (docs/DRILL_PLAN.md
+ *  Phase 4, "Preset install applies the orchestration"): whether the preset payload itself
+ *  was written to PRESET_STORAGE_KEY, plus which prerequisite skills installed vs weren't found
+ *  in the registry — surfaced together in the confirmation toast. */
+type PresetApplyResult = { ok: boolean; message: string; installedSkills: string[]; missingSkills: string[] };
+
+/** Fetches a preset package's `source_url` payload, normalises it to the shape GraphWorkspace's
+ *  loadPreset() understands ({nodes} or {stages}), writes it to PRESET_STORAGE_KEY, and
+ *  best-effort installs any `prerequisiteSkills` by matching names against the registry's skill
+ *  packages (case-insensitive). Never re-seeds the registry — only installs packages that already
+ *  exist in `allPackages`. Guards: no metisRegistry bridge (preview), bad fetch, bad JSON, and a
+ *  payload with neither nodes nor stages. */
+async function applyMarketplacePreset(item: RegistryPackage, allPackages: RegistryPackage[]): Promise<PresetApplyResult> {
+  if (!window.metisRegistry) {
+    return { ok: false, message: "Applying presets needs the desktop app; this preview has no registry bridge.", installedSkills: [], missingSkills: [] };
+  }
+  let raw: string;
+  try {
+    const response = await fetch(item.source_url);
+    if (!response.ok) throw new Error(`fetch failed (${response.status})`);
+    raw = await response.text();
+  } catch (error) {
+    return { ok: false, message: `Could not fetch the preset payload: ${error instanceof Error ? error.message : String(error)}`, installedSkills: [], missingSkills: [] };
+  }
+  let payload: MarketplacePresetPayload;
+  try {
+    payload = JSON.parse(raw) as MarketplacePresetPayload;
+  } catch {
+    return { ok: false, message: "Preset payload is not valid JSON.", installedSkills: [], missingSkills: [] };
+  }
+  const hasNodes = Array.isArray(payload.nodes) && payload.nodes.length > 0;
+  const hasStages = Array.isArray(payload.stages) && payload.stages.length > 0;
+  if (!hasNodes && !hasStages) {
+    return { ok: false, message: "Preset payload has neither nodes nor stages to apply.", installedSkills: [], missingSkills: [] };
+  }
+  try {
+    const stored = hasNodes ? { nodes: payload.nodes, saved_at: new Date().toISOString() } : { stages: payload.stages, saved_at: new Date().toISOString() };
+    localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(stored));
+  } catch {
+    return { ok: false, message: "Could not write the preset to local storage.", installedSkills: [], missingSkills: [] };
+  }
+
+  const installedSkills: string[] = [];
+  const missingSkills: string[] = [];
+  const prerequisites = Array.isArray(payload.prerequisiteSkills) ? payload.prerequisiteSkills : [];
+  for (const name of prerequisites) {
+    const match = allPackages.find((pkg) => pkg.kind === "skill" && pkg.name.toLowerCase() === name.toLowerCase());
+    if (!match) {
+      missingSkills.push(name);
+      continue;
+    }
+    try {
+      await window.metisRegistry.install(match.id);
+      installedSkills.push(match.name);
+    } catch {
+      missingSkills.push(name);
+    }
+  }
+
+  const parts = ["Preset ready, opening Orchestration. Click Load preset to apply."];
+  if (installedSkills.length) parts.push(`Installed skills: ${installedSkills.join(", ")}.`);
+  if (missingSkills.length) parts.push(`Not found in registry: ${missingSkills.join(", ")}.`);
+  return { ok: true, message: parts.join(" "), installedSkills, missingSkills };
+}
+
 function marketplaceCategoryIcon(category: RegistryPackageKind | "all", size = 18): JSX.Element {
   if (category === "mcp") return <Plug size={size} />;
   if (category === "skill") return <ClipboardList size={size} />;
@@ -8921,13 +9030,18 @@ const MARKETPLACE_GROUP_LABEL: Record<DisplayKind, string> = {
   preset: "Presets"
 };
 
-function MarketplaceWorkspace(): JSX.Element {
+function MarketplaceWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX.Element {
   const [state, setState] = useAppStoreState("marketplaceState", DEFAULT_MARKETPLACE_STATE);
   const [packages, setPackages] = useState<RegistryPackage[]>(FALLBACK_MARKETPLACE_PACKAGES);
   const [installedPackages, setInstalledPackages] = useState<RegistryPackage[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
+  // Preset "Apply to Orchestration" state (docs/DRILL_PLAN.md Phase 4): keyed by package id so
+  // the detail view (and, once installed, a card) can show a busy spinner and a result toast
+  // per package without a modal.
+  const [applyBusyId, setApplyBusyId] = useState<string | null>(null);
+  const [applyResults, setApplyResults] = useState<Record<string, PresetApplyResult>>({});
   // In-app starring (docs/FABLE_PLANS.md section 18, "Marketplace trust + detail"): purely local
   // for now, sorts a package to the front of its group's grid. Community-wide star counts need a
   // backend aggregating everyone's toggles — TODO, see §18 in FABLE_PLANS for the sketch.
@@ -8987,6 +9101,17 @@ function MarketplaceWorkspace(): JSX.Element {
       setCardErrors((current) => ({ ...current, [item.id]: error instanceof Error ? error.message : String(error) }));
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function handleApplyPreset(item: RegistryPackage): Promise<void> {
+    setApplyBusyId(item.id);
+    const result = await applyMarketplacePreset(item, packages);
+    setApplyResults((current) => ({ ...current, [item.id]: result }));
+    setApplyBusyId(null);
+    if (result.ok) {
+      if (window.metisRegistry) void window.metisRegistry.listInstalled().then(setInstalledPackages).catch(() => undefined);
+      onNavigate("orchestration");
     }
   }
 
@@ -9067,6 +9192,9 @@ function MarketplaceWorkspace(): JSX.Element {
         onBack={() => setSelectedId(null)}
         onToggleInstall={() => void toggleInstall(selectedPackage)}
         onToggleStar={() => toggleStar(selectedPackage.id)}
+        applyBusy={applyBusyId === selectedPackage.id}
+        applyResult={applyResults[selectedPackage.id]}
+        onApplyPreset={() => void handleApplyPreset(selectedPackage)}
       />
     );
   }
@@ -9191,28 +9319,35 @@ function MarketplaceWorkspace(): JSX.Element {
  *  banner (ascii art or image), GitHub stats when the source resolves to a repo, and the raw
  *  package payload rendered through the shared Markdown component so a skill reads like a README. */
 function MarketplaceDetailView({
+  applyBusy,
+  applyResult,
   busy,
   error,
   githubStats,
   installed,
   item,
+  onApplyPreset,
   onBack,
   onToggleInstall,
   onToggleStar,
   readme,
   starred
 }: {
+  applyBusy: boolean;
+  applyResult?: PresetApplyResult;
   busy: boolean;
   error?: string;
   githubStats: GithubRepoStats | null;
   installed: boolean;
   item: RegistryPackage;
+  onApplyPreset: () => void;
   onBack: () => void;
   onToggleInstall: () => void;
   onToggleStar: () => void;
   readme: string | null;
   starred: boolean;
 }): JSX.Element {
+  const isPreset = displayKind(item.kind) === "preset";
   return (
     <main className="product-workspace marketplace-workspace marketplace-detail" aria-label={`${item.name} details`}>
       <button type="button" className="marketplace-detail-back" onClick={onBack}>
@@ -9242,10 +9377,24 @@ function MarketplaceDetailView({
             {busy ? <Loader2 size={14} className="spin" /> : null}
             {installed ? "Installed · Uninstall" : "Install"}
           </button>
+          {isPreset ? (
+            <button type="button" className="ghost-action marketplace-apply-preset" onClick={onApplyPreset} disabled={applyBusy || !window.metisRegistry}>
+              {applyBusy ? <Loader2 size={14} className="spin" /> : <Sparkles size={14} />}
+              Apply to Orchestration
+            </button>
+          ) : null}
         </div>
       </header>
 
+      {isPreset && !window.metisRegistry ? (
+        <small className="marketplace-card-error">Applying presets needs the desktop app; this preview has no registry bridge.</small>
+      ) : null}
+
       {error ? <small className="marketplace-card-error">{error}</small> : null}
+
+      {applyResult ? (
+        <small className={applyResult.ok ? "marketplace-apply-success" : "marketplace-card-error"}>{applyResult.message}</small>
+      ) : null}
 
       {githubStats ? (
         <div className="marketplace-detail-github">

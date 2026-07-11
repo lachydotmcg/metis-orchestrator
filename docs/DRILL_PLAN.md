@@ -142,13 +142,13 @@
   (the official MCP registry org) + modelcontextprotocol/servers + community lists; add
   a second seeding wave to metis-registry (10-20 more quality MCP servers with configs,
   more skills). Push the registry.
-- [ ] **Q — Preset install applies the orchestration.** Reconcile the preset payload format
+- [x] **Q — Preset install applies the orchestration.** Reconcile the preset payload format
   (publish wizard embeds {nodes}; seeded presets use {name,prerequisiteSkills,stages}) —
   pick ONE canonical schema ({nodes} + optional prerequisiteSkills is best), migrate the
   3 seeded presets, and make installing a preset: write payload → PRESET_STORAGE_KEY,
   auto-install prerequisite skills via metisRegistry, toast "Preset applied — open
   Orchestration".
-- [ ] **Q — MCP client wiring, phase 1.** Installed MCP packages: store the parsed mcp.json
+- [x] **Q — MCP client wiring, phase 1.** Installed MCP packages: store the parsed mcp.json
   config, show servers in Settings>MCP with status, and implement SPAWN + tools/list over
   stdio for local npx servers (guarded, opt-in, permission-gated). Phase 2 (using MCP
   tools mid-pipeline) is a stretch goal — design it in FABLE_PLANS if not built.
