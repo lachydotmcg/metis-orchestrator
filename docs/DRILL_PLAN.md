@@ -224,8 +224,9 @@
   conversations, project files, settings, marketplace — a Ctrl+K command palette.
 - [x] Auto-title conversations (first-run summary → conversation title, replacing "New
   conversation").
-- [ ] Conversation export: copy-whole-chat as markdown + save-to-file (also fixes the
-  Privacy>Export disabled state — build the real bridge).
+- [x] Conversation export: copy-whole-chat as markdown + save-to-file (also fixes the
+  Privacy>Export disabled state — build the real bridge). Bridge a417ad8, button 30be8f5.
+  NEEDS LIVE TEST for the save dialog.
 - [ ] Streaming Manager chat (SSE-style token streaming into the widget).
 - [ ] Per-conversation token/cost line (reuse telemetry; show at conversation top).
 - [ ] Prompt templates / snippets library in the composer (slash-command style).
