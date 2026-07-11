@@ -228,8 +228,9 @@
 - [ ] Prompt templates / snippets library in the composer (slash-command style).
 - [ ] First-run tour: a 5-step overlay pointing at Orchestration, Manager, Marketplace,
   Gallery, Benchmark (ties into §17 onboarding).
-- [ ] Electron-builder packaging config + a GitHub Actions release workflow (so Lachy can
-  cut releases by tagging).
+- [x] Electron-builder packaging config + a GitHub Actions release workflow (so Lachy can
+  cut releases by tagging). NOTE: run `npm i -D electron-builder` locally + commit the
+  lockfile before CI `npm ci` will pass; see docs/RELEASING.md.
 - [ ] Error/crash reporting surface (an in-app "last errors" view fed by the audit log).
 - [ ] Routine templates ("Daily standup summary", "Nightly repo tidy", "Morning news
   brief" using Pulse).

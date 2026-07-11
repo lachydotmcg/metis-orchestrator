@@ -1,0 +1,55 @@
+appId: com.lachydotmcg.metis-orchestrator
+productName: Metis Orchestrator
+copyright: Copyright (c) Lachy McGregor
+
+# Derived from package.json:
+#  - "main" -> dist-electron/electron/main.js (compiled by tsconfig.electron.json)
+#  - vite.config.ts build.outDir -> dist/ (renderer)
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist-electron/**/*
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+
+# electron-builder reads package.json's "main" field for the entry point,
+# so no separate "main" override is needed here as long as dist-electron/electron/main.js
+# exists after `npm run build`.
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}.${ext}
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  category: Development
+  artifactName: ${productName}-${version}.${ext}
+
+publish:
+  provider: github
+  owner: lachydotmcg
+  repo: metis-orchestrator
