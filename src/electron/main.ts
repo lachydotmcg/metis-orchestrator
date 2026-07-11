@@ -66,6 +66,9 @@ import type {
   UserQuestionRequest,
   ManagerChatMessage,
   ManagerChatResult,
+  ManagerAction,
+  ManagerActionKind,
+  ManagerActionResult,
   UpdateCheckResult
 } from "../shared/runtime-contracts.js";
 
@@ -5258,9 +5261,72 @@ function managerSystemPrompt(context: string): string {
     `You help the owner run his projects: you know what projects exist and what's on his to-do board, and you help him plan, prioritize, and think through his work.`,
     `Live context:`,
     context,
-    `You can advise, help plan, and reference specific projects or todos by name when it's useful. Deeper actions (firing prompts into a project's folder, editing the orchestration graph) are coming in a later update — for now, give concrete, specific guidance, and when it's relevant, suggest specific todos he could add or tackle next.`,
+    `You can advise, help plan, and reference specific projects or todos by name when it's useful.`,
+    `You may also PROPOSE actions for the owner to approve — you never execute anything yourself, the owner reviews and approves each one in the UI. Propose actions ONLY when the owner clearly wants something done (not for general advice or discussion). If no action is called for, do not include the block at all.`,
+    `To propose actions, end your reply with a fenced block, exactly this shape, after your normal conversational reply:`,
+    '```metis-actions\n[ { "kind": "add_todo", "title": "...", "reason": "..." } ]\n```',
+    `Rules for the block: it must be the LAST thing in your reply; it must contain a JSON array (even if it has one item); do not add commentary inside or after it. Keep your actual conversational answer above the block, as normal prose.`,
+    `Available action kinds and their fields:`,
+    `- "run_in_project": { "prompt": string, "projectPath"?: string, "reason"?: string } — projectPath is optional and defaults to the current project workspace.`,
+    `- "add_todo": { "title": string, "assignee"?: "manager" | "fable", "reason"?: string } — adds a card to the to-do board.`,
+    `- "open_view": { "view": string, "reason"?: string } — view is one of: orchestration, marketplace, gallery, benchmark, todo, routines, graph, session, manager, settings, pulse.`,
+    `Every action should carry a short "reason" explaining why you're proposing it. Propose at most a few actions per reply — do not flood the owner with proposals.`,
     `Be concise and direct. Do not pad with filler, do not ask permission before giving your answer, and do not narrate your own reasoning process — just help.`
   ].join("\n\n");
+}
+
+const MANAGER_ACTION_KINDS: ManagerActionKind[] = ["run_in_project", "add_todo", "open_view"];
+const MANAGER_ACTION_VIEWS = new Set([
+  "orchestration", "marketplace", "gallery", "benchmark", "todo", "routines", "graph", "session", "manager", "settings", "pulse"
+]);
+
+/** Validates one candidate parsed out of a Manager reply's `metis-actions`
+ *  block: known kind, required fields present and the right type. Returns
+ *  null (never throws) for anything malformed so the caller can just drop it. */
+function validateManagerAction(candidate: unknown): ManagerAction | null {
+  if (!candidate || typeof candidate !== "object") return null;
+  const raw = candidate as Record<string, unknown>;
+  const kind = raw.kind;
+  if (typeof kind !== "string" || !MANAGER_ACTION_KINDS.includes(kind as ManagerActionKind)) return null;
+
+  const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
+  const isOptionalString = (value: unknown): value is string | undefined => value === undefined || typeof value === "string";
+
+  const reason = isOptionalString(raw.reason) ? raw.reason : undefined;
+
+  if (kind === "run_in_project") {
+    if (!isNonEmptyString(raw.prompt) || !isOptionalString(raw.projectPath)) return null;
+    return { kind, prompt: raw.prompt, projectPath: raw.projectPath, reason };
+  }
+  if (kind === "add_todo") {
+    if (!isNonEmptyString(raw.title)) return null;
+    if (raw.assignee !== undefined && raw.assignee !== "manager" && raw.assignee !== "fable") return null;
+    return { kind, title: raw.title, assignee: raw.assignee as string | undefined, reason };
+  }
+  if (kind === "open_view") {
+    if (!isNonEmptyString(raw.view) || !MANAGER_ACTION_VIEWS.has(raw.view)) return null;
+    return { kind, view: raw.view, reason };
+  }
+  return null;
+}
+
+/** Extracts a trailing ```metis-actions fenced JSON block from a Manager
+ *  reply (if present), validates each proposed action, and returns the reply
+ *  text with the block stripped out. Never throws: a missing or malformed
+ *  block just yields the reply untouched and `actions: undefined`. */
+function extractManagerActions(reply: string): { reply: string; actions?: ManagerAction[] } {
+  try {
+    const match = reply.match(/```metis-actions\s*([\s\S]*?)```\s*$/);
+    if (!match) return { reply };
+    const jsonText = match[1].trim();
+    const parsed = JSON.parse(jsonText);
+    if (!Array.isArray(parsed)) return { reply };
+    const actions = parsed.map(validateManagerAction).filter((action): action is ManagerAction => action !== null);
+    const stripped = reply.slice(0, match.index).trimEnd();
+    return { reply: stripped, actions: actions.length ? actions : undefined };
+  } catch {
+    return { reply };
+  }
 }
 
 /** Non-streaming Manager chat turn: builds live context, calls the model chain
@@ -5286,10 +5352,82 @@ async function runManagerChat(history: ManagerChatMessage[]): Promise<ManagerCha
       provider: result.ref.provider,
       model: result.ref.model
     });
-    return { reply: result.output };
+    const { reply, actions } = extractManagerActions(result.output);
+    if (actions?.length) {
+      await appendAudit("info", "manager.action", "Manager proposed actions.", {
+        kinds: actions.map((action) => action.kind)
+      });
+    }
+    return { reply, actions };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return { reply: "", error: message };
+  }
+}
+
+/** Full shape written back to the `todoBoard` store key for add_todo — matches
+ *  the renderer's TodoCard/TodoColumn/TodoBoard shape (src/renderer/ui/App.tsx)
+ *  but kept local since main.ts must not depend on renderer types. */
+type ManagerWritableCard = { id: string; title: string; priority: "high" | "medium" | "idea" | "none"; done: boolean; assignee?: { kind: string } };
+type ManagerWritableBoard = { columns: { id: string; title: string; cards: ManagerWritableCard[] }[] };
+
+/** Executes exactly one Manager-proposed action, AFTER the owner has approved
+ *  it in the renderer. Re-validates the action from scratch (never trusts the
+ *  renderer's copy) since this is the actual side-effecting boundary — the
+ *  parse step in runManagerChat only decides what to *show* the owner. */
+async function executeManagerAction(rawAction: ManagerAction): Promise<ManagerActionResult> {
+  const action = validateManagerAction(rawAction);
+  if (!action) {
+    return { ok: false, error: "Action failed server-side validation." };
+  }
+
+  try {
+    if (action.kind === "open_view") {
+      await appendAudit("info", "manager.action", "Executed open_view action.", { view: action.view });
+      return { ok: true, view: action.view };
+    }
+
+    if (action.kind === "add_todo") {
+      const board = await readStoreValue<ManagerWritableBoard>("todoBoard", { columns: [] });
+      const columns = board.columns ?? [];
+      let target = columns.find((column) => column.id === "todo") ?? columns[0];
+      if (!target) {
+        target = { id: "backlog", title: "Backlog", cards: [] };
+        columns.push(target);
+      }
+      const card: ManagerWritableCard = {
+        id: randomUUID(),
+        title: action.title ?? "Untitled",
+        priority: "none",
+        done: false,
+        assignee: action.assignee ? { kind: action.assignee } : undefined
+      };
+      target.cards = [...(target.cards ?? []), card];
+      await writeStoreValue("todoBoard", { columns });
+      await appendAudit("info", "manager.action", "Executed add_todo action.", { title: card.title, assignee: action.assignee });
+      return { ok: true };
+    }
+
+    if (action.kind === "run_in_project") {
+      // Reuses runSession as-is (same path metis-session:run drives) so this
+      // gets the exact same permission gating, routing, and audit trail as a
+      // run the owner started by hand — nothing here bypasses that.
+      const workspace = await readProjectWorkspace();
+      const projectPath = action.projectPath ?? workspace?.path;
+      const run = await runSession({
+        prompt: action.prompt ?? "",
+        projectPath,
+        permissionMode: "ask"
+      });
+      await appendAudit("info", "manager.action", "Executed run_in_project action.", { projectPath, conversationId: run.conversationId });
+      return { ok: true, conversationId: run.conversationId };
+    }
+
+    return { ok: false, error: "Unsupported action kind." };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await appendAudit("warning", "manager.action", "Manager action execution failed.", { kind: action.kind, error: message });
+    return { ok: false, error: message };
   }
 }
 
@@ -7203,6 +7341,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));
   ipcMain.handle("metis-routines:run-now", (_event, id: string) => runRoutineNow(id));
   ipcMain.handle("metis-manager:chat", (_event, history: ManagerChatMessage[]) => runManagerChat(history));
+  ipcMain.handle("metis-manager:action", (_event, action: ManagerAction) => executeManagerAction(action));
   ipcMain.handle("metis-gallery:analyze-board", (_event, boardId: string) => analyzeGalleryBoard(boardId));
   ipcMain.handle("metis-gallery:cards", () => listStyleCards());
   ipcMain.handle("metis-gallery:update-card", (_event, imageId: string, boardId: string, patch: StoredStyleCardPatch) => updateStyleCard(imageId, boardId, patch));

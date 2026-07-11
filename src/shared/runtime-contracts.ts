@@ -117,9 +117,44 @@ export interface ManagerChatMessage {
   content: string;
 }
 
+/** Actions the Manager (and, later, agentic chat) may propose in a reply —
+ *  never auto-executed. The renderer shows each proposal for the owner to
+ *  approve/reject; only on approval does it call `metisManager.runAction`,
+ *  which re-validates server-side before doing anything (docs/DRILL_PLAN.md
+ *  Phase 3 M3 + L6). */
+export type ManagerActionKind = "run_in_project" | "add_todo" | "open_view";
+
+export interface ManagerAction {
+  kind: ManagerActionKind;
+  /** run_in_project: prompt to run; projectPath optional (defaults to current workspace). */
+  prompt?: string;
+  projectPath?: string;
+  /** add_todo: card title; assignee optional ("manager" | "fable"). */
+  title?: string;
+  assignee?: string;
+  /** open_view: a NavKey-ish string (orchestration, marketplace, gallery, benchmark, todo, routines, graph). */
+  view?: string;
+  /** One short line the Manager gives for why it's proposing this. */
+  reason?: string;
+}
+
+/** Result of executing exactly one approved ManagerAction via
+ *  `metis-manager:action`. `view` echoes back for open_view so the renderer
+ *  knows where to navigate; `conversationId` echoes back for run_in_project
+ *  so the renderer can surface/open the new session. */
+export interface ManagerActionResult {
+  ok: boolean;
+  error?: string;
+  view?: string;
+  conversationId?: string;
+}
+
 export interface ManagerChatResult {
   reply: string;
   error?: string;
+  /** Actions the Manager proposed this turn, parsed out of its reply and
+   *  stripped from the displayed text. Never auto-run. */
+  actions?: ManagerAction[];
 }
 
 export interface ProjectSnapshotFile {

@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConversationRecord,
+  ManagerAction,
+  ManagerActionResult,
   ManagerChatMessage,
   ManagerChatResult,
   MetisFileReadResult,
@@ -148,7 +150,8 @@ contextBridge.exposeInMainWorld("metisOllama", {
 });
 
 contextBridge.exposeInMainWorld("metisManager", {
-  chat: (history: ManagerChatMessage[]) => ipcRenderer.invoke("metis-manager:chat", history) as Promise<ManagerChatResult>
+  chat: (history: ManagerChatMessage[]) => ipcRenderer.invoke("metis-manager:chat", history) as Promise<ManagerChatResult>,
+  runAction: (action: ManagerAction) => ipcRenderer.invoke("metis-manager:action", action) as Promise<ManagerActionResult>
 });
 
 contextBridge.exposeInMainWorld("metisUpdates", {

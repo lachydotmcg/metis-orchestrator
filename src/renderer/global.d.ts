@@ -4,6 +4,8 @@ import type {
   CatalogModel,
   ConversationRecord,
   LabExperimentResult,
+  ManagerAction,
+  ManagerActionResult,
   ManagerChatMessage,
   ManagerChatResult,
   MetisFileReadResult,
@@ -139,6 +141,7 @@ declare global {
     };
     metisManager?: {
       chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;
+      runAction: (action: ManagerAction) => Promise<ManagerActionResult>;
     };
     metisUpdates?: {
       check: () => Promise<UpdateCheckResult>;
