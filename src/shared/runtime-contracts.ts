@@ -551,6 +551,16 @@ export interface SessionDirective {
   status: "pending" | "applied";
   /** Stage id that consumed the directive. */
   appliedAtStage?: string;
+  /** What kind of message this is. Absent means "steer" (the original mid-run
+   *  steering behavior: absorbed into the next stage prompt). Added for
+   *  agent-to-agent bus (docs/DRILL_PLAN.md Phase 5b). */
+  kind?: "steer" | "question" | "review_request" | "handoff";
+  /** Managed-agent name (see FANOUT_AGENT_NAMES in main.ts) that authored this
+   *  directive, when it was emitted by a fan-out sub-agent rather than the user. */
+  fromAgent?: string;
+  /** Managed-agent name this directive targets. Absent means broadcast to
+   *  every consumer (the pipeline as a whole), preserving pre-5b behavior. */
+  toAgent?: string;
 }
 
 /** A model the user pinned in the composer picker. `model` may be a display

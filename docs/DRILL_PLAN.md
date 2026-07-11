@@ -179,6 +179,9 @@
   (Traycer's walkie-talkies). 5c (renderer) = fan-out visualisation: tag each side-chat card with
   its agent identity + hue, show the file-claim ledger, thread agent-to-agent messages. Do 5a
   first (the engine); keep each sub-round shippable and build-green on its own.
+  STATUS: 5a shipped, 5c viz shipped, 5b backend shipped (kind + fromAgent/toAgent on
+  SessionDirective, consumerAgent delivery filter, postAgentDirective helper) — NEEDS LIVE
+  TEST for live inter-agent traffic; 5c thread-render of agent-to-agent messages is a follow-up.
 - [x] **§20 leftovers** — grouped-chip grammar for retrieval + "Ran N agents" summaries
   (now that sub-agents exist).
 

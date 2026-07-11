@@ -5613,7 +5613,24 @@ Return COMPLETE files, not snippets, only for paths inside your territory. Befor
         scope,
         agentName: subtask.name
       };
+      // Agent-to-agent bus (docs/DRILL_PLAN.md Phase 5b): pop any directive
+      // addressed to THIS agent (or broadcast) before it runs, same absorption
+      // pattern runOrchestratedStages uses for user steering. Directives
+      // addressed to a different agent are left pending for their real target.
+      const inboundDirectives = takePendingDirectives(projectPath, callContext.stageId, subtask.name);
+      for (const directive of inboundDirectives) {
+        const originLabel = directive.fromAgent ? `${directive.fromAgent}` : "the manager";
+        emitTimeline(stream, timelineText(`${subtask.name} received a ${directive.kind ?? "steer"} from ${originLabel}: "${directive.text}"`));
+        subPrompt += `\n\nDirection from ${originLabel} (arrived mid-run): ${directive.text}`;
+      }
       const attempt = await callStageWithFallback(sharedChain, subPrompt, gatewayPreference, callContext, subImages);
+      // Future agent step: once a sub-agent's own output signals it needs
+      // input from a teammate or the manager (e.g. an "ASK:" tag it emits),
+      // this is where it would call postAgentDirective({ projectPath,
+      // fromAgent: subtask.name, toAgent: <other agent or "manager">, text,
+      // kind: "question" | "review_request" | "handoff" }) to hand off. No
+      // such trigger exists yet in this sequential v1 — this is the plumbing
+      // + call point, not a live emit.
 
       const cleanOutput = stripAskUserTags(stripThinkBlocks(attempt.output));
       const stage: OrchestrationStage = {
@@ -5925,7 +5942,14 @@ function directiveScopeKey(projectPath?: string): string {
   return projectPath?.trim() || "global";
 }
 
-async function postSessionDirective(input: { projectPath?: string; conversationId?: string; text: string }): Promise<SessionDirective> {
+async function postSessionDirective(input: {
+  projectPath?: string;
+  conversationId?: string;
+  text: string;
+  kind?: SessionDirective["kind"];
+  fromAgent?: string;
+  toAgent?: string;
+}): Promise<SessionDirective> {
   const text = input.text.trim();
   if (!text) throw new Error("A directive needs text.");
   const scopeKey = directiveScopeKey(input.projectPath);
@@ -5935,26 +5959,70 @@ async function postSessionDirective(input: { projectPath?: string; conversationI
     fromConversationId: input.conversationId,
     createdAt: new Date().toISOString(),
     text,
-    status: "pending"
+    status: "pending",
+    kind: input.kind,
+    fromAgent: input.fromAgent,
+    toAgent: input.toAgent
   };
   sessionDirectives.set(scopeKey, [...(sessionDirectives.get(scopeKey) ?? []), directive]);
-  await appendAudit("info", "session.directive", `Mid-run direction queued: ${text.slice(0, 120)}`, { scopeKey, conversationId: input.conversationId });
+  await appendAudit("info", "session.directive", `Mid-run direction queued: ${text.slice(0, 120)}`, {
+    scopeKey,
+    conversationId: input.conversationId,
+    kind: input.kind ?? "steer",
+    toAgent: input.toAgent
+  });
   return directive;
+}
+
+/** Convenience wrapper for a fan-out sub-agent step to address a directive at
+ *  another named agent (or the manager). Thin layer over postSessionDirective
+ *  that just fixes fromAgent/toAgent/kind in one call — no inter-agent traffic
+ *  is generated on its own; a future fan-out agent step calls this explicitly
+ *  (see the call-site comment in runFanoutPipeline's per-agent loop). */
+async function postAgentDirective(input: {
+  projectPath?: string;
+  fromAgent: string;
+  toAgent: string;
+  text: string;
+  kind: "handoff" | "question" | "review_request";
+}): Promise<SessionDirective> {
+  return postSessionDirective({
+    projectPath: input.projectPath,
+    text: input.text,
+    kind: input.kind,
+    fromAgent: input.fromAgent,
+    toAgent: input.toAgent
+  });
 }
 
 function listSessionDirectives(projectPath?: string): SessionDirective[] {
   return sessionDirectives.get(directiveScopeKey(projectPath)) ?? [];
 }
 
-/** Pop pending directives for this project and mark them applied at the given stage. */
-function takePendingDirectives(projectPath: string | undefined, stageId: string): SessionDirective[] {
+/** Pop pending directives for this project and mark them applied at the given
+ *  stage. When `consumerAgent` is omitted, behavior is byte-identical to
+ *  before agent-to-agent addressing existed: every pending directive is
+ *  delivered and marked applied (this is also what happens when every pending
+ *  directive has no `toAgent`, i.e. is a broadcast). When `consumerAgent` is
+ *  supplied, a directive is only delivered to this call when its `toAgent` is
+ *  absent (broadcast) or matches `consumerAgent`; directives addressed to a
+ *  DIFFERENT agent are left pending untouched so their real target can still
+ *  pick them up later. Only the directives actually delivered get marked
+ *  applied — never touch the ones skipped over. */
+function takePendingDirectives(projectPath: string | undefined, stageId: string, consumerAgent?: string): SessionDirective[] {
   const scopeKey = directiveScopeKey(projectPath);
   const all = sessionDirectives.get(scopeKey) ?? [];
-  const pending = all.filter((directive) => directive.status === "pending");
+  const deliverable = (directive: SessionDirective): boolean => {
+    if (directive.status !== "pending") return false;
+    if (!directive.toAgent) return true;
+    return directive.toAgent === consumerAgent;
+  };
+  const pending = all.filter(deliverable);
   if (pending.length === 0) return [];
+  const deliveredIds = new Set(pending.map((directive) => directive.id));
   sessionDirectives.set(
     scopeKey,
-    all.map((directive) => (directive.status === "pending" ? { ...directive, status: "applied" as const, appliedAtStage: stageId } : directive))
+    all.map((directive) => (deliveredIds.has(directive.id) ? { ...directive, status: "applied" as const, appliedAtStage: stageId } : directive))
   );
   return pending.map((directive) => ({ ...directive, status: "applied" as const, appliedAtStage: stageId }));
 }
@@ -8497,7 +8565,13 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle("metis-session:list", () => readSessionRuns());
   ipcMain.on("metis-session:cancel", (_event, projectPath?: string) => requestSessionCancel(projectPath));
-  ipcMain.handle("metis-bus:post", (_event, input: { projectPath?: string; conversationId?: string; text: string }) => postSessionDirective(input));
+  ipcMain.handle(
+    "metis-bus:post",
+    (
+      _event,
+      input: { projectPath?: string; conversationId?: string; text: string; kind?: SessionDirective["kind"]; fromAgent?: string; toAgent?: string }
+    ) => postSessionDirective(input)
+  );
   ipcMain.handle("metis-bus:list", (_event, projectPath?: string) => listSessionDirectives(projectPath));
   ipcMain.handle("metis-conversations:list", () => readConversations());
   ipcMain.handle("metis-conversations:create", (_event, projectPath?: string, firstPrompt?: string) => createConversation(projectPath, firstPrompt));
