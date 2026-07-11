@@ -219,7 +219,7 @@
 
 - [ ] Wire the titlebar global search (currently disabled "coming soon"): search across
   conversations, project files, settings, marketplace — a Ctrl+K command palette.
-- [ ] Auto-title conversations (first-run summary → conversation title, replacing "New
+- [x] Auto-title conversations (first-run summary → conversation title, replacing "New
   conversation").
 - [ ] Conversation export: copy-whole-chat as markdown + save-to-file (also fixes the
   Privacy>Export disabled state — build the real bridge).

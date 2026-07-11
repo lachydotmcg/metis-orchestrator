@@ -3792,7 +3792,7 @@ async function renameConversation(id: string, title: string): Promise<Conversati
   const conversation = current.find((item) => item.id === id);
   if (!conversation || !trimmed) return current;
 
-  const next = current.map((item) => (item.id === id ? { ...item, title: trimmed } : item));
+  const next = current.map((item) => (item.id === id ? { ...item, title: trimmed, titleManual: true } : item));
   await writeConversations(next);
   await appendAudit("info", "conversation.rename", `Renamed conversation to "${trimmed}".`, { id });
   return next;
@@ -3881,6 +3881,97 @@ async function appendRunToConversation(run: SessionRun, prompt: string): Promise
   };
   await writeConversations([nextConversation, ...current.filter((item) => item.id !== nextConversation.id)]);
   return nextConversation.id;
+}
+
+/** A prompt too short/thin to summarise meaningfully ("hi", "test", "yo") —
+ *  auto-titling would just reproduce the existing first-prompt-slice title,
+ *  so skip calling the model and leave the placeholder title in place. */
+function isTrivialTitlePrompt(prompt: string): boolean {
+  const words = prompt.split(/\s+/).filter(Boolean);
+  return words.length <= 2 && prompt.length <= 12;
+}
+
+/** Marks a conversation as "auto-title attempted" without changing its title
+ *  — used for the trivial-prompt skip so we never re-attempt on later turns. */
+async function markAutoTitleAttempted(conversationId: string): Promise<void> {
+  const current = await readConversations();
+  const next = current.map((item) => (item.id === conversationId ? { ...item, autoTitleAttempted: true } : item));
+  await writeConversations(next);
+}
+
+/** Normalises a raw local-model title reply into a clean, short, Title-Case-ish
+ *  string: first line only, quotes/trailing punctuation stripped, capped at 6
+ *  words. Returns null for anything that doesn't look like a real title (empty,
+ *  too long/rambling, or unparseable), so the caller can fall back safely. */
+function cleanGeneratedTitle(raw: string): string | null {
+  let text = stripThinkBlocks(raw).split("\n")[0] ?? "";
+  text = text.trim().replace(/^["'“”‘’]+|["'“”‘’]+$/g, "").trim();
+  text = text.replace(/[.!?;:,]+$/g, "").trim();
+  text = text.replace(/\s+/g, " ");
+  if (!text || text.length > 80) return null;
+  const words = text.split(" ").filter(Boolean).slice(0, 6);
+  if (words.length === 0) return null;
+  const titled = words.map((word) => (word ? word.charAt(0).toUpperCase() + word.slice(1) : word)).join(" ");
+  return titled.length >= 2 ? titled : null;
+}
+
+/** Calls the local Ollama model (localStageRef — always free/local, never a
+ *  paid cloud call) with a tight titling prompt built from the first exchange.
+ *  Fails soft: any provider error, placeholder result, or unparseable reply
+ *  returns null so the caller falls back to the first-prompt-slice title. */
+async function generateLocalTitle(prompt: string, assistantText: string): Promise<string | null> {
+  try {
+    const ref = localStageRef();
+    const titlePrompt = `Summarise this conversation as a short title of at most 6 words, no quotes, no punctuation at the end. Reply with only the title.
+
+User: ${prompt.slice(0, 800)}
+Assistant: ${assistantText.slice(0, 800)}`;
+    const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt: titlePrompt });
+    if (result.source === "placeholder" || !result.output.trim()) return null;
+    return cleanGeneratedTitle(result.output);
+  } catch {
+    return null;
+  }
+}
+
+/** Owner's principle: new conversations start with a throwaway first-prompt-
+ *  slice title ("New session" / conversationTitle(prompt)); this replaces it
+ *  ONCE with a real local-model-generated title after the first exchange
+ *  completes, so the sidebar reads like a real conversation list instead of
+ *  raw prompt fragments. Called fire-and-forget from runSession — never
+ *  awaited on the run's return path, and every failure mode (missing
+ *  conversation, manual rename, already-attempted, model unavailable, junk
+ *  reply) degrades to "do nothing" or "keep the existing placeholder title",
+ *  never to a thrown error. */
+async function maybeAutoTitleConversation(conversationId: string, firstPrompt: string, assistantText: string): Promise<void> {
+  try {
+    const current = await readConversations();
+    const conversation = current.find((item) => item.id === conversationId);
+    if (!conversation) return;
+    if (conversation.titleManual || conversation.autoTitleAttempted) return;
+    // Only the conversation's first exchange (one user turn + one assistant
+    // turn) should ever trigger auto-titling.
+    if (conversation.turns.length !== 2) return;
+
+    const trimmedPrompt = firstPrompt.trim();
+    if (isTrivialTitlePrompt(trimmedPrompt)) {
+      await markAutoTitleAttempted(conversationId);
+      return;
+    }
+
+    const generated = await generateLocalTitle(trimmedPrompt, assistantText);
+    const finalTitle = generated ?? conversationTitle(trimmedPrompt);
+
+    // Re-read right before writing so a concurrent rename or new turn (the
+    // background model call can take a few seconds) never gets clobbered.
+    const latest = await readConversations();
+    const latestConversation = latest.find((item) => item.id === conversationId);
+    if (!latestConversation || latestConversation.titleManual || latestConversation.autoTitleAttempted) return;
+    const next = latest.map((item) => (item.id === conversationId ? { ...item, title: finalTitle, autoTitleAttempted: true } : item));
+    await writeConversations(next);
+  } catch {
+    // Titling must never surface as a run failure — swallow everything.
+  }
 }
 
 function estimateTokens(value: string): number {
@@ -6498,6 +6589,10 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
 
   await appendRunToConversation(run, prompt);
   await writeSessionRun(run);
+  // Fire-and-forget: never awaited, so a slow/unavailable local model can
+  // never delay or fail this run's return. See maybeAutoTitleConversation
+  // for the one-shot / manual-rename guards and the local-model prompt.
+  void maybeAutoTitleConversation(conversationId, prompt, run.assistantText).catch(() => {});
   emitStream(stream, { kind: "complete", run });
   return run;
 }

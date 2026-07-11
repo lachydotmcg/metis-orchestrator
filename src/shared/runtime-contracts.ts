@@ -847,6 +847,12 @@ export interface ConversationRecord {
   updatedAt: string;
   turns: ConversationTurnRecord[];
   archived?: boolean;
+  /** True once the user has manually renamed this conversation — permanently
+   *  opts it out of local-model auto-titling. */
+  titleManual?: boolean;
+  /** True once a local-model auto-title attempt has run (success or failure)
+   *  for this conversation, so the one-shot title job never re-fires. */
+  autoTitleAttempted?: boolean;
 }
 
 /** A routine = a saved prompt that runs automatically on a schedule, with
