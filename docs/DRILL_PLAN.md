@@ -107,7 +107,7 @@
   model captions gallery images and receives image inputs) editable from Orchestration
   (and/or Settings). Today detectOllamaVisionModel hardcodes discovery; make the choice
   explicit with auto-detect as default.
-- [ ] **L15 — Pinterest sync (if possible).** Investigate: Pinterest API requires OAuth
+- [x] **L15 — Pinterest sync (if possible).** Investigate: Pinterest API requires OAuth
   apps; the pragmatic v1 is "Import from Pinterest board URL" — fetch the public board
   page/RSS, pull pin image URLs, import them as gallery images. If Pinterest blocks
   scraping hard, ship "paste image URLs / drag from browser" bulk import instead and
@@ -152,7 +152,7 @@
   config, show servers in Settings>MCP with status, and implement SPAWN + tools/list over
   stdio for local npx servers (guarded, opt-in, permission-gated). Phase 2 (using MCP
   tools mid-pipeline) is a stretch goal — design it in FABLE_PLANS if not built.
-- [ ] Skill auto-install in onboarding (map recommended-preset prerequisite skills to
+- [x] Skill auto-install in onboarding (map recommended-preset prerequisite skills to
   registry ids now that both exist; one click installs models AND skills).
 
 ## PHASE 5 — Managed agents phase B (Traycer-informed; Lachy's north star)
