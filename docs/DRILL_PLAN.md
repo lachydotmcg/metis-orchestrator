@@ -165,6 +165,20 @@
   travel the bus and render in the side-chats; a merge/verify step runs at the end.
   Spec-first: each fan-out writes a small task doc first. Differentiator vs Traycer:
   local-first = 10 agents for free.
+  SUBSTRATE (already exists, build on it): `SessionDirective` (runtime-contracts ~515: the
+  directive bus, scoped steering messages) and the `stage_call` stream event (~696: per-model-call
+  side-chat cards) rendered by SideChatCard/SideChatStack; MANAGED_AGENT_IDENTITIES
+  (Nyx/Talos/Echo/Atlas/Juno) already defined. DISPATCH-READY SUB-ROUNDS:
+  5a (backend main.ts + contracts) = fan-out run mode: decompose a task into N sub-tasks, each
+  assigned an agent identity + file TERRITORIES (path globs); a file-claim ledger (Map scope ->
+  path -> agentId) rejects a second claim on the same path; each sub-agent runs as its own staged
+  call emitting stage_call events tagged with an optional agentName; v1 may run sub-agents
+  SEQUENTIALLY under the hood while presenting them as distinct agents; spec-first task doc per
+  sub-agent; final merge/verify stage. 5b (backend) = agent-to-agent messaging: extend
+  SessionDirective with kind (steer|question|review_request|handoff) + fromAgent/toAgent
+  (Traycer's walkie-talkies). 5c (renderer) = fan-out visualisation: tag each side-chat card with
+  its agent identity + hue, show the file-claim ledger, thread agent-to-agent messages. Do 5a
+  first (the engine); keep each sub-round shippable and build-green on its own.
 - [ ] **§20 leftovers** — grouped-chip grammar for retrieval + "Ran N agents" summaries
   (now that sub-agents exist).
 
