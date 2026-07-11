@@ -2353,6 +2353,26 @@ function completeStep(step: SessionPipelineStep, auditId?: string): SessionPipel
   };
 }
 
+/** Shared with the Manager tab's action protocol (see MANAGER_ACTION_KINDS /
+ *  extractManagerActions) so a general chat turn can propose the same
+ *  owner-approved actions without duplicating the kind list or the format.
+ *  Only ever appended when `allowActions` is true (general chat, non-fast-lane
+ *  — see the runSession call site) so build stages and trivial fast-lane
+ *  turns never pay for or see this instruction. */
+function sessionActionProtocolBlock(): string {
+  return [
+    `You may also PROPOSE actions for the owner to approve — you never execute anything yourself, the owner reviews and approves each one in the UI. Propose actions ONLY when the user clearly wants something done (not for general chat, advice, or discussion). If no action is called for, do not include the block at all.`,
+    `To propose actions, end your reply with a fenced block, exactly this shape, after your normal conversational reply:`,
+    '```metis-actions\n[ { "kind": "add_todo", "title": "...", "reason": "..." } ]\n```',
+    `Rules for the block: it must be the LAST thing in your reply; it must contain a JSON array (even if it has one item); do not add commentary inside or after it. Keep your actual conversational answer above the block, as normal prose.`,
+    `Available action kinds and their fields:`,
+    `- "run_in_project": { "prompt": string, "projectPath"?: string, "reason"?: string } — projectPath is optional and defaults to the current project workspace.`,
+    `- "add_todo": { "title": string, "assignee"?: "manager" | "fable", "reason"?: string } — adds a card to the to-do board.`,
+    `- "open_view": { "view": string, "reason"?: string } — view is one of: orchestration, marketplace, gallery, benchmark, todo, routines, graph, session, manager, settings, pulse.`,
+    `Every action should carry a short "reason" explaining why you're proposing it. Propose at most a few actions per reply — do not flood the user with proposals.`
+  ].join("\n\n");
+}
+
 function sessionProviderPrompt(
   prompt: string,
   decision: RouteDecision,
@@ -2362,7 +2382,8 @@ function sessionProviderPrompt(
   designSeed?: DesignSeed,
   metisFile?: { content: string; chars: number } | null,
   conversationContext?: string | null,
-  knowledgeContext?: string | null
+  knowledgeContext?: string | null,
+  allowActions?: boolean
 ): string {
   const previousSource = previousRun?.providerResult
     ? `Previous response source: ${providerInfo[previousRun.providerResult.provider].label} / ${previousRun.providerResult.model} via ${previousRun.pipelineName}.`
@@ -2387,6 +2408,7 @@ function sessionProviderPrompt(
     `Never ask the user for a brief, requirements, or say the project is empty. If details are missing, invent tasteful, specific choices yourself (name, copy, palette, content) and state them briefly — you are the creative lead. Do not end with a question asking permission to proceed; proceed.`,
     designSeed ? designSeedPromptLine(designSeed, { explicitStyle: promptHasExplicitStyle(prompt) }) : "",
     snapshotPromptContext(projectSnapshot),
+    allowActions ? sessionActionProtocolBlock() : "",
     "",
     prompt
   ].filter(Boolean).join("\n");
@@ -6055,7 +6077,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     emitStream(stream, { kind: "operation", operation: chatKnowledge.operation });
     emitTimeline(stream, { id: randomUUID(), kind: "operations", title: chatKnowledge.operation.label, operationIds: [chatKnowledge.operation.id] });
   }
-  let sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block);
+  let sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block, !fastLane);
   if (images.length > 0) {
     sessionPrompt += attachmentNoteFor(images.length);
   }
@@ -6080,6 +6102,23 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
   }
   const providerMs = Date.now() - providerStart;
+  // General-chat action proposals (bug L6): reuses the exact Manager-tab
+  // machinery (extractManagerActions / validateManagerAction / MANAGER_ACTION_KINDS
+  // above, and the metis-manager:action executor) so a normal chat turn gets
+  // the same approve-first action capability without duplicating any of it.
+  // Gated to the same !fastLane flag passed into sessionProviderPrompt above,
+  // so a fast-lane turn (never asked to produce a block) skips the parse too.
+  let chatActions: ManagerAction[] | undefined;
+  if (!fastLane) {
+    const extracted = extractManagerActions(providerResult.output);
+    if (extracted.reply !== providerResult.output) providerResult = { ...providerResult, output: extracted.reply };
+    chatActions = extracted.actions;
+    if (chatActions?.length) {
+      await appendAudit("info", "manager.action", "Chat turn proposed actions.", {
+        kinds: chatActions.map((action) => action.kind)
+      });
+    }
+  }
   if (showRouteCeremony) emitTimeline(stream, timelineText("The selected model responded. I’m recording the trace and any follow-up project tools."));
   steps[2] = completeStep(steps[2], providerResult.auditId);
 
@@ -6202,7 +6241,8 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       ...(projectResult && !projectResult.verified ? [projectResult.verificationDetail] : []),
       ...(noProjectFilesWritten ? ["The model did not return complete files, so no project files were written."] : [])
     ],
-    ...(chatDesignSeed ? { designSeed: { id: chatDesignSeed.id, name: chatDesignSeed.name } } : {})
+    ...(chatDesignSeed ? { designSeed: { id: chatDesignSeed.id, name: chatDesignSeed.name } } : {}),
+    ...(chatActions?.length ? { actions: chatActions } : {})
   };
   if (permissionMode === "plan" && projectToolsIndex >= 0) {
     run.assistantText = `${run.assistantText}\n\nPlan mode — nothing was written. Switch to Auto and rerun to build it.`;

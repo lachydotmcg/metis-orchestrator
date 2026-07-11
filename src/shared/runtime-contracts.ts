@@ -696,6 +696,11 @@ export interface SessionRun {
   outputUrl?: string;
   warnings: string[];
   designSeed?: { id: string; name: string };
+  /** Actions the assistant proposed during a general-chat turn (parsed from a
+   *  trailing ```metis-actions block via extractManagerActions, same as the
+   *  Manager tab) for the owner to approve in the UI. Undefined when the
+   *  reply proposed nothing, and never populated on build-pipeline runs. */
+  actions?: ManagerAction[];
 }
 
 export interface OrchestrationStage {
