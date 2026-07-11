@@ -7,6 +7,47 @@
 
 ---
 
+## ★ LACHY BATCH 2 (2026-07-11, live feedback mid-drill) — DO THESE NEXT, prioritized
+
+Substrate already found (don't rebuild): `PermissionRequestCard` (App.tsx ~4563) already
+renders Allow-once / Always-allow / Deny off `InRunPermissionRequest` + `PermissionVerdict`
+(backend `promptForPermission` main.ts ~1502, ipc `metis-permissions:respond`).
+`UserQuestionCard` (App.tsx ~4610) already renders ONE question with option chips + a custom
+free-text field, off `UserQuestionRequest` + the `<ask_user>` parser (main.ts ~1454/1542/6285).
+ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the CLOSED
+`manager-fab` (~11464) is a plain button and does NOT drag.
+
+- [ ] **B2.5 — Manager FAB draggable (Lachy: I STILL want to move the little widget).**
+  RENDERER. The little closed-state launcher (`manager-fab`, App.tsx ~11464) is a fixed
+  button with only onClick. Make it draggable: reuse `managerWidgetPos`/clamp, add a
+  click-vs-drag threshold (a small movement = reposition, a clean click = open). ALSO
+  re-audit the minimized-pill drag: check `-webkit-app-region` on the widget/FAB and their
+  ancestors in styles.css — any OS-drag strip must not swallow pointer events on the
+  draggable surfaces (this is the Electron bug L1 only half-fixed). NEEDS LIVE TEST in the
+  Electron app (app-region is a no-op in the Vite preview).
+- [ ] **B2.3 — AI popup questions (up to 4) rising from the chatbox, with custom answers.**
+  (a) BACKEND (main.ts + contracts, ADDITIVE/optional so the current single-question
+  UserQuestionCard keeps compiling): extend so `<ask_user>` may carry MULTIPLE questions
+  (cap 4), each with options + an allowCustom flag; add optional `questions?: {text,
+  options, allowCustom?}[]` to UserQuestionRequest (keep `text`/`options` for the 1-question
+  case). (b) RENDERER: a popup that rises from the chatbox showing up to 4 questions, option
+  chips per question + a custom free-text answer each; collects all answers then resolves.
+- [ ] **B2.4 — "Would you like to allow this action" as a real on-screen popup.** RENDERER.
+  The PermissionRequestCard (Allow once / Always allow / Deny) already exists but renders
+  INLINE in the chat. Elevate it to a prominent floating popup overlay (rising near the
+  chatbox / centered), same three verdicts wired to the existing `metis-permissions:respond`.
+  Keep the inline resolved-record behavior. Do B2.3 and B2.4 popups with a shared surface
+  grammar so they feel like one system.
+- [ ] **B2.2 — Benchmark Recommended-setup Model text is cut off.** RENDERER/CSS. In the
+  Benchmark tab's Recommended setup card, the Model value text is clipped. Find the card and
+  fix the overflow (wrap / min-width:0 / no fixed-width truncation) so the full model name shows.
+- [ ] **B2.1 — Move vision model selection to the Gallery (Lachy: tbh).** RENDERER. The vision
+  model picker currently lives in Settings; move (or also surface) it in the Gallery where
+  vision/images are actually used. Confirm the picker stays honest (Auto-detect + local
+  Ollama vision models only, as restricted earlier). Lower priority ("tbh") — do after the above.
+
+---
+
 ## PHASE 0 — Bugs and quick wins (do these FIRST, they're what Lachy touches daily)
 
 - [x] **L4 — Chat latency + snapshot-dump replies.** Typing "Test" in a new conversation
