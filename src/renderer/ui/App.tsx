@@ -102,6 +102,7 @@ import {
 import type {
   AuditEvent,
   CatalogModel,
+  ConversationExportResult,
   ConversationRecord,
   ConversationTurnRecord,
   GraphPipelineConfig,
@@ -4822,23 +4823,43 @@ function RunProposedActions({ run, onNavigate }: { run: SessionRun; onNavigate: 
 }
 
 /** Compact roster row for a completed fan-out build (docs/DRILL_PLAN.md Phase
- *  5, sub-round 5c): one chip per sub-agent, reusing the slim-op-line visual
- *  language so it sits quietly above the run's normal output. Undefined
- *  `run.fanout` (every ordinary single-pipeline run) means the caller never
- *  mounts this at all. */
+ *  5, sub-round 5c; collapsed-by-default summary added in §20): sits quietly
+ *  above the run's normal output, collapsed under a "Ran N agents" header
+ *  using the same slim-op-group caret grammar as GroupedOperationSummary, and
+ *  expands into the per-agent chip list. Undefined `run.fanout` (every
+ *  ordinary single-pipeline run) means the caller never mounts this at all —
+ *  this is the only place a fan-out roster renders, so there is no separate
+ *  "Ran N agents" chip duplicating it elsewhere. */
 function FanoutRoster({ agents }: { agents: NonNullable<SessionRun["fanout"]>["agents"] }): JSX.Element {
-  return (
-    <div className="fanout-roster" aria-label="Fan-out agents">
-      <div className="fanout-roster-head">
-        <Waypoints size={13} />
-        <span>Split across {agents.length} agent{agents.length === 1 ? "" : "s"}</span>
+  const multi = agents.length > 1;
+  if (!multi) {
+    return (
+      <div className="fanout-roster" aria-label="Fan-out agents">
+        <div className="fanout-roster-head">
+          <Waypoints size={13} />
+          <span>Split across {agents.length} agent{agents.length === 1 ? "" : "s"}</span>
+        </div>
+        <div className="fanout-roster-list">
+          {agents.map((agent) => (
+            <FanoutAgentChip key={agent.name} agent={agent} />
+          ))}
+        </div>
       </div>
-      <div className="fanout-roster-list">
+    );
+  }
+  return (
+    <details className="slim-op-line-details slim-op-group fanout-roster-details">
+      <summary className="slim-op-line fanout-roster-head">
+        <ChevronRight className="stage-caret" size={12} />
+        <Waypoints size={13} />
+        <span>Ran {agents.length} agents</span>
+      </summary>
+      <div className="fanout-roster-list operation-detail-body">
         {agents.map((agent) => (
           <FanoutAgentChip key={agent.name} agent={agent} />
         ))}
       </div>
-    </div>
+    </details>
   );
 }
 
@@ -11745,6 +11766,8 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
   const [selfVerify, setSelfVerify] = useAppStoreState<"off" | "local" | "all">("selfVerify", "local");
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportResult, setExportResult] = useState<ConversationExportResult | null>(null);
   const [policyStatus, setPolicyStatus] = useState<PolicyStatus>(FALLBACK_POLICY_STATUS);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
@@ -11901,6 +11924,18 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
     setMcpProbes((current) => ({ ...current, [id]: { status: "loading" } }));
     const result = await window.metisMcp.probe(id);
     setMcpProbes((current) => ({ ...current, [id]: { status: "done", result } }));
+  }
+
+  async function exportAllConversations(): Promise<void> {
+    if (!window.metisConversations) return;
+    setExportBusy(true);
+    setExportResult(null);
+    try {
+      const result = await window.metisConversations.exportMarkdown({});
+      setExportResult(result);
+    } finally {
+      setExportBusy(false);
+    }
   }
 
   async function runPolicyTest(): Promise<void> {
@@ -12374,17 +12409,30 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
               <h2>Export &amp; wipe</h2>
             </span>
           </header>
-          <p>No bridge exposes a bulk conversation export or full-data wipe yet — only per-conversation delete/archive (from each conversation's own menu). These stay disabled rather than fake a working action.</p>
+          <p>Export writes every conversation to a Markdown file you choose. There's still no bridge for a full-data wipe — only per-conversation delete/archive (from each conversation's own menu) — so that stays disabled rather than fake a working action.</p>
           <div className="settings-actions">
-            <button type="button" disabled title="No export bridge available yet">
-              <Download size={15} />
-              Export all data
+            <button
+              type="button"
+              disabled={!window.metisConversations || exportBusy}
+              title={!window.metisConversations ? "Requires the desktop app — unavailable in this preview" : "Export every conversation to Markdown"}
+              onClick={() => void exportAllConversations()}
+            >
+              {exportBusy ? <Loader2 size={15} className="spin" /> : <Download size={15} />}
+              Export all conversations
             </button>
             <button type="button" disabled title="No wipe bridge available yet">
               <Trash2 size={15} />
               Wipe local data
             </button>
           </div>
+          {!window.metisConversations ? <small className="mcp-probe-note">Needs the desktop app</small> : null}
+          {exportResult ? (
+            exportResult.ok ? (
+              <p className="settings-hint">Exported to {exportResult.path}</p>
+            ) : exportResult.cancelled ? null : (
+              <p className="settings-warning">{exportResult.error ?? "Export failed"}</p>
+            )
+          ) : null}
         </article>
       </section>
       ) : null}

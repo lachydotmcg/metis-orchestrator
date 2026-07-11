@@ -3017,6 +3017,14 @@ p {
   margin-bottom: 4px;
 }
 
+.fanout-roster-details {
+  margin-bottom: 4px;
+}
+
+.fanout-roster-details .fanout-roster-list {
+  margin-top: 6px;
+}
+
 .fanout-roster-head {
   display: flex;
   gap: 6px;
