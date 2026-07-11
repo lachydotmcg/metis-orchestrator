@@ -4836,7 +4836,18 @@ async function expandChainByRoutes(chain: StageModelRef[], primaryPreference?: P
  *  §26) — every model call becomes a visible card in the renderer's side-chat
  *  stack. Callers that don't have a stage identity handy (or no stream) can
  *  simply omit this and no events emit; it never affects control flow. */
-type StageCallContext = { stream?: SessionStreamController; stageId: string; stageLabel: string; scope?: string };
+type StageCallContext = {
+  stream?: SessionStreamController;
+  stageId: string;
+  stageLabel: string;
+  scope?: string;
+  /** Named sub-agent this call belongs to (docs/DRILL_PLAN.md Phase 5,
+   *  sub-round 5a — the fan-out engine). Threaded straight into every
+   *  stage_call event's `agentName` field below; omitted (undefined) for
+   *  every ordinary single-pipeline call, unchanged from before this field
+   *  existed. */
+  agentName?: string;
+};
 
 async function callStageWithFallback(
   rawChain: StageModelRef[],
@@ -4886,7 +4897,8 @@ async function callStageWithFallback(
           model: ref.model,
           promptPreview: prompt.slice(0, 200),
           prompt: prompt.slice(0, 2000),
-          status: "start"
+          status: "start",
+          agentName: callContext?.agentName
         }
       });
     }
@@ -4908,7 +4920,8 @@ async function callStageWithFallback(
               model: ref.model,
               promptPreview: prompt.slice(0, 200),
               status: "failed",
-              detail: note
+              detail: note,
+              agentName: callContext?.agentName
             }
           });
         }
@@ -4926,7 +4939,8 @@ async function callStageWithFallback(
             model: ref.model,
             promptPreview: prompt.slice(0, 200),
             status: "complete",
-            output: trimmedOutput.slice(0, 4000)
+            output: trimmedOutput.slice(0, 4000),
+            agentName: callContext?.agentName
           }
         });
       }
@@ -4951,7 +4965,8 @@ async function callStageWithFallback(
               model: ref.model,
               promptPreview: prompt.slice(0, 200),
               status: "failed",
-              detail: note
+              detail: note,
+              agentName: callContext?.agentName
             }
           });
         }
@@ -4970,7 +4985,8 @@ async function callStageWithFallback(
             model: ref.model,
             promptPreview: prompt.slice(0, 200),
             status: "failed",
-            detail: note
+            detail: note,
+            agentName: callContext?.agentName
           }
         });
       }
@@ -4980,6 +4996,243 @@ async function callStageWithFallback(
     notes.push("Every model in this stage's chain is currently cooling down from a rate limit.");
   }
   return { ref: chain[chain.length - 1], output: "", notes: [...notes, "All models for this stage failed."], failed: true };
+}
+
+// --- N-agent fan-out build (docs/DRILL_PLAN.md Phase 5, sub-round 5a) ---
+// Metis's answer to Traycer: a build request fans out to a handful of named
+// sub-agents, each claiming a distinct file TERRITORY, coordinated by an
+// in-memory file-claim ledger so two agents can never write the same path.
+// v1 runs sub-agents SEQUENTIALLY under the hood (one staged call each) while
+// tagging every stage_call with a distinct agentName, so the renderer can
+// still present them as separate side-chat cards once 5c wires that up. This
+// is entirely OFF by default (see shouldAttemptFanout's `fanoutEnabled`
+// store-key read) — until Lachy opts in, every build behaves exactly as it
+// did before this section existed. Any failure anywhere in this path falls
+// back to the untouched single-pipeline runOrchestratedStages; a fan-out
+// attempt can never make a build worse.
+
+/** Mirrors MANAGED_AGENT_IDENTITIES' names from src/renderer/ui/App.tsx
+ *  (renderer-side; deliberately NOT imported here — main.ts stays free of a
+ *  renderer dependency). Sub-agents are assigned these in call order so the
+ *  renderer's existing name -> hue lookup already knows how to color them
+ *  once the 5c visualisation round lands. */
+const FANOUT_AGENT_NAMES = ["Nyx", "Talos", "Echo", "Atlas", "Juno"] as const;
+
+type FanoutTask = { name: string; task: string; territory: string[] };
+
+/** Gate for fan-out mode (docs/DRILL_PLAN.md Phase 5, sub-round 5a): reads
+ *  the opt-in `fanoutEnabled` store key (default FALSE — a stable default,
+ *  never true until Lachy flips it) and never engages for a single-file
+ *  request, which has nothing to fan out. When this returns false the caller
+ *  runs the exact same runOrchestratedStages path that existed before fan-out
+ *  was built, byte for byte. */
+async function shouldAttemptFanout(singleFile: boolean): Promise<boolean> {
+  if (singleFile) return false;
+  return readStoreValue<boolean>("fanoutEnabled", false);
+}
+
+/** ONE cheap local planning call that tries to decompose a build prompt into
+ *  2-4 sub-tasks, each owning a distinct file TERRITORY (concrete paths or
+ *  globs). This is the "spec-first" step: every sub-agent's task doc line
+ *  comes straight from this plan. Returns null — never throws — whenever the
+ *  call fails, the reply can't be parsed as the expected JSON shape, or fewer
+ *  than 2 usable tasks come back (a 1-task "decomposition" isn't a fan-out;
+ *  the caller falls back to the normal single pipeline in that case, exactly
+ *  as the spec requires: fan-out must never make a build worse). */
+async function planFanoutTasks(prompt: string, stream: SessionStreamController | undefined, scope: string): Promise<FanoutTask[] | null> {
+  const planPrompt = `You are the FAN-OUT PLANNER for a multi-agent build pipeline. Decompose this build request into 2 to 4 independent SUB-TASKS, each owned by one sub-agent and each claiming a DISTINCT set of file paths — no two sub-tasks should claim the same file.
+
+Build request:
+${prompt}
+
+Respond with ONLY a JSON array, no prose, no code fences, in this exact shape:
+[{"task":"one-line description of this sub-agent's job","files":["path/one.ext","path/two.ext"]}]
+
+Rules: 2 to 4 entries. Each entry needs at least one file path. Split along natural boundaries (e.g. markup/styles vs backend/API vs config/docs vs a distinct feature area). If this request only really needs one small file, return a single-entry array — the caller will fall back to a normal single-pipeline build in that case.`;
+  const planCallContext: StageCallContext = { stream, stageId: "fanout-plan", stageLabel: "Fan-out planner", scope };
+  try {
+    const attempt = await callStageWithFallback([localStageRef()], planPrompt, undefined, planCallContext);
+    if (attempt.failed || !attempt.output.trim()) return null;
+    const cleanOutput = stripThinkBlocks(attempt.output).trim();
+    const jsonMatch = cleanOutput.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return null;
+    const parsed: unknown = JSON.parse(jsonMatch[0]);
+    if (!Array.isArray(parsed)) return null;
+    const tasks: FanoutTask[] = parsed
+      .filter(
+        (entry): entry is { task: string; files: unknown[] } =>
+          !!entry && typeof entry === "object" && typeof (entry as { task?: unknown }).task === "string" && Array.isArray((entry as { files?: unknown }).files) && (entry as { files: unknown[] }).files.length > 0
+      )
+      .slice(0, FANOUT_AGENT_NAMES.length)
+      .map((entry, index) => ({
+        name: FANOUT_AGENT_NAMES[index],
+        task: String(entry.task).slice(0, 300),
+        territory: entry.files.filter((file): file is string => typeof file === "string" && file.trim().length > 0).map((file) => file.trim())
+      }))
+      .filter((entry) => entry.territory.length > 0);
+    if (tasks.length < 2) return null;
+    return tasks;
+  } catch {
+    return null;
+  }
+}
+
+/** The file-claim LEDGER (docs/DRILL_PLAN.md Phase 5, sub-round 5a): a plain
+ *  in-memory Map<path, agentName>, local to one fan-out run — nothing module-
+ *  level, so there is nothing to ever leave "dirty" between runs. Sub-agents
+ *  run in call order and each claims the paths it actually generated (not
+ *  just its planned territory, since a model can drift outside its brief);
+ *  the FIRST agent to reach a given path wins the claim. A later agent
+ *  reaching an already-claimed path is rejected here and the caller must
+ *  drop that file rather than overwrite it — this is what guarantees two
+ *  sub-agents can never both write the same file. */
+function claimFilePath(ledger: Map<string, string>, path: string, agentName: string): boolean {
+  const existing = ledger.get(path);
+  if (existing && existing !== agentName) return false;
+  ledger.set(path, agentName);
+  return true;
+}
+
+/** Runs the N-agent fan-out build (docs/DRILL_PLAN.md Phase 5, sub-round 5a —
+ *  the engine; the visualisation is a later sub-round). Mirrors
+ *  runOrchestratedStages' inputs/outputs closely enough that runSession can
+ *  swap between the two with only a few extra lines: on success returns the
+ *  merged, ledger-clean file list alongside a stages[] (one entry per sub-
+ *  agent, for the existing timeline/step/audit rendering) and fanout roster
+ *  metadata for SessionRun. Returns null on ANY failure or when planning
+ *  didn't yield a usable multi-task split — callers must fall back to
+ *  runOrchestratedStages in that case, never surface a fan-out error to the
+ *  user as if it were a build failure. */
+async function runFanoutPipeline(
+  prompt: string,
+  stream: SessionStreamController | undefined,
+  override: SessionModelOverride | undefined,
+  projectPath: string | undefined,
+  metisFile: { content: string; chars: number } | null | undefined,
+  conversationContext: string | null | undefined,
+  images: ProviderImageInput[] | undefined
+): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed; fanout: NonNullable<SessionRun["fanout"]>; files: GeneratedFile[] } | null> {
+  const scope = directiveScopeKey(projectPath);
+  try {
+    throwIfCancelled(projectPath);
+    emitTimeline(stream, timelineText("Fan-out mode: decomposing this build across a small agent roster."));
+    const tasks = await planFanoutTasks(prompt, stream, scope);
+    if (!tasks) return null;
+
+    const metisBlock = metisFilePromptBlock(metisFile ?? null);
+    const seed = pickDesignSeed(prompt, 0);
+    const explicitStyle = promptHasExplicitStyle(prompt);
+    const planSummary = tasks.map((task) => `- ${task.name}: ${task.task} (owns: ${task.territory.join(", ")})`).join("\n");
+    emitTimeline(stream, timelineText(`Plan: ${tasks.length} agents — ${tasks.map((task) => task.name).join(", ")}.`));
+
+    // Reuse the SAME chain resolution the single pipeline uses (graph pipeline
+    // if configured, else the hardcoded default) — sub-agents share the
+    // front-end stage's chain/gateway preference rather than inventing a new
+    // model-selection policy, so fan-out respects Lachy's existing routing.
+    const { stages: baseStages } = await resolveAgenticStages(prompt, override);
+    const sharedStage = baseStages.find((entry) => entry.templateRole === "frontend") ?? baseStages[0];
+    const sharedChain = sharedStage?.chain ?? [localStageRef()];
+    const gatewayPreference = sharedStage?.gatewayPreference;
+
+    const ledger = new Map<string, string>();
+    const resultStages: OrchestrationStage[] = [];
+    const claimedFiles: GeneratedFile[] = [];
+    const agentSummaries: { name: string; task: string; claimedPaths: string[] }[] = [];
+
+    for (let index = 0; index < tasks.length; index++) {
+      throwIfCancelled(projectPath);
+      const subtask = tasks[index];
+      emitTimeline(stream, timelineText(`${subtask.name} is starting: ${subtask.task}`));
+      let subPrompt = `You are ${subtask.name}, one sub-agent in a multi-agent build team working on the SAME project. A fan-out planner split this build into ${tasks.length} parallel workstreams; you own exactly one of them.
+
+Overall build request:
+${prompt}
+
+Team plan (context only — the OTHER agents own the other territories; do not duplicate their files):
+${planSummary}
+
+YOUR task (this is your spec — write only to your territory): ${subtask.task}
+YOUR file territory (produce files ONLY at these paths, nothing outside it): ${subtask.territory.join(", ")}
+
+Return COMPLETE files, not snippets, only for paths inside your territory. Before each fenced code block, put the file path in backticks on its own line. One short sentence of intro, then the files.`;
+      if (metisBlock) subPrompt = `${metisBlock}\n${subPrompt}`;
+      if (conversationContext) subPrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${subPrompt}`;
+      subPrompt += `\n\n${designSeedPromptLine(seed, { explicitStyle, replacesPrevious: false })}`;
+
+      // Reference-image attachments (when present) only make sense for
+      // whichever agent is doing the visual/front-end territory; handing them
+      // to every agent would blow the shared MAX_ATTACHMENT_IMAGES budget for
+      // no benefit, so only the FIRST agent gets them, same convention as the
+      // single pipeline reserving images for the frontend stage.
+      const subImages = index === 0 && images && images.length > 0 ? images : undefined;
+      const callContext: StageCallContext = {
+        stream,
+        stageId: `fanout-${subtask.name.toLowerCase()}`,
+        stageLabel: subtask.task.slice(0, 60) || subtask.name,
+        scope,
+        agentName: subtask.name
+      };
+      const attempt = await callStageWithFallback(sharedChain, subPrompt, gatewayPreference, callContext, subImages);
+
+      const cleanOutput = stripAskUserTags(stripThinkBlocks(attempt.output));
+      const stage: OrchestrationStage = {
+        id: callContext.stageId,
+        label: `${subtask.name} — ${subtask.task.slice(0, 40)}`,
+        provider: attempt.ref.provider,
+        model: attempt.ref.model,
+        output: cleanOutput,
+        fallbackNotes: attempt.notes,
+        failed: attempt.failed
+      };
+      resultStages.push(stage);
+      emitStream(stream, { kind: "stage", stage });
+
+      const claimedPaths: string[] = [];
+      if (!attempt.failed && cleanOutput.trim()) {
+        for (const file of extractGeneratedFilesFromText(cleanOutput)) {
+          // The claim check (docs/DRILL_PLAN.md Phase 5, sub-round 5a): the
+          // first agent to reach a path wins it; a later agent producing the
+          // SAME path is rejected and its file is dropped, never written —
+          // this is the guarantee that stops two agents double-writing a file.
+          if (claimFilePath(ledger, file.path, subtask.name)) {
+            claimedFiles.push(file);
+            claimedPaths.push(file.path);
+          } else {
+            emitTimeline(
+              stream,
+              timelineText(`${subtask.name} also produced ${file.path}, but ${ledger.get(file.path)} already claimed it — dropped ${subtask.name}'s copy to avoid a double-write.`)
+            );
+          }
+        }
+      }
+      agentSummaries.push({ name: subtask.name, task: subtask.task, claimedPaths });
+    }
+
+    // Never leave the ledger dirty: it's local to this call and about to go
+    // out of scope anyway, but clear it explicitly so intent is unambiguous.
+    ledger.clear();
+
+    if (claimedFiles.length === 0) return null; // nothing usable — fall back cleanly to the single pipeline
+
+    emitTimeline(
+      stream,
+      timelineText(
+        `Fan-out merge: ${agentSummaries.map((agent) => `${agent.name} (${agent.claimedPaths.length})`).join(", ")} — ${claimedFiles.length} file${claimedFiles.length === 1 ? "" : "s"} total.`
+      )
+    );
+
+    return {
+      stages: resultStages,
+      designSeed: seed,
+      fanout: { agents: agentSummaries },
+      files: claimedFiles
+    };
+  } catch (error) {
+    // A Stop-button abort must propagate exactly like it does everywhere else
+    // in the build path — never swallowed into "fall back silently".
+    if (isCancellationError(error)) throw error;
+    return null;
+  }
 }
 
 // --- "Is this done?" critic loop (docs/FABLE_PLANS.md §22) ---
@@ -6118,6 +6371,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     }
     let stages: OrchestrationStage[];
     let designSeed: Awaited<ReturnType<typeof runOrchestratedStages>>["designSeed"] | undefined;
+    // N-agent fan-out (docs/DRILL_PLAN.md Phase 5, sub-round 5a): fanoutMeta
+    // attaches to SessionRun for the renderer; fanoutFiles, when set, is the
+    // already-ledger-merged file list and REPLACES the normal
+    // extractProjectFiles(stages) call below (that helper's own last-write-
+    // wins dedupe doesn't know about the fan-out ledger's claim rules).
+    let fanoutMeta: SessionRun["fanout"];
+    let fanoutFiles: GeneratedFile[] | null = null;
     const conversationContext = await recentConversationContext(input.conversationId);
     if (editMode) {
       emitTimeline(
@@ -6188,7 +6448,20 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         failed: editStage.failed
       });
     } else {
-      ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode, conversationContext, images.length > 0 ? images : undefined));
+      // Plan mode never runs fan-out — same as the single pipeline, which
+      // stops after its own "plan" stage in permissionMode "plan" (see
+      // runOrchestratedStages) rather than spending calls on a full build.
+      const fanoutResult = permissionMode !== "plan" && (await shouldAttemptFanout(singleFile))
+        ? await runFanoutPipeline(prompt, stream, input.modelOverride, input.projectPath, metisFile, conversationContext, images.length > 0 ? images : undefined)
+        : null;
+      if (fanoutResult) {
+        stages = fanoutResult.stages;
+        designSeed = fanoutResult.designSeed;
+        fanoutMeta = fanoutResult.fanout;
+        fanoutFiles = fanoutResult.files;
+      } else {
+        ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode, conversationContext, images.length > 0 ? images : undefined));
+      }
     }
     let files: GeneratedFile[] = [];
     let projectResult: ProjectToolResult | undefined;
@@ -6197,7 +6470,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       // Plan mode: no extraction, no writes, no commands, no repair/recovery —
       // the stage loop already stopped after "plan" (docs/FABLE_PLANS.md §24).
     } else {
-    files = extractProjectFiles(stages);
+    // Fan-out already merged its sub-agents' files through the claim ledger
+    // (docs/DRILL_PLAN.md Phase 5, sub-round 5a) — extractProjectFiles' own
+    // last-write-wins dedupe would ignore those claim decisions, so use the
+    // ledger-clean list directly whenever fan-out ran.
+    files = fanoutFiles ?? extractProjectFiles(stages);
     // Never give up on 0 extracted files without a fight — ask the build model
     // again, explicitly, before conceding nothing was written.
     if (files.length === 0) {
@@ -6311,7 +6588,8 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         ...(input.projectPath && !writable ? ["Project folder permission was missing or revoked, so files were written to the app-managed workspace instead."] : []),
         ...(projectResult && !projectResult.verified ? [projectResult.verificationDetail] : [])
       ],
-      designSeed: designSeed ? { id: designSeed.id, name: designSeed.name } : undefined
+      designSeed: designSeed ? { id: designSeed.id, name: designSeed.name } : undefined,
+      fanout: fanoutMeta
     };
     if (!projectResult) {
       run.assistantText = "I ran this through the build pipeline, but no complete project files were extracted. I left the folder unchanged.";

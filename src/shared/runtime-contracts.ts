@@ -708,8 +708,24 @@ export type SessionStreamEvent =
         status: "start" | "complete" | "failed";
         output?: string;
         detail?: string;
+        /** Which named sub-agent produced this call, when the run is in
+         *  N-agent fan-out mode (docs/DRILL_PLAN.md Phase 5, sub-round 5a).
+         *  Undefined for every ordinary single-pipeline stage call — the
+         *  renderer treats a missing agentName as "no side-chat grouping",
+         *  same as before this field existed. */
+        agentName?: string;
       };
     };
+
+/** A single file-territory claim recorded by the fan-out engine's in-memory
+ *  ledger (docs/DRILL_PLAN.md Phase 5, sub-round 5a): which sub-agent ended up
+ *  owning a given generated file path once claims were resolved. Not used to
+ *  persist the ledger itself (that lives only in main.ts for the run's
+ *  lifetime) — this is the shape surfaced to the renderer afterward. */
+export interface FileClaim {
+  path: string;
+  agentName: string;
+}
 
 export interface SessionRun {
   id: string;
@@ -741,6 +757,17 @@ export interface SessionRun {
    *  Manager tab) for the owner to approve in the UI. Undefined when the
    *  reply proposed nothing, and never populated on build-pipeline runs. */
   actions?: ManagerAction[];
+  /** N-agent fan-out metadata (docs/DRILL_PLAN.md Phase 5, sub-round 5a):
+   *  populated only when this build ran through the multi-agent fan-out
+   *  engine (opt-in via the `fanoutEnabled` store key, off by default)
+   *  instead of the single build pipeline. Undefined on every other run,
+   *  including ordinary single-pipeline builds — those are byte-identical to
+   *  before this field existed. `claimedPaths` per agent reflects only the
+   *  paths that WON their file-claim ledger check; a path another agent
+   *  claimed first is silently absent here (and logged in the run timeline). */
+  fanout?: {
+    agents: { name: string; task: string; claimedPaths: string[] }[];
+  };
 }
 
 export interface OrchestrationStage {
