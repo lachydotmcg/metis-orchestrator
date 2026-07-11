@@ -130,7 +130,7 @@
   - Implementation sketch: teach metis-manager:chat a lightweight tool-call protocol
     (model returns a JSON action block; backend validates + surfaces an approval chip in
     the chat; on approve, execute and report). NEVER auto-execute without approval.
-- [ ] **L6 — More agentic tasks INSIDE conversations.** Extend the chat path with real
+- [x] **L6 — More agentic tasks INSIDE conversations.** Extend the chat path with real
   in-conversation capabilities (each behind the permission model): read/list project
   files on request, write a file, run the verify step, create a todo, create a routine,
   and web-fetch a URL for context. Surface each as slim operation chips (the existing

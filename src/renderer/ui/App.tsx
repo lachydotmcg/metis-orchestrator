@@ -1647,6 +1647,7 @@ export function App(): JSX.Element {
           openConversation={openConversation}
           onConversationsChanged={refreshConversations}
           onNewSession={startNewSession}
+          onNavigate={setActiveNav}
           storedConversations={storedConversations}
           pendingByConversation={pendingByConversation}
           setPendingByConversation={setPendingByConversation}
@@ -2642,6 +2643,7 @@ function suggestNextStep(lastRun: SessionRun | undefined, lastUserMessage: strin
 function NewSessionWorkspace({
   onConversationsChanged,
   onNewSession,
+  onNavigate,
   openConversation,
   storedConversations = [],
   pendingByConversation,
@@ -2652,6 +2654,9 @@ function NewSessionWorkspace({
 }: {
   onConversationsChanged?: () => void;
   onNewSession?: () => void;
+  /** Lets an approved open_view action on a run's proposed-actions card (see
+   *  RunProposedActions) switch the app's active nav, same as the Manager tab. */
+  onNavigate?: (nav: NavKey) => void;
   openConversation?: ConversationRecord | null;
   storedConversations?: ConversationRecord[];
   /** Parallel sessions phase A — lifted to App() (see comment there) so runs
@@ -3596,12 +3601,12 @@ function NewSessionWorkspace({
                 </div>
               ) : (
                 <div className="message-row assistant-message" key={`history-${index}`}>
-                  {turn.run ? <CompletedRun run={turn.run} /> : <Markdown>{turn.content}</Markdown>}
+                  {turn.run ? <CompletedRun run={turn.run} onNavigate={onNavigate} /> : <Markdown>{turn.content}</Markdown>}
                 </div>
               )
             )}
             {conversation.map((turn) => (
-              <ConversationTurnCard key={turn.id} anchorId={`sec-c-${turn.id}`} turn={turn} />
+              <ConversationTurnCard key={turn.id} anchorId={`sec-c-${turn.id}`} turn={turn} onNavigate={onNavigate} />
             ))}
           </section>
         ) : null}
@@ -4332,7 +4337,15 @@ function TurnCopyButton({ run }: { run: SessionRun }): JSX.Element | null {
   );
 }
 
-const ConversationTurnCard = memo(function ConversationTurnCard({ anchorId, turn }: { anchorId?: string; turn: ConversationTurn }): JSX.Element {
+const ConversationTurnCard = memo(function ConversationTurnCard({
+  anchorId,
+  turn,
+  onNavigate
+}: {
+  anchorId?: string;
+  turn: ConversationTurn;
+  onNavigate?: (nav: NavKey) => void;
+}): JSX.Element {
   if (turn.directive) {
     return (
       <article className="conversation-turn directive" id={anchorId}>
@@ -4374,7 +4387,7 @@ const ConversationTurnCard = memo(function ConversationTurnCard({ anchorId, turn
       <div className="message-row assistant-message">
         {turn.run ? (
           <>
-            <CompletedRun run={turn.run} />
+            <CompletedRun run={turn.run} onNavigate={onNavigate} />
             <TurnCopyButton run={turn.run} />
           </>
         ) : (
@@ -4711,12 +4724,36 @@ function AssistantResponse({ children, source }: { children: string; source: Ret
   );
 }
 
-const CompletedRun = memo(function CompletedRun({ run }: { run: SessionRun }): JSX.Element {
+/** Approve/dismiss cards for actions a completed run proposed (docs/DRILL_PLAN.md
+ *  Phase 3 L6 part 2 — the same `ManagerAction[]` protocol the Manager tab uses,
+ *  now attached to `SessionRun.actions` on a general-chat turn). Reuses
+ *  `ManagerActionCard` verbatim so approval, dismissal, and the execution path
+ *  via `metisManager.runAction` are identical to the Manager tab — nothing here
+ *  re-implements that logic. Renders once, directly under the run's assistant
+ *  text, regardless of which CompletedRun branch produced that text. */
+function RunProposedActions({ run, onNavigate }: { run: SessionRun; onNavigate: (nav: NavKey) => void }): JSX.Element | null {
+  if (!run.actions?.length) return null;
+  return (
+    <div className="manager-action-list">
+      {run.actions.map((action, actionIndex) => (
+        <ManagerActionCard key={actionIndex} action={action} onNavigate={onNavigate} />
+      ))}
+    </div>
+  );
+}
+
+const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: SessionRun; onNavigate?: (nav: NavKey) => void }): JSX.Element {
   const warnings = visibleRunWarnings(run.warnings);
   const showRouteTrace = shouldShowRouteTrace(run, warnings);
+  const navigate = onNavigate ?? (() => {});
 
   if (run.timeline?.length) {
-    return <RunTimeline run={run} events={run.timeline} warnings={warnings} />;
+    return (
+      <>
+        <RunTimeline run={run} events={run.timeline} warnings={warnings} />
+        <RunProposedActions run={run} onNavigate={navigate} />
+      </>
+    );
   }
 
   if (run.stages && run.stages.length > 0) {
@@ -4737,6 +4774,7 @@ const CompletedRun = memo(function CompletedRun({ run }: { run: SessionRun }): J
           </div>
         </details>
         {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
+        <RunProposedActions run={run} onNavigate={navigate} />
       </>
     );
   }
@@ -4762,6 +4800,7 @@ const CompletedRun = memo(function CompletedRun({ run }: { run: SessionRun }): J
       ) : null}
       {showRouteTrace && followUp ? <AssistantResponse source={source}>{followUp}</AssistantResponse> : null}
       {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
+      <RunProposedActions run={run} onNavigate={navigate} />
     </>
   );
 });
