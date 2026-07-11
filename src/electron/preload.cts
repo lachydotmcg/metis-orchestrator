@@ -7,6 +7,7 @@ import type {
   ManagerChatResult,
   MetisFileReadResult,
   MetisFileWriteResult,
+  McpProbeResult,
   OllamaPullProgress,
   PermissionRequest,
   PermissionVerdict,
@@ -122,6 +123,10 @@ contextBridge.exposeInMainWorld("metisRegistry", {
   listInstalled: () => ipcRenderer.invoke("metis-registry:list-installed"),
   install: (id: string) => ipcRenderer.invoke("metis-registry:install", id),
   uninstall: (id: string) => ipcRenderer.invoke("metis-registry:uninstall", id)
+});
+
+contextBridge.exposeInMainWorld("metisMcp", {
+  probe: (id: string) => ipcRenderer.invoke("metis-mcp:probe", id) as Promise<McpProbeResult>
 });
 
 contextBridge.exposeInMainWorld("metisCatalog", {

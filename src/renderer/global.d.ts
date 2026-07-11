@@ -10,6 +10,7 @@ import type {
   ManagerChatResult,
   MetisFileReadResult,
   MetisFileWriteResult,
+  McpProbeResult,
   ModelCatalogState,
   OllamaListResult,
   OllamaPullProgress,
@@ -121,6 +122,9 @@ declare global {
       listInstalled: () => Promise<RegistryPackage[]>;
       install: (id: string) => Promise<RegistryPackage[]>;
       uninstall: (id: string) => Promise<RegistryPackage[]>;
+    };
+    metisMcp?: {
+      probe: (id: string) => Promise<McpProbeResult>;
     };
     metisCatalog?: {
       models: () => Promise<ModelCatalogState>;

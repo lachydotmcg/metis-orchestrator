@@ -256,6 +256,24 @@ export interface StyleCard {
   imageMime?: string;
 }
 
+/** A single tool a probed MCP server reported via `tools/list`
+ *  (docs/DRILL_PLAN.md Phase 4, MCP client wiring phase 1). */
+export interface McpTool {
+  name: string;
+  description?: string;
+}
+
+/** Result of `metis-mcp:probe` — spawns an installed MCP server's stdio
+ *  process, performs the JSON-RPC handshake, and enumerates its tools. Never
+ *  throws over IPC: every failure path (missing package, spawn error,
+ *  timeout, malformed response) comes back as `{ ok: false, error }`. */
+export interface McpProbeResult {
+  ok: boolean;
+  error?: string;
+  serverName?: string;
+  tools?: McpTool[];
+}
+
 export type RegistryPackageKind = "skill" | "mcp" | "preset" | "template" | "pipeline";
 
 export interface RegistryPackage {

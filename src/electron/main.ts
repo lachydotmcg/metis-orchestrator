@@ -1,5 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage, shell } from "electron";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { access, appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { createServer, type Server, type ServerResponse } from "node:http";
@@ -47,6 +47,8 @@ import type {
   ModelCatalogState,
   OllamaListResult,
   OllamaPullProgress,
+  McpProbeResult,
+  McpTool,
   PulseFeed,
   RegistryPackage,
   RegistryPackageKind,
@@ -1939,6 +1941,234 @@ async function uninstallPackage(id: string): Promise<RegistryPackage[]> {
 
   await appendAudit("info", "registry.uninstall", `Uninstalled ${id}.`, { id });
   return next;
+}
+
+/** Shape of an installed MCP package's mcp.json (docs/DRILL_PLAN.md Phase 4,
+ *  MCP client wiring phase 1). Only the first server entry in `mcpServers` is
+ *  probed — multi-server bundles are out of scope for this round. */
+type McpServerConfig = {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+};
+
+type McpServersFile = { mcpServers?: Record<string, McpServerConfig> };
+
+/** Minimal newline-delimited JSON-RPC 2.0 client over a child process's
+ *  stdio, used only to drive the initialize -> initialized -> tools/list
+ *  handshake in probeMcpServer. Buffers stdout, splits on "\n", and resolves
+ *  pending requests by matching the "id" field. */
+class McpStdioClient {
+  private buffer = "";
+  private nextId = 1;
+  private pending = new Map<number, { resolve: (value: any) => void; reject: (err: Error) => void }>();
+
+  constructor(private readonly child: import("node:child_process").ChildProcessWithoutNullStreams | import("node:child_process").ChildProcess) {
+    this.child.stdout?.on("data", (chunk: Buffer) => this.onStdout(chunk));
+  }
+
+  private onStdout(chunk: Buffer): void {
+    this.buffer += chunk.toString("utf8");
+    let newlineIndex: number;
+    while ((newlineIndex = this.buffer.indexOf("\n")) !== -1) {
+      const line = this.buffer.slice(0, newlineIndex).trim();
+      this.buffer = this.buffer.slice(newlineIndex + 1);
+      if (!line) continue;
+      let message: any;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        continue; // Non-JSON line (server log noise on stdout) - ignore.
+      }
+      if (typeof message?.id === "number" && this.pending.has(message.id)) {
+        const waiter = this.pending.get(message.id)!;
+        this.pending.delete(message.id);
+        if (message.error) waiter.reject(new Error(message.error.message ?? "MCP server returned an error"));
+        else waiter.resolve(message.result);
+      }
+      // Notifications / requests from the server are ignored - not needed for a probe.
+    }
+  }
+
+  request(method: string, params: Record<string, unknown> = {}): Promise<any> {
+    const id = this.nextId++;
+    const payload = { jsonrpc: "2.0", id, method, params };
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.child.stdin?.write(`${JSON.stringify(payload)}\n`, (err) => {
+        if (err) {
+          this.pending.delete(id);
+          reject(err);
+        }
+      });
+    });
+  }
+
+  notify(method: string, params: Record<string, unknown> = {}): void {
+    const payload = { jsonrpc: "2.0", method, params };
+    this.child.stdin?.write(`${JSON.stringify(payload)}\n`);
+  }
+
+  rejectAllPending(err: Error): void {
+    for (const waiter of this.pending.values()) waiter.reject(err);
+    this.pending.clear();
+  }
+}
+
+/** Spawns an installed MCP server over stdio, performs the JSON-RPC
+ *  initialize -> initialized -> tools/list handshake, and reports its tools
+ *  (docs/DRILL_PLAN.md Phase 4, MCP client wiring phase 1). This is a
+ *  read-only capability probe: no tool is ever invoked. Never throws - every
+ *  failure path (missing package, spawn error, timeout, malformed response)
+ *  resolves to `{ ok: false, error }`, and the child process is always killed
+ *  before returning. */
+async function probeMcpServer(installedPackageId: string): Promise<McpProbeResult> {
+  const installed = await listInstalledPackages();
+  const pkg = installed.find((item) => item.id === installedPackageId);
+  if (!pkg) {
+    return { ok: false, error: `No installed package with id "${installedPackageId}".` };
+  }
+  if (pkg.kind !== "mcp") {
+    return { ok: false, error: `Package "${pkg.name}" is not an MCP package.` };
+  }
+  if (!pkg.installedPath) {
+    return { ok: false, error: `Package "${pkg.name}" has no installed mcp.json path.` };
+  }
+
+  let config: McpServersFile;
+  try {
+    const raw = await readFile(pkg.installedPath, "utf8");
+    config = JSON.parse(raw) as McpServersFile;
+  } catch (err) {
+    return { ok: false, error: `Failed to read/parse mcp.json: ${(err as Error).message}` };
+  }
+
+  const entries = Object.entries(config.mcpServers ?? {});
+  if (entries.length === 0) {
+    return { ok: false, error: "mcp.json has no entries under mcpServers." };
+  }
+  const [serverName, serverConfig] = entries[0];
+  if (!serverConfig?.command) {
+    return { ok: false, error: `Server "${serverName}" has no command.` };
+  }
+
+  const spawnEnv = { ...process.env, ...(serverConfig.env ?? {}) };
+  const args = serverConfig.args ?? [];
+
+  const trySpawn = (useShell: boolean) =>
+    spawn(serverConfig.command, args, {
+      env: spawnEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+      shell: useShell,
+      windowsHide: true
+    });
+
+  const result = await new Promise<McpProbeResult>((resolveProbe) => {
+    let settled = false;
+    let stderrTail = "";
+    let client: McpStdioClient | undefined;
+    let currentChild: ReturnType<typeof trySpawn> | undefined;
+    let retried = false;
+
+    const timer = setTimeout(() => {
+      finish({ ok: false, error: "MCP probe timed out after 20s." });
+    }, 20_000);
+
+    const finish = (outcome: McpProbeResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      client?.rejectAllPending(new Error("Probe finished"));
+      if (currentChild) {
+        try {
+          currentChild.removeAllListeners();
+          currentChild.stdout?.removeAllListeners();
+          currentChild.stderr?.removeAllListeners();
+          if (!currentChild.killed) currentChild.kill();
+        } catch {
+          // Best-effort - nothing more we can do if kill itself throws.
+        }
+      }
+      resolveProbe(outcome);
+    };
+
+    // Attaches all listeners for one spawn attempt. On Windows, a bare "npx"
+    // spawn can ENOENT even when npx.cmd is on PATH (Node's spawn doesn't
+    // resolve .cmd shims without shell:true) - retried once with shell:true
+    // before giving up.
+    const attempt = (useShell: boolean) => {
+      const child = trySpawn(useShell);
+      currentChild = child;
+      stderrTail = "";
+
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderrTail = (stderrTail + chunk.toString("utf8")).slice(-2000);
+      });
+
+      child.once("error", (err: NodeJS.ErrnoException) => {
+        if (settled) return;
+        if (!retried && err.code === "ENOENT" && process.platform === "win32" && !useShell) {
+          retried = true;
+          try {
+            child.removeAllListeners();
+            child.stdout?.removeAllListeners();
+            child.stderr?.removeAllListeners();
+          } catch {
+            // ignore
+          }
+          attempt(true);
+          return;
+        }
+        finish({ ok: false, error: `Failed to spawn MCP server: ${err.message}` });
+      });
+
+      child.once("exit", (code, signal) => {
+        if (!settled) {
+          finish({
+            ok: false,
+            error: `MCP server exited before handshake completed (code ${code ?? "null"}, signal ${signal ?? "null"}).${stderrTail ? ` stderr: ${stderrTail.slice(-500)}` : ""}`
+          });
+        }
+      });
+
+      client = new McpStdioClient(child);
+
+      (async () => {
+        try {
+          await client!.request("initialize", {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "metis", version: app.getVersion() }
+          });
+          client!.notify("notifications/initialized", {});
+          const toolsResult = await client!.request("tools/list", {});
+          const rawTools = Array.isArray(toolsResult?.tools) ? toolsResult.tools : [];
+          const tools: McpTool[] = rawTools
+            .filter((tool: unknown) => tool && typeof (tool as { name?: unknown }).name === "string")
+            .map((tool: { name: string; description?: string }) => ({
+              name: tool.name,
+              description: typeof tool.description === "string" ? tool.description : undefined
+            }));
+          finish({ ok: true, serverName, tools });
+        } catch (err) {
+          if (!settled) finish({ ok: false, error: `MCP handshake failed: ${(err as Error).message}` });
+        }
+      })();
+    };
+
+    attempt(process.platform === "win32" && /^npx(\.cmd)?$/i.test(serverConfig.command));
+  });
+
+  await appendAudit(result.ok ? "info" : "warning", "mcp.probe", result.ok
+    ? `Probed MCP server "${result.serverName}" on package ${pkg.name}: ${result.tools?.length ?? 0} tool(s).`
+    : `MCP probe failed for package ${pkg.name}: ${result.error}`, {
+    packageId: installedPackageId,
+    serverName: result.serverName,
+    toolCount: result.tools?.length,
+    error: result.error
+  });
+
+  return result;
 }
 
 function modelCatalogDefaultState(): ModelCatalogState {
@@ -7365,6 +7595,15 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-registry:list-installed", () => listInstalledPackages());
   ipcMain.handle("metis-registry:install", (_event, id: string) => installPackage(id));
   ipcMain.handle("metis-registry:uninstall", (_event, id: string) => uninstallPackage(id));
+  ipcMain.handle("metis-mcp:probe", async (_event, id: string) => {
+    try {
+      return await probeMcpServer(id);
+    } catch (err) {
+      // Extra safety net: probeMcpServer already guards its own paths, but
+      // IPC handlers must never throw regardless.
+      return { ok: false, error: (err as Error).message } as McpProbeResult;
+    }
+  });
   ipcMain.handle("metis-catalog:models", () => listModelCatalog());
   ipcMain.handle("metis-pulse:feed", () => listPulseFeed());
   ipcMain.handle("metis-updates:check", () => checkForUpdate());
