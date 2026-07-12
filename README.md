@@ -56,16 +56,14 @@ Talk to the orchestrator directly. Drop in an image and it routes to a vision-ca
 ### Gallery: reference images that pick themselves
 Drop in reference images and Metis describes each one automatically, using your own hardware, then sorts them by what they actually are. At build time the pipeline retrieves the right reference for the job on its own, so your frontend inherits a real look you chose instead of defaulting to generic AI-slop design.
 
-![Gallery board of reference images used as style cards](public/assets/readmeimages/gallery-view.png)
-
-![Gallery vision analyze breaking down a reference image's style](public/assets/readmeimages/gallery-analyze.png)
+![Gallery analyzing a reference image and describing its style automatically](public/assets/readmeimages/gallery-analyze.png)
 
 ### Marketplace and registry
-Every skill and MCP connection you could need, in one place, and the ones your orchestration calls for load automatically. Browse, install, star, and publish skills, MCP connections, and presets, all reviewed and merged by pull request. You can even look at other people's orchestrations and share your own, so the best setups spread instead of staying locked in one person's app.
+Every skill and MCP connection you could need, in one place, and the ones your orchestration calls for load automatically. Browse, install, star, and publish skills, MCP connections, and presets, all reviewed and merged by pull request. You can even look at other people's orchestrations and share your own, so the best setups spread instead of staying locked in one person's app. Installing is as simple as it sounds: just drag and drop a skill onto your setup and it is in.
 
 ![Marketplace browsing skills, MCP connections, and presets](public/assets/readmeimages/marketplace.png)
 
-![Drag-and-drop skill install from the marketplace](public/assets/readmeimages/drag-drop-skills.png)
+![Just drag and drop a skill to install it](public/assets/readmeimages/drag-drop-skills.png)
 
 ### Knowledge Banks
 Local embeddings over your project files and past conversations ground the pipeline's prompts in what is actually there, not just what is in the current chat.
@@ -75,20 +73,20 @@ Local embeddings over your project files and past conversations ground the pipel
 ### Graph View
 A force-directed memory graph backed by a real file directory. Open and edit documents right there in the graph.
 
-<!-- SCREENSHOT: Graph View -->
+![The Graph View: a force-directed memory graph over a real file directory](public/assets/readmeimages/gallery-view.png)
 
 ### Benchmark onboarding
-Hardware-matched local model recommendations with one-click Ollama installs, so you are running the right model for your machine from the very start.
+Hardware-matched local model recommendations, so you are running the right model for your machine from the very start. Installing a model is the same easy move: just drag and drop it and Metis pulls it for you.
 
 ![Benchmark onboarding recommending a hardware-matched local model](public/assets/readmeimages/benchmark.png)
 
-![Drag-and-drop model install flow](public/assets/readmeimages/drag-drop-models.png)
+![Just drag and drop a model to install it](public/assets/readmeimages/drag-drop-models.png)
 
 ### Routines
 Scheduled runs for the pipelines you want happening on a timer instead of by hand. Set a routine and Metis fires it for you: a nightly repo tidy, a morning brief, whatever you wire up.
 
-### Pulse
-A community feed for what is new across Metis.
+### Community
+A feed for what is new across Metis: releases, fresh marketplace packages, and what other people are publishing.
 
 ### Settings
 Appearance, chat behaviour, providers and API keys, MCP servers, privacy, and an About section with update checks.
@@ -112,7 +110,7 @@ Provider API keys are entered in **Settings > Providers**. Local models come fro
 - **Electron main process** (`src/electron/main.ts`): providers, routing, the build pipeline, and IPC to the renderer.
 - **Renderer** (`src/renderer/ui/App.tsx`): React 18 + Vite.
 - **Shared contracts** (`src/shared/runtime-contracts.ts`): the types both sides agree on.
-- **Registry** ([github.com/lachydotmcg/metis-registry](https://github.com/lachydotmcg/metis-registry)): the model catalog, marketplace packages, and Pulse feed, served from a separate repo.
+- **Registry** ([github.com/lachydotmcg/metis-registry](https://github.com/lachydotmcg/metis-registry)): the model catalog, marketplace packages, and Community feed, served from a separate repo.
 
 ## Publishing to the marketplace
 
