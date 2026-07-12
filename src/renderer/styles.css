@@ -8376,6 +8376,66 @@ html.density-compact .nav-row {
   background: #6fae7d;
 }
 
+/* Named model/route presets group (DRILL_PLAN B5.1) — sits between the Auto
+   router option and the tiered model groups, reusing .router-tier-label /
+   .router-option / .router-add-trigger / .router-add-form so it reads as
+   part of the same picker rather than a bolted-on widget. */
+.router-presets {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.router-preset-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.router-preset-row .router-option {
+  flex: 1;
+  min-width: 0;
+  padding-right: 26px;
+}
+
+.router-preset-remove {
+  position: absolute;
+  top: 50%;
+  right: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--faint);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  opacity: 0;
+  transform: translateY(-50%);
+  transition: opacity 120ms ease;
+}
+
+.router-preset-row:hover .router-preset-remove {
+  opacity: 1;
+}
+
+/* Fade the active-preset check out on hover so it doesn't collide with the
+   delete control occupying the same corner. */
+.router-preset-row:hover .router-option svg {
+  opacity: 0;
+}
+
+.router-preset-remove:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.router-presets-hint {
+  margin: 0;
+  padding: 4px 9px 7px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
 .router-add-trigger {
   display: flex;
   gap: 7px;

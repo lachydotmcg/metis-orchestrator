@@ -57,7 +57,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   leaking into run.warnings) + all backend pinned wording now reads as a direct call (incl. an
   unlisted initialPipelineSteps route-step gap). RENDERER follow-up: the literal "Routed via {label}"
   text in App.tsx (~4989/5475/5500/5529) must say "Calling X directly" when a model is pinned.
-- [ ] **B5.1 — Model/route PRESETS.** Instead of only "Auto Router", let the user save a named
+- [x] **B5.1 — Model/route PRESETS.** Instead of only "Auto Router", let the user save a named
   preset (a model or a route config), select it in place of Auto Router, and overwrite existing
   presets or save new ones. Renderer picker + a presets store.
 - [x] **B5.5 — Oracle visibility (Lachy: "add a demo thinking tab to actually show that its
