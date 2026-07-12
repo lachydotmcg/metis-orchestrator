@@ -3674,6 +3674,15 @@ function NewSessionWorkspace({
     try {
       const next = kind === "file" ? await window.metisProject.addFiles() : await window.metisProject.addFolder();
       setWorkspaceResources(next);
+      if (kind === "folder") {
+        // PF1 (5c0c1a6): "+ Add folder" now also establishes the attached folder as the
+        // writable project workspace on the backend. Re-fetch it so the "Choose/Change
+        // folder" label and project-context popover reflect the newly-writable folder
+        // right away instead of waiting for a remount. Bridge is undefined in preview,
+        // so this optional-chains to a no-op there.
+        const workspace = await window.metisProject?.getWorkspace();
+        if (workspace !== undefined) setProjectWorkspace(workspace);
+      }
     } finally {
       setProjectPickerBusy(false);
     }
@@ -3877,7 +3886,14 @@ function NewSessionWorkspace({
                   </button>
                 </header>
                 <div className="workspace-context-path" title={projectWorkspace?.path}>
-                  {projectWorkspace ? projectWorkspace.path : "No project folder selected yet."}
+                  {projectWorkspace ? (
+                    <>
+                      <em className="workspace-writable-tag">Writable</em>
+                      <span className="workspace-context-path-text">{projectWorkspace.path}</span>
+                    </>
+                  ) : (
+                    "No project folder selected yet."
+                  )}
                 </div>
                 {workspaceResources.length > 0 ? (
                   <div className="workspace-context-resources">
@@ -3885,6 +3901,7 @@ function NewSessionWorkspace({
                       <div className="workspace-context-resource" key={resource.id}>
                         <Folder size={12} />
                         <span title={resource.path}>{resource.name}</span>
+                        {resource.path === projectWorkspace?.path ? <em className="workspace-writable-tag">Writable</em> : null}
                         <button type="button" aria-label={`Remove ${resource.name}`} onClick={() => void removeWorkspaceResource(resource.id)}>
                           <X size={12} />
                         </button>

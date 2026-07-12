@@ -95,7 +95,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   chatbox / centered), same three verdicts wired to the existing `metis-permissions:respond`.
   Keep the inline resolved-record behavior. Do B2.3 and B2.4 popups with a shared surface
   grammar so they feel like one system.
-- [ ] **B2.2 — Benchmark Recommended-setup Model text is cut off.** RENDERER/CSS. In the
+- [x] **B2.2 — Benchmark Recommended-setup Model text is cut off.** RENDERER/CSS. In the
   Benchmark tab's Recommended setup card, the Model value text is clipped. Find the card and
   fix the overflow (wrap / min-width:0 / no fixed-width truncation) so the full model name shows.
 - [ ] **B2.1 — Move vision model selection to the Gallery (Lachy: tbh).** RENDERER. The vision
