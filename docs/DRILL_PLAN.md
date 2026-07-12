@@ -82,6 +82,11 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+- [x] **O4.1 - sends never queue behind speculation (Lachy measured 13390ms).** The v0.3 draft is a heavyweight job (2048 tokens + thinking) and Ollama serializes per-model requests, so a send during an in-flight draft queued behind it. Fixed Fable-direct (4c155cf): abortOracleSpeculativeWork aborts ALL in-flight warms + drafts at the top of the chat invoke path; a newer prompt ABORTS and replaces a stale in-flight draft (latest wins); cap 768 -> 2048 so thinking models finish naturally (done_reason stop) and become servable.
+- [ ] **O5 - cloud Oracle (Lachy consents: happy to test via DeepSeek V4 Flash).** Draft/warm via a cloud provider with his own key, behind a SEPARATE explicit opt-in toggle (costs tokens, sends partial prompts to that provider, never silently). DeepSeek has automatic context caching, the natural first target. Harder debounce, no per-keystroke spend, clear cost copy. Fable-direct per the Oracle rule.
+
+---
+
 ## ★ LACHY BATCH 7 (2026-07-12, parked notes - Lachy: note down and forget for now)
 
 - [ ] **B7.1 - Per-conversation model selection.** The pinned model / preset choice should be
