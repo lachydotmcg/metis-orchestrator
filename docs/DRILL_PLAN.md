@@ -91,6 +91,24 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ---
 
+## ★ EXPERIMENTS (Lachy-approved R&D, behind flags, off by default)
+
+- [ ] **E1 — Speculative prompt prewarm (faster responses).** Lachy's idea: as you type, feed the
+  in-progress prompt to the LOCAL model so its response is prepared/prefilled, dropping
+  time-to-first-token on submit. v0.1 = invisible PREFILL PREWARM only (no speculative answer
+  shown, no file effects), LOCAL (Ollama) ONLY, behind a flag default OFF (like fanoutEnabled).
+  (a) BACKEND (main.ts + contracts + preload + global.d.ts): prewarmModel(model, draft) hits
+  Ollama keep_alive + prefill (num_predict ~0/1, no visible output, creates NO conversation
+  record, NO run, NO stage events, NO file writes); server-side debounce/dedupe so keystrokes do
+  not spam Ollama; fail-soft no-op if Ollama down; NEVER send partial prompts to any cloud
+  provider (cost + privacy); a prewarmEnabled flag in settings; instrument TTFT so we can compare
+  warm vs cold using the existing L4 timing audits. (b) RENDERER (follow-up): debounced call from
+  the composer (~400ms pause) when the flag is on AND the target is a local model, plus a
+  Settings experiments toggle. v0.2 later (only if v0.1 shows a real TTFT win): speculative DRAFT
+  generation shown dim + instantly confirmed on match. Measure before expanding.
+
+---
+
 ## PHASE 0 — Bugs and quick wins (do these FIRST, they're what Lachy touches daily)
 
 - [x] **L4 — Chat latency + snapshot-dump replies.** Typing "Test" in a new conversation
