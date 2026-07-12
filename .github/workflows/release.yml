@@ -33,6 +33,6 @@ jobs:
         run: npm ci
 
       - name: Build and publish
-        run: npx electron-builder --publish always
+        run: npm run build && npx electron-builder --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

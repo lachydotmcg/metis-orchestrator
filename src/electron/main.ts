@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage, shell } 
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { access, appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, resolve } from "node:path";
@@ -8729,7 +8730,20 @@ async function retrieveBestStyleCard(planOutput: string, userPrompt: string): Pr
   }
 }
 
+/** Resolves the app icon (the Metis logo) for the window and taskbar. Packaged
+ *  builds read it from resources/ (shipped via electron-builder extraResources);
+ *  in dev it comes from build/icon.png at the repo root. electron-builder also
+ *  bakes the same icon into the installer and exe. Returns undefined if neither
+ *  path exists so the window still opens with the default icon. */
+function resolveAppIcon(): string | undefined {
+  const candidate = app.isPackaged
+    ? join(process.resourcesPath, "icon.png")
+    : join(__dirname, "../../build/icon.png");
+  return existsSync(candidate) ? candidate : undefined;
+}
+
 async function createWindow(): Promise<void> {
+  const appIcon = resolveAppIcon();
   const win = new BrowserWindow({
     width: 1360,
     height: 860,
@@ -8738,6 +8752,7 @@ async function createWindow(): Promise<void> {
     title: "Metis Orchestrator",
     backgroundColor: "#1b1b1b",
     frame: false,
+    ...(appIcon ? { icon: appIcon } : {}),
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
       contextIsolation: true,
