@@ -4641,6 +4641,15 @@ function resolveOverrideModel(override: SessionModelOverride): string {
   if (mapped) return mapped;
   // Already looks like a real id (ollama tag, dotted/dashed API id, or org/model path).
   if (/[:/]/.test(raw) || (/^[a-z0-9][a-z0-9.-]*$/.test(raw) && raw.includes("-"))) return raw;
+  // Ollama display names follow "family size" ("Qwen3 8B") and their real tags
+  // follow "family:size" ("qwen3:8b"). The old slug fallback turned these into
+  // "qwen3-8b" (dash), which Ollama 404s on - the bug Lachy hit when the picker
+  // said Installed but the pinned run failed. Generalize instead of extending
+  // the hand-kept MODEL_DISPLAY_IDS map one model at a time.
+  if (override.provider === "ollama") {
+    const familySize = raw.toLowerCase().match(/^([a-z0-9.-]+)\s+(\d+(?:\.\d+)?b)$/i);
+    if (familySize) return `${familySize[1]}:${familySize[2]}`;
+  }
   // Best-effort slug for hand-typed names like "GPT 5.6" -> "gpt-5.6".
   return raw.toLowerCase().replace(/\s+/g, "-");
 }
