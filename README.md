@@ -12,6 +12,7 @@ Because no single model is best at everything. One plans better, another writes 
 
 ### What you get
 
+- **Oracle: answers before you finish asking.** Metis's speculative engine reads your prompt as you type, prewarms the model, and drafts the response during your natural pauses. In real-world testing on local models, Oracle cuts time-to-first-token by **4.1x to 9.5x**, and when your prompt is unchanged at send, the fully drafted answer is served instantly. Local-only by default, off by default, one toggle to try it.
 - **The best-suited model for every task.** Route by quality and let each stage go to whatever model excels at it, instead of forcing one model to do the whole job.
 - **A fraction of the token bill.** Run everything locally for free, or send the easy tasks to cheap models and save the expensive ones for when they earn it.
 - **No lock-in, ever.** Bring your own API keys, plug in the OpenRouter subscription you already pay for, or go fully local. Your keys, your models, your machine.
