@@ -6674,6 +6674,7 @@ details.artifact-row[open] summary {
 }
 
 .home-dock {
+  position: relative; /* anchors .chatbox-popup-wrap so the popup rises directly above the composer */
   display: grid;
   gap: 9px;
   width: min(720px, 100%);
@@ -8861,6 +8862,116 @@ a:focus-visible,
 .question-card-freetext button:hover {
   border-color: var(--accent);
   color: var(--text);
+}
+
+/* Shared floating popup surface (docs/DRILL_PLAN.md B2.3/B2.4) — rises from
+   the composer to host the active in-run permission ask or AskUserQuestion
+   set (1-4 questions), replacing the old always-inline interactive cards
+   above. Non-modal by design: the scrim is a faint visual cue only
+   (pointer-events: none), so the rest of the app stays fully usable while it
+   is open — no full-screen block. .home-dock carries position: relative so
+   this anchors directly above the real composer regardless of its height. */
+.chatbox-popup-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 16px;
+  z-index: 45;
+  pointer-events: none;
+}
+
+.chatbox-popup-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 44;
+  background: rgb(0 0 0 / 0.16);
+}
+
+.chatbox-popup {
+  position: relative;
+  pointer-events: auto;
+  display: grid;
+  gap: 12px;
+  width: min(720px, 100%);
+  max-height: min(60vh, 560px);
+  margin: 0 auto;
+  padding: 14px;
+  overflow-y: auto;
+  color: var(--soft);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 14px;
+  box-shadow: 0 18px 52px rgb(0 0 0 / 0.45);
+  animation: chatbox-popup-rise 0.18s ease-out;
+}
+
+@keyframes chatbox-popup-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chatbox-popup-body {
+  display: grid;
+  gap: 12px;
+}
+
+.question-popup-item {
+  display: grid;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.question-popup-item:last-of-type {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.question-popup-answered-icon {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.question-card-options button.selected {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+.question-popup-submit-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.question-popup-submit {
+  padding: 7px 14px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.question-popup-submit:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, var(--surface-2));
+}
+
+.question-popup-submit:disabled {
+  color: var(--faint);
+  background: var(--surface-2);
+  border-color: var(--line);
+  cursor: not-allowed;
 }
 
 .product-hero,

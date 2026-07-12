@@ -116,6 +116,7 @@ import type {
   PermissionGrant,
   PermissionMode,
   PermissionScope,
+  PermissionVerdict,
   PolicyDecisionResult,
   PolicyStatus,
   ProviderAccount,
@@ -138,7 +139,8 @@ import type {
   SessionTimelineEvent,
   SecretStatus,
   StyleCard,
-  UpdateCheckResult
+  UpdateCheckResult,
+  UserQuestionAnswer
 } from "../../shared/runtime-contracts";
 
 /** Narrows SessionStreamEvent down to the `stage_call` variant (docs/FABLE_PLANS.md
@@ -431,10 +433,24 @@ type ConversationTurn = {
   liveThoughtText?: string;
   error?: string;
   /** In-run permission prompt awaiting a verdict (docs/FABLE_PLANS.md §24) —
-   *  cleared once a later stream event arrives or the user responds. */
-  pendingPermission?: { id: string; scope: PermissionScope; target: string; detail: string; resolved?: { verdict: "allow" | "always" | "deny" } };
-  /** AskUserQuestion awaiting an answer (docs/FABLE_PLANS.md §24). */
-  pendingQuestion?: { id: string; text: string; options: string[]; resolved?: { answer: string } };
+   *  `resolved` is the single source of truth for both the floating chatbox
+   *  popup (interactive) and the inline chat record (collapsed audit line):
+   *  once set, the popup stops offering this request and the inline card
+   *  shows the collapsed line permanently. */
+  pendingPermission?: { id: string; scope: PermissionScope; target: string; detail: string; resolved?: { verdict: PermissionVerdict } };
+  /** AskUserQuestion awaiting an answer (docs/FABLE_PLANS.md §24, multi-question
+   *  popup docs/DRILL_PLAN.md B2.3a). `questions` carries the up-to-4-question
+   *  form when present; `text`/`options` stay populated as the first entry's
+   *  mirror for back-compat. `resolved.answer` mirrors what was sent to
+   *  `metisSession.answerQuestion` (single string, or one string per question
+   *  in order). */
+  pendingQuestion?: {
+    id: string;
+    text: string;
+    options: string[];
+    questions?: Array<{ text: string; options: string[]; allowCustom?: boolean }>;
+    resolved?: { answer: UserQuestionAnswer };
+  };
 };
 
 const ACCOUNT_EMAIL = "bytehavencreations@gmail.com";
@@ -511,7 +527,10 @@ function applyStreamEventToTurn(turn: ConversationTurn, event: SessionStreamEven
     return { ...turn, pendingPermission: { id: event.request.id, scope: event.request.scope, target: event.request.target, detail: event.request.detail } };
   }
   if (event.kind === "user_question") {
-    return { ...turn, pendingQuestion: { id: event.question.id, text: event.question.text, options: event.question.options } };
+    return {
+      ...turn,
+      pendingQuestion: { id: event.question.id, text: event.question.text, options: event.question.options, questions: event.question.questions }
+    };
   }
   return turn;
 }
@@ -3075,6 +3094,30 @@ function NewSessionWorkspace({
   const activeKey = activeConversationId ?? draftKeyRef.current;
   const conversation = pendingByConversation[activeKey] ?? [];
   const sessionBusy = busyKeys.has(activeKey);
+  // The single active pending permission/question for the CURRENTLY VIEWED
+  // conversation (docs/DRILL_PLAN.md B2.3/B2.4 chatbox popup) — scans back to
+  // front so a later turn's ask wins if somehow more than one is open. A
+  // background run in a conversation the user isn't looking at never surfaces
+  // its popup here, matching the existing pendingByConversation/activeKey split.
+  const activePendingPermission = useMemo(() => {
+    for (let i = conversation.length - 1; i >= 0; i--) {
+      const turn = conversation[i];
+      if (turn.pendingPermission && !turn.pendingPermission.resolved) {
+        return { turnId: turn.id, request: turn.pendingPermission };
+      }
+    }
+    return null;
+  }, [conversation]);
+  const activePendingQuestion = useMemo(() => {
+    if (activePendingPermission) return null; // permission takes priority when both are somehow pending
+    for (let i = conversation.length - 1; i >= 0; i--) {
+      const turn = conversation[i];
+      if (turn.pendingQuestion && !turn.pendingQuestion.resolved) {
+        return { turnId: turn.id, question: turn.pendingQuestion };
+      }
+    }
+    return null;
+  }, [conversation, activePendingPermission]);
   // A live-readable mirror of activeKey for long-lived closures (the
   // runStream event callback below persists for a run's whole lifetime, so it
   // can't rely on the `activeKey` const captured at submit time to know
@@ -3318,6 +3361,29 @@ function NewSessionWorkspace({
       const bucket = current[resolvedKey] ?? [];
       return { ...current, [resolvedKey]: updater(bucket) };
     });
+  }
+
+  // Resolves the active pending permission/question from the floating chatbox
+  // popup: fires the real bridge call (a no-op via optional chaining in the
+  // no-bridge preview, matching the prior inline cards' behavior) and marks
+  // `resolved` on the turn so the popup closes and the inline card's collapsed
+  // audit line takes over (docs/DRILL_PLAN.md B2.3/B2.4).
+  function resolvePermission(turnId: string, requestId: string, verdict: PermissionVerdict): void {
+    window.metisPermissions?.respond(requestId, verdict);
+    updatePendingTurns(activeKey, (current) =>
+      current.map((turn) =>
+        turn.id === turnId && turn.pendingPermission ? { ...turn, pendingPermission: { ...turn.pendingPermission, resolved: { verdict } } } : turn
+      )
+    );
+  }
+
+  function resolveQuestion(turnId: string, requestId: string, answer: UserQuestionAnswer): void {
+    window.metisSession?.answerQuestion(requestId, answer);
+    updatePendingTurns(activeKey, (current) =>
+      current.map((turn) =>
+        turn.id === turnId && turn.pendingQuestion ? { ...turn, pendingQuestion: { ...turn.pendingQuestion, resolved: { answer } } } : turn
+      )
+    );
   }
 
   async function submitPrompt(text: string, attachments?: SessionAttachment[]): Promise<void> {
@@ -3660,6 +3726,23 @@ function NewSessionWorkspace({
       ) : null}
 
       <div className="home-dock">
+        {activePendingPermission ? (
+          <ChatboxPopup label="Permission request">
+            <PermissionPopupBody
+              key={activePendingPermission.request.id}
+              request={activePendingPermission.request}
+              onRespond={(verdict) => resolvePermission(activePendingPermission.turnId, activePendingPermission.request.id, verdict)}
+            />
+          </ChatboxPopup>
+        ) : activePendingQuestion ? (
+          <ChatboxPopup label="Question">
+            <QuestionPopupBody
+              key={activePendingQuestion.question.id}
+              question={activePendingQuestion.question}
+              onRespond={(answer) => resolveQuestion(activePendingQuestion.turnId, activePendingQuestion.question.id, answer)}
+            />
+          </ChatboxPopup>
+        ) : null}
         <SessionComposer
           sessionBusy={sessionBusy}
           projectWorkspace={projectWorkspace}
@@ -4557,44 +4640,84 @@ function LiveRunTimeline({ turn }: { turn: ConversationTurn }): JSX.Element {
   );
 }
 
-/** In-run permission approval card (docs/FABLE_PLANS.md §24) — slim,
- *  accent-left-border, matching the chat grammar. Collapses to a one-line
- *  record after a verdict; shows a disabled note in the no-bridge preview. */
-function PermissionRequestCard({ request }: { request: NonNullable<ConversationTurn["pendingPermission"]> }): JSX.Element {
-  const [resolved, setResolved] = useState<"allow" | "always" | "deny" | null>(null);
-
-  function respond(verdict: "allow" | "always" | "deny"): void {
-    setResolved(verdict);
-    window.metisPermissions?.respond(request.id, verdict);
-  }
-
-  if (resolved) {
-    const label = resolved === "deny" ? "Denied" : resolved === "always" ? "Always allowed" : "Allowed once";
-    return (
-      <div className="permission-card resolved">
-        <ShieldCheck size={13} />
-        <span>
-          {label} — {request.detail}
-        </span>
-      </div>
-    );
-  }
-
+/** Inline chat record for an in-run permission ask (docs/FABLE_PLANS.md §24,
+ *  elevated per docs/DRILL_PLAN.md B2.4) — the interactive verdict buttons now
+ *  live only in the floating ChatboxPopup; this renders nothing until
+ *  `resolved` is set, then shows the same one-line audit record as before. */
+function PermissionRequestCard({ request }: { request: NonNullable<ConversationTurn["pendingPermission"]> }): JSX.Element | null {
+  if (!request.resolved) return null;
+  const { verdict } = request.resolved;
+  const label = verdict === "deny" ? "Denied" : verdict === "always" ? "Always allowed" : "Allowed once";
   return (
-    <div className="permission-card" role="dialog" aria-label="Permission request">
+    <div className="permission-card resolved">
+      <ShieldCheck size={13} />
+      <span>
+        {label} — {request.detail}
+      </span>
+    </div>
+  );
+}
+
+/** Inline chat record for an AskUserQuestion (docs/FABLE_PLANS.md §24, elevated
+ *  multi-question popup per docs/DRILL_PLAN.md B2.3) — the interactive option
+ *  chips / free-text form now live only in the floating ChatboxPopup; this
+ *  renders nothing until `resolved` is set, then shows the answer(s). */
+function UserQuestionCard({ question }: { question: NonNullable<ConversationTurn["pendingQuestion"]> }): JSX.Element | null {
+  if (!question.resolved) return null;
+  const { answer } = question.resolved;
+  const label = Array.isArray(answer) ? answer.join(" · ") : answer;
+  return (
+    <div className="permission-card resolved">
+      <HelpCircle size={13} />
+      <span>You answered: {label}</span>
+    </div>
+  );
+}
+
+/** Shared floating popup surface (docs/DRILL_PLAN.md B2.3/B2.4): rises from the
+ *  composer (see .home-dock's position: relative + this component's
+ *  .chatbox-popup-wrap anchored to its top edge) to host either the active
+ *  in-run permission ask or AskUserQuestion set — one interactive surface, one
+ *  shared grammar, so the two feel like a single system rather than two
+ *  bolted-together features. Non-modal: the scrim is a faint visual cue only
+ *  (pointer-events: none in CSS), never a full-screen block. */
+function ChatboxPopup({ children, label }: { children: ReactNode; label: string }): JSX.Element {
+  return (
+    <div className="chatbox-popup-wrap">
+      <div className="chatbox-popup-scrim" aria-hidden="true" />
+      <div className="chatbox-popup" role="dialog" aria-label={label}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/** Interactive body for the permission half of ChatboxPopup — same
+ *  detail + Allow once / Always allow / Deny grammar as the old inline card,
+ *  gated behind window.metisPermissions exactly as before (shows the disabled
+ *  note instead of dead buttons in the no-bridge preview). */
+function PermissionPopupBody({
+  request,
+  onRespond
+}: {
+  request: { detail: string };
+  onRespond: (verdict: PermissionVerdict) => void;
+}): JSX.Element {
+  return (
+    <div className="chatbox-popup-body">
       <div className="permission-card-detail">
         <Shield size={14} />
         <span>{request.detail}</span>
       </div>
       {window.metisPermissions ? (
         <div className="permission-card-actions">
-          <button type="button" onClick={() => respond("allow")}>
+          <button type="button" onClick={() => onRespond("allow")}>
             Allow once
           </button>
-          <button type="button" onClick={() => respond("always")}>
+          <button type="button" onClick={() => onRespond("always")}>
             Always allow
           </button>
-          <button type="button" className="deny" onClick={() => respond("deny")}>
+          <button type="button" className="deny" onClick={() => onRespond("deny")}>
             Deny
           </button>
         </div>
@@ -4605,57 +4728,98 @@ function PermissionRequestCard({ request }: { request: NonNullable<ConversationT
   );
 }
 
-/** AskUserQuestion card (docs/FABLE_PLANS.md §24) — option chips plus a small
- *  free-text input; collapses to "You answered: X" once answered. */
-function UserQuestionCard({ question }: { question: NonNullable<ConversationTurn["pendingQuestion"]> }): JSX.Element {
-  const [answer, setAnswer] = useState<string | null>(null);
-  const [freeText, setFreeText] = useState("");
+type PopupQuestionSpec = { text: string; options: string[]; allowCustom?: boolean };
 
-  function respond(value: string): void {
-    const text = value.trim();
+/** Interactive body for the question half of ChatboxPopup — up to 4 questions
+ *  (docs/DRILL_PLAN.md B2.3a). A single question keeps the original snappy
+ *  UX (clicking an option or sending custom text answers immediately, as a
+ *  plain string). Two or more questions switch to "fill every question, then
+ *  submit together" since no single click can resolve a multi-question ask;
+ *  each question's option chips and free-text field both write into the same
+ *  per-question slot, and the shared Submit button stays disabled until every
+ *  slot has something in it. Free-text stays gated behind window.metisSession
+ *  (disabled note in the no-bridge preview); option chips stay clickable
+ *  regardless, matching the original single-question card's behavior. */
+function QuestionPopupBody({
+  question,
+  onRespond
+}: {
+  question: { text: string; options: string[]; questions?: PopupQuestionSpec[] };
+  onRespond: (answer: UserQuestionAnswer) => void;
+}): JSX.Element {
+  const specs: PopupQuestionSpec[] = question.questions?.length ? question.questions.slice(0, 4) : [{ text: question.text, options: question.options }];
+  const isMulti = specs.length > 1;
+  const [values, setValues] = useState<string[]>(() => specs.map(() => ""));
+  const [customDrafts, setCustomDrafts] = useState<string[]>(() => specs.map(() => ""));
+
+  function chooseOption(index: number, option: string): void {
+    if (!isMulti) {
+      onRespond(option);
+      return;
+    }
+    setValues((current) => current.map((value, i) => (i === index ? option : value)));
+  }
+
+  function submitCustom(index: number): void {
+    const text = customDrafts[index].trim();
     if (!text) return;
-    setAnswer(text);
-    window.metisSession?.answerQuestion(question.id, text);
+    if (!isMulti) {
+      onRespond(text);
+      return;
+    }
+    setValues((current) => current.map((value, i) => (i === index ? text : value)));
   }
 
-  if (answer) {
-    return (
-      <div className="permission-card resolved">
-        <HelpCircle size={13} />
-        <span>You answered: {answer}</span>
-      </div>
-    );
-  }
+  const allAnswered = values.every((value) => value.trim().length > 0);
 
   return (
-    <div className="permission-card question-card" role="dialog" aria-label="Question">
-      <div className="permission-card-detail">
-        <HelpCircle size={14} />
-        <span>{question.text}</span>
-      </div>
-      {question.options.length > 0 ? (
-        <div className="question-card-options">
-          {question.options.map((option) => (
-            <button key={option} type="button" onClick={() => respond(option)}>
-              {option}
-            </button>
-          ))}
+    <div className="chatbox-popup-body question-popup">
+      {specs.map((spec, index) => (
+        <div className={`question-popup-item ${isMulti && values[index] ? "answered" : ""}`} key={index}>
+          <div className="permission-card-detail">
+            <HelpCircle size={14} />
+            <span>{spec.text}</span>
+            {isMulti && values[index] ? <Check size={13} className="question-popup-answered-icon" /> : null}
+          </div>
+          {spec.options.length > 0 ? (
+            <div className="question-card-options">
+              {spec.options.map((option) => (
+                <button key={option} type="button" className={isMulti && values[index] === option ? "selected" : ""} onClick={() => chooseOption(index, option)}>
+                  {option}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {spec.allowCustom === false ? null : window.metisSession ? (
+            <form
+              className="question-card-freetext"
+              onSubmit={(event) => {
+                event.preventDefault();
+                submitCustom(index);
+              }}
+            >
+              <input
+                value={customDrafts[index]}
+                onChange={(event) => {
+                  const text = event.target.value;
+                  setCustomDrafts((current) => current.map((value, i) => (i === index ? text : value)));
+                }}
+                placeholder="Or type your own answer"
+              />
+              <button type="submit">{isMulti ? "Set" : "Send"}</button>
+            </form>
+          ) : (
+            <small className="permission-card-disabled">Answering needs the desktop app — this is a preview.</small>
+          )}
+        </div>
+      ))}
+      {isMulti ? (
+        <div className="question-popup-submit-row">
+          <button type="button" className="question-popup-submit" disabled={!allAnswered} onClick={() => onRespond(values)}>
+            Submit answers
+          </button>
         </div>
       ) : null}
-      {window.metisSession ? (
-        <form
-          className="question-card-freetext"
-          onSubmit={(event) => {
-            event.preventDefault();
-            respond(freeText);
-          }}
-        >
-          <input value={freeText} onChange={(event) => setFreeText(event.target.value)} placeholder="Or type your own answer" />
-          <button type="submit">Send</button>
-        </form>
-      ) : (
-        <small className="permission-card-disabled">Answering needs the desktop app — this is a preview.</small>
-      )}
     </div>
   );
 }

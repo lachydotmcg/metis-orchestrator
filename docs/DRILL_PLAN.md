@@ -25,7 +25,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   ancestors in styles.css — any OS-drag strip must not swallow pointer events on the
   draggable surfaces (this is the Electron bug L1 only half-fixed). NEEDS LIVE TEST in the
   Electron app (app-region is a no-op in the Vite preview).
-- [ ] **B2.3 — AI popup questions (up to 4) rising from the chatbox, with custom answers.**
+- [x] **B2.3 — AI popup questions (up to 4) rising from the chatbox, with custom answers.**
   (a) BACKEND (main.ts + contracts, ADDITIVE/optional so the current single-question
   UserQuestionCard keeps compiling): extend so `<ask_user>` may carry MULTIPLE questions
   (cap 4), each with options + an allowCustom flag; add optional `questions?: {text,
@@ -36,7 +36,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   options + allowCustom), extractAskUserTag parses both legacy + batched forms, answer round
   trip widened to UserQuestionAnswer = string | string[], prompt injection documents the
   batched tag. (b) RENDERER popup still to build (UserQuestionCard renders 1 question today).
-- [ ] **B2.4 — "Would you like to allow this action" as a real on-screen popup.** RENDERER.
+- [x] **B2.4 — "Would you like to allow this action" as a real on-screen popup.** RENDERER.
   The PermissionRequestCard (Allow once / Always allow / Deny) already exists but renders
   INLINE in the chat. Elevate it to a prominent floating popup overlay (rising near the
   chatbox / centered), same three verdicts wired to the existing `metis-permissions:respond`.
