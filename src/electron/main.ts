@@ -1,4 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, safeStorage, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } from "electron";
+import type { MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { access, appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
@@ -6915,7 +6916,7 @@ async function executeManagerAction(rawAction: ManagerAction): Promise<ManagerAc
       // attached at all (unchanged behavior for the "no workspace" case).
       const workspace = await readProjectWorkspace();
       const projectPath = workspace?.path ?? action.projectPath;
-      const run = await runSession({
+      const run = await runSessionTracked({
         prompt: action.prompt ?? "",
         projectPath,
         permissionMode: "ask"
@@ -7115,6 +7116,23 @@ async function runExtractionRecovery(args: {
     if (recovered.length > 0) return recovered;
   }
   return [];
+}
+
+// Tray status indicator: counts sessions currently in flight (incremented/
+// decremented around every runSession call site, including error paths via
+// finally) so the tray can show idle vs running without touching runSession's
+// own many internal return paths.
+let activeSessionRunCount = 0;
+
+async function runSessionTracked(input: SessionRunInput, stream?: SessionStreamController): Promise<SessionRun> {
+  activeSessionRunCount += 1;
+  refreshTrayMenu();
+  try {
+    return await runSession(input, stream);
+  } finally {
+    activeSessionRunCount -= 1;
+    refreshTrayMenu();
+  }
 }
 
 async function runSession(input: SessionRunInput, stream?: SessionStreamController): Promise<SessionRun> {
@@ -8023,6 +8041,25 @@ async function runLabExperiment(prompt?: string): Promise<LabExperimentResult> {
 let routineTimer: ReturnType<typeof setTimeout> | undefined;
 let routineTickRunning = false;
 
+// Tray "Pause background routines" state (persisted so it survives restarts).
+// Cached in memory after first read; the scheduler tick checks this flag
+// before firing anything due, so a pause genuinely stops background runs
+// rather than just hiding them in the UI.
+let routinesPausedCache: boolean | undefined;
+
+async function isRoutinesPaused(): Promise<boolean> {
+  if (routinesPausedCache === undefined) {
+    routinesPausedCache = await readStoreValue<boolean>("routinesPaused", false);
+  }
+  return routinesPausedCache;
+}
+
+async function setRoutinesPaused(paused: boolean): Promise<void> {
+  routinesPausedCache = paused;
+  await writeStoreValue("routinesPaused", paused);
+  refreshTrayMenu();
+}
+
 async function readRoutines(): Promise<Routine[]> {
   return readStoreValue<Routine[]>("routines", []);
 }
@@ -8109,7 +8146,7 @@ async function fireRoutine(id: string): Promise<Routine | undefined> {
   const now = new Date().toISOString();
   let updated: Routine;
   try {
-    const run = await runSession({
+    const run = await runSessionTracked({
       prompt: routine.prompt,
       conversationId: routine.conversationId,
       projectPath: routine.projectPath,
@@ -8172,6 +8209,7 @@ async function runRoutineTick(): Promise<void> {
   if (routineTickRunning) return;
   routineTickRunning = true;
   try {
+    if (await isRoutinesPaused()) return;
     const routines = await readRoutines();
     const now = new Date();
     const due = routines.filter((routine) => routine.enabled && routine.nextRunAt && new Date(routine.nextRunAt) <= now);
@@ -9289,6 +9327,11 @@ function resolveAppIcon(): string | undefined {
   return existsSync(candidate) ? candidate : undefined;
 }
 
+// Tracks the main window so the tray's "Open Metis" item can focus/restore it
+// rather than always spawning a new one. Cleared on close; app.on("activate")
+// and the tray's open handler both fall back to createWindow() when null.
+let mainWindow: BrowserWindow | null = null;
+
 async function createWindow(): Promise<void> {
   const appIcon = resolveAppIcon();
   const win = new BrowserWindow({
@@ -9306,6 +9349,10 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false
     }
   });
+  mainWindow = win;
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = null;
+  });
 
   if (process.env.VITE_DEV_SERVER_URL) {
     await win.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -9314,11 +9361,113 @@ async function createWindow(): Promise<void> {
   }
 }
 
+/** Focuses the existing main window if one is open, otherwise opens a new
+ *  one. Used by the tray's "Open Metis" item — on non-darwin the app has
+ *  already quit once the last window closes (window-all-closed), so this
+ *  path only ever needs to restore/focus, but the fallback keeps it safe. */
+async function openOrFocusMainWindow(): Promise<void> {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
+  }
+  await createWindow();
+}
+
+// --- System tray (DRILL_PLAN F1) ------------------------------------------
+// A small always-available control surface: current status, pause/resume for
+// background routines, the last few completed runs, and quit. Scope for this
+// round is additive only — closing the main window still quits the app on
+// non-darwin exactly as before; making the window close-to-tray instead of
+// quit is a deliberate follow-up, not implemented here.
+let tray: Tray | null = null;
+
+function trayStatusLabel(paused: boolean): string {
+  if (activeSessionRunCount > 0) return "running";
+  if (paused) return "routines paused";
+  return "idle";
+}
+
+function formatRunAgo(completedAt: string): string {
+  const ms = Date.now() - new Date(completedAt).getTime();
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
+function formatRunDuration(run: SessionRun): string | undefined {
+  const ms = new Date(run.completedAt).getTime() - new Date(run.createdAt).getTime();
+  if (!Number.isFinite(ms) || ms <= 0) return undefined;
+  return `${Math.round(ms / 1000)}s`;
+}
+
+/** Rebuilds the tray's context menu from current state. Called on run
+ *  start/end, pause toggle, and whenever a run completes, so the menu never
+ *  goes stale between opens (Electron has no "menu about to show" hook for
+ *  tray context menus on every platform, so we just rebuild eagerly). */
+async function refreshTrayMenu(): Promise<void> {
+  if (!tray) return;
+  try {
+    const paused = await isRoutinesPaused();
+    const status = trayStatusLabel(paused);
+    const recentRuns = (await readSessionRuns())
+      .filter((run) => Boolean(run.completedAt))
+      .slice(0, 3);
+
+    const recentRunItems: MenuItemConstructorOptions[] = recentRuns.length
+      ? recentRuns.map((run) => {
+          const duration = formatRunDuration(run);
+          const label = run.routeLabel || run.pipelineName || "Run";
+          const parts = [label, duration ? `${duration}` : undefined, formatRunAgo(run.completedAt)].filter(Boolean);
+          return { label: parts.join(" · "), enabled: false };
+        })
+      : [{ label: "No runs yet", enabled: false }];
+
+    const menu = Menu.buildFromTemplate([
+      { label: `Status: ${status}`, enabled: false },
+      { type: "separator" },
+      { label: "Open Metis", click: () => void openOrFocusMainWindow() },
+      {
+        label: paused ? "Resume background routines" : "Pause background routines",
+        click: () => void setRoutinesPaused(!paused)
+      },
+      { type: "separator" },
+      { label: "Recent runs", submenu: recentRunItems },
+      { type: "separator" },
+      { label: "Quit Metis", click: () => app.quit() }
+    ]);
+
+    tray.setContextMenu(menu);
+    tray.setToolTip(`Metis Orchestrator - ${status}`);
+  } catch {
+    // Never let a menu rebuild (bad store data, etc.) take the tray down.
+  }
+}
+
+/** Creates the tray icon. Guarded end-to-end: if there's no resolvable icon
+ *  or Tray construction throws (e.g. a headless/CI environment), the app
+ *  just runs without a tray rather than failing startup. */
+function createTray(): void {
+  try {
+    const iconPath = resolveAppIcon();
+    if (!iconPath) return;
+    tray = new Tray(iconPath);
+    tray.setToolTip("Metis Orchestrator");
+    tray.on("click", () => void openOrFocusMainWindow());
+    void refreshTrayMenu();
+  } catch {
+    tray = null;
+  }
+}
+
 app.whenReady().then(async () => {
   ipcMain.handle("metis-policy:get-sample-decision", () => sampleDecision);
   ipcMain.handle("metis-policy:get-status", (_event, profilePath?: string) => getPolicyStatus(profilePath));
   ipcMain.handle("metis-policy:decide", (_event, input: PolicyDecisionInput) => decidePolicy(input));
-  ipcMain.handle("metis-session:run", (_event, input: SessionRunInput) => runSession(input));
+  ipcMain.handle("metis-session:run", (_event, input: SessionRunInput) => runSessionTracked(input));
   ipcMain.handle("metis-session:run-stream", async (event, streamId: string, input: SessionRunInput) => {
     const emit = (payload: SessionStreamEvent) => {
       if (!event.sender.isDestroyed()) {
@@ -9326,7 +9475,7 @@ app.whenReady().then(async () => {
       }
     };
     try {
-      const run = await runSession(input, { emit });
+      const run = await runSessionTracked(input, { emit });
       return run;
     } catch (error) {
       emit({ kind: "error", message: error instanceof Error ? error.message : String(error) });
@@ -9445,6 +9594,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-gallery:import-urls", (_event, urls: string[]) => importImagesFromUrls(Array.isArray(urls) ? urls : []));
   ipcMain.handle("metis-gallery:import-pinterest", (_event, boardUrl: string) => importFromPinterestBoard(typeof boardUrl === "string" ? boardUrl : ""));
   await createWindow();
+  createTray();
 
   // Warm the live registry, model catalog, and Pulse feed on launch so the
   // cache is fresh; each call caches last-good state for offline use.
@@ -9463,5 +9613,13 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
+  }
+});
+
+// Avoids a dangling tray icon in the Windows notification area after quit.
+app.on("before-quit", () => {
+  if (tray) {
+    tray.destroy();
+    tray = null;
   }
 });
