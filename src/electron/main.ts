@@ -3119,10 +3119,40 @@ function isBuildOptOut(prompt: string): boolean {
   return /\b(without (generating|creating|building|writing|changing) (anything|any files?|code)|don'?t (build|create|generate|write|touch)|just (tell|show|explain|answer)|no code|status of)\b/i.test(prompt);
 }
 
+// Advisory/explanatory asks — "walk me through...", "explain...", "give me a
+// skeleton..." — want an ANSWER in chat, not a file-writing build run. These
+// prompts often mention a build verb or artifact noun somewhere in the prose
+// (e.g. "...helping me design a feature...local-first Electron app...") which
+// is exactly what makes them slip past the plain build/edit heuristics: those
+// heuristics (hasImperativeBuildIntent, isEditIntent) match a verb or noun
+// ANYWHERE in the text, not the actual intent of the sentence. Anchored with
+// \b so short substrings inside unrelated words don't trip it.
+const ADVISORY_INTENT_RE =
+  /\b(?:walk (?:me )?through|talk (?:me )?through|explain|describe|outline|how (?:would|do|should|can) i\b|how to\b|what(?:'s| is| are| should| would) the best\b|give me (?:a|an)\b[\s\S]{0,40}?\b(?:skeleton|example|outline|overview|rundown|starting point|sketch|idea)\b|help me (?:understand|think|plan|design)\b|should i\b)/i;
+
+// A prompt that OPENS with an imperative build verb aimed at the assistant
+// ("build me a landing page", "create the app", "make me a website") is an
+// unambiguous, direct build/edit order even if it also contains
+// advisory-sounding phrasing later on ("...walk me through what you did").
+// This is deliberately narrower than hasImperativeBuildIntent, which matches
+// a build verb and an artifact noun anywhere in the prompt (so it already
+// fires, incorrectly, on prose like "...helping me design a feature...
+// Electron app..." even though nothing there is a direct order) — here we
+// only look at how the prompt actually opens, which is a much stronger and
+// less ambiguous signal that "build/change my project" is the primary ask.
+function hasStrongImperativeBuildLead(prompt: string): boolean {
+  return /^\s*(?:build|make|create|design|generate|develop|scaffold|implement)\b(?:\s+(?:me|us))?\s+(?:a|an|the)\b/i.test(prompt);
+}
+
 function isBuildQuestionGuard(prompt: string): boolean {
   const trimmed = prompt.trim();
   if (/^\s*(what|which|who|whose|when|where|why|how|did|was|were|is|are|does|do)\b/i.test(trimmed)) return true;
   if (/\?\s*$/.test(trimmed) && /\b(asked|created|built|made|generated|wrote)\b/i.test(trimmed)) return true;
+  // Advisory ask ("walk me through...", "give me a skeleton...") wins UNLESS
+  // the prompt itself opens with a direct imperative build order — in which
+  // case the direct order is the primary ask and normal build/edit routing
+  // applies.
+  if (ADVISORY_INTENT_RE.test(trimmed) && !hasStrongImperativeBuildLead(trimmed)) return true;
   return false;
 }
 

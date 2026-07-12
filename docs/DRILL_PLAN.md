@@ -24,7 +24,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   generated-projects when a folder is attached; only use the app-managed folder when truly nothing is
   attached (and surface that clearly). RENDERER follow-up: UI clearly shows "your writable project"
   vs read-only reference folders. NEEDS LIVE TEST: attach a folder, run a build, files land there.
-- [ ] **PF2 — Routing: thinking questions must be ANSWERED, not built.** BACKEND (router). A
+- [x] **PF2 — Routing: thinking questions must be ANSWERED, not built.** BACKEND (router). A
   "walk me through / explain / give me a skeleton" prompt was routed to Build/edit-existing and tried
   to write files. The router should classify explanatory/Q&A prompts as CHAT answers (chat fast-lane),
   not file-writing builds. Also unblocks Oracle (prewarm only speeds the chat path). Tune the route
