@@ -506,7 +506,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   Privacy>Export disabled state — build the real bridge). Bridge a417ad8, button 30be8f5.
   NEEDS LIVE TEST for the save dialog.
 - [ ] Streaming Manager chat (SSE-style token streaming into the widget).
-- [ ] Per-conversation token/cost line (reuse telemetry; show at conversation top).
+- [x] Per-conversation token/cost line (reuse telemetry; show at conversation top).
 - [ ] Prompt templates / snippets library in the composer (slash-command style).
 - [ ] First-run tour: a 5-step overlay pointing at Orchestration, Manager, Marketplace,
   Gallery, Benchmark (ties into §17 onboarding).

@@ -3770,6 +3770,36 @@ function NewSessionWorkspace({
     [storedConversations, activeConversationId]
   );
 
+  /** Slim per-conversation token line (DRILL_PLAN Phase 8): sums real
+   *  providerResult.usage across every run in the active conversation's
+   *  turns. Never estimates a total itself — only real recorded usage counts
+   *  toward the sum, and the whole line is flagged "approximate" if any
+   *  contributing run's usage was itself marked estimated (e.g. Ollama's
+   *  char-count fallback in estimateUsage, main.ts). No pricing table exists
+   *  in this codebase (the one $/token figure found, localSavedUsd below, is
+   *  a rough savings guess, not a real rate), so this deliberately shows
+   *  tokens only — never a fabricated cost. Returns null (renders nothing)
+   *  when the active conversation has no run with usage yet. */
+  const conversationUsage = useMemo(() => {
+    if (!openConversation) return null;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let runCount = 0;
+    let estimated = false;
+    let allLocal = true;
+    openConversation.turns.forEach((turn) => {
+      const usage = turn.run?.providerResult?.usage;
+      if (!usage) return;
+      inputTokens += usage.inputTokens;
+      outputTokens += usage.outputTokens;
+      runCount += 1;
+      if (usage.estimated) estimated = true;
+      if (turn.run?.providerResult?.provider !== "ollama") allLocal = false;
+    });
+    if (runCount === 0) return null;
+    return { inputTokens, outputTokens, runCount, estimated, allLocal };
+  }, [openConversation]);
+
   useEffect(() => {
     setContextDeleteArmed(false);
   }, [activeConversationId]);
@@ -4246,7 +4276,21 @@ function NewSessionWorkspace({
       </div>
       <div className="home-scroll" ref={homeScrollRef}>
         {hasConversation ? (
-          openConversation ? <div className="conversation-title">{openConversation.title}</div> : null
+          openConversation ? (
+            <>
+              <div className="conversation-title">{openConversation.title}</div>
+              {conversationUsage ? (
+                <div className="route-line conversation-usage-line">
+                  <span>
+                    {formatTokenCount(conversationUsage.inputTokens)} tokens in, {formatTokenCount(conversationUsage.outputTokens)} out across{" "}
+                    {conversationUsage.runCount} run{conversationUsage.runCount === 1 ? "" : "s"}
+                    {conversationUsage.estimated ? " (approximate)" : ""}
+                    {conversationUsage.allLocal ? " — free, ran locally" : ""}
+                  </span>
+                </div>
+              ) : null}
+            </>
+          ) : null
         ) : (
           <header className="home-greeting">
             <Sparkles size={22} />

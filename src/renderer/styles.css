@@ -3321,6 +3321,12 @@ p {
   font-weight: 550;
 }
 
+.conversation-usage-line {
+  width: min(820px, 100%);
+  margin: -2px auto 8px;
+  padding: 0 2px;
+}
+
 .home-greeting h1 {
   margin: 0;
   color: var(--text);
