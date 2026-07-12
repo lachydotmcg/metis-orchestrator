@@ -269,7 +269,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ## ★ FUTURE / BACKLOG (Lachy-requested, not yet scheduled)
 
-- [ ] **F1 — System tray app.** A native tray icon (routing status, pause routines, recent runs),
+- [x] **F1 — System tray app.** A native tray icon (routing status, pause routines, recent runs),
   close-to-tray vs quit. Lachy: make the tray look nice. Electron Tray + Menu in main.ts + a tidy
   menu; use the app icon.
 - [ ] **F2 — Self-serve email digests (SMTP).** Let users send THEMSELVES daily digests, routine/
@@ -498,7 +498,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ## PHASE 8 — Fable's own additions (keep drilling when the above is done)
 
-- [ ] Wire the titlebar global search (currently disabled "coming soon"): search across
+- [x] Wire the titlebar global search (currently disabled "coming soon"): search across
   conversations, project files, settings, marketplace — a Ctrl+K command palette.
 - [x] Auto-title conversations (first-run summary → conversation title, replacing "New
   conversation").

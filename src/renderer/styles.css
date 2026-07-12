@@ -13241,3 +13241,111 @@ a:focus-visible,
     transition-duration: 0.01ms;
   }
 }
+
+/* ---- Ctrl/Cmd+K command palette (DRILL_PLAN Phase 8) — mounted at the App root, overlays
+   every view. Slim greyscale modal: input on top, grouped/highlighted results below. ---- */
+.command-palette-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgb(0 0 0 / 0.5);
+}
+
+.command-palette {
+  position: fixed;
+  top: 14%;
+  left: 50%;
+  z-index: 81;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(60vh, 520px);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  box-shadow: 0 30px 80px rgb(0 0 0 / 0.55);
+  transform: translateX(-50%);
+}
+
+.command-palette-input-row {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+  align-items: center;
+  padding: 14px 16px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.command-palette-input-row input {
+  flex: 1;
+  padding: 0;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  outline: none;
+  font-size: 14px;
+}
+
+.command-palette-input-row input::placeholder {
+  color: var(--muted);
+}
+
+.command-palette-results {
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.command-palette-empty {
+  margin: 0;
+  padding: 14px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.command-palette-item-wrap:first-child .command-palette-group {
+  margin-top: 0;
+}
+
+.command-palette-group {
+  margin: 10px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.command-palette-result {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--soft);
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.command-palette-result.active {
+  color: var(--text);
+  background: var(--line-soft);
+}
+
+.command-palette-result-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-palette-result-sub {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+  flex: 0 0 auto;
+}

@@ -3,6 +3,7 @@ import {
   type ChangeEvent,
   type Dispatch,
   type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -155,6 +156,23 @@ type StageCallEvent = Extract<SessionStreamEvent, { kind: "stage_call" }>;
 
 type NavKey = "session" | "orchestration" | "routines" | "marketplace" | "gallery" | "graph" | "benchmark" | "todo" | "manager" | "settings" | "pulse";
 type NodeKind = "router" | "agent" | "skill";
+
+/** Command palette (Ctrl/Cmd+K) "Views" group — nav destinations by label, matching the
+ *  labels used elsewhere in the sidebar/titlebar so results feel consistent app-wide.
+ *  Module-level so it's a stable identity across renders (docs convention for static lists). */
+const PALETTE_VIEWS: Array<{ key: NavKey; label: string; icon: JSX.Element }> = [
+  { key: "session", label: "New session", icon: <Plus size={14} /> },
+  { key: "orchestration", label: "Orchestration", icon: <GitBranch size={14} /> },
+  { key: "manager", label: "Manager", icon: <Bot size={14} /> },
+  { key: "marketplace", label: "Marketplace", icon: <Cable size={14} /> },
+  { key: "routines", label: "Routines", icon: <CalendarClock size={14} /> },
+  { key: "todo", label: "To Do List", icon: <ListTodo size={14} /> },
+  { key: "gallery", label: "Gallery", icon: <GalleryHorizontalEnd size={14} /> },
+  { key: "graph", label: "Graph View", icon: <Network size={14} /> },
+  { key: "benchmark", label: "Benchmark", icon: <Cpu size={14} /> },
+  { key: "settings", label: "Settings", icon: <Settings size={14} /> },
+  { key: "pulse", label: "Community", icon: <Newspaper size={14} /> }
+];
 
 type ProviderId =
   | "qwen"
@@ -1515,6 +1533,24 @@ export function App(): JSX.Element {
   // SettingsWorkspace resets it back to "general" once consumed so a later
   // plain Settings visit doesn't stick on Providers.
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>("general");
+  // Ctrl/Cmd+K command palette (DRILL_PLAN Phase 8) — mounted at the App root so it overlays
+  // every view. Global shortcut only opens; Escape/backdrop-click closes are handled inside
+  // CommandPalette itself so the listener here never fights with the palette's own keydowns.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  useEffect(() => {
+    function handleGlobalKeyDown(event: KeyboardEvent): void {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen(true);
+      }
+    }
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
+  const openSettingsSection = useCallback((section: SettingsSection) => {
+    setSettingsInitialSection(section);
+    setActiveNav("settings");
+  }, []);
 
   useEffect(() => {
     if (!window.metisProfile) {
@@ -1788,7 +1824,12 @@ export function App(): JSX.Element {
 
   return (
     <div className="app-root">
-      <Titlebar collapsed={sidebarCollapsed} onToggleCollapse={() => setSidebarCollapsed((current) => !current)} onOpenPulse={() => setActiveNav("pulse")} />
+      <Titlebar
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
+        onOpenPulse={() => setActiveNav("pulse")}
+        onOpenSearch={() => setPaletteOpen(true)}
+      />
       <div className={`metis-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${activeNav === "settings" ? "settings-mode" : ""}`}>
       {activeNav !== "settings" ? (
         <Sidebar
@@ -1860,6 +1901,14 @@ export function App(): JSX.Element {
       ) : null}
       </div>
       <ManagerWidget onNavigate={setActiveNav} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        conversations={storedConversations}
+        onNavigate={setActiveNav}
+        onOpenConversation={openConversationById}
+        onOpenSettingsSection={openSettingsSection}
+      />
       {showOnboarding && ownerProfile ? (
         <FirstRunOnboarding
           profile={ownerProfile}
@@ -2173,11 +2222,13 @@ function RunTestPanel({
 function Titlebar({
   collapsed,
   onToggleCollapse,
-  onOpenPulse
+  onOpenPulse,
+  onOpenSearch
 }: {
   collapsed: boolean;
   onToggleCollapse: () => void;
   onOpenPulse: () => void;
+  onOpenSearch: () => void;
 }): JSX.Element {
   const hasWindow = typeof window !== "undefined" && Boolean(window.metisWindow);
   const [pulse, setPulse] = useState<PulseFeed>(FALLBACK_PULSE);
@@ -2226,7 +2277,7 @@ function Titlebar({
         <button className="titlebar-icon" type="button" aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={onToggleCollapse}>
           <Menu size={17} />
         </button>
-        <button className="titlebar-icon" type="button" aria-label="Search" title="Global search — coming soon" disabled>
+        <button className="titlebar-icon" type="button" aria-label="Search" title="Search (Ctrl+K)" onClick={onOpenSearch}>
           <Search size={16} />
         </button>
         <button className="titlebar-icon" type="button" aria-label="Community" onClick={handleOpenPulse}>
@@ -2260,6 +2311,169 @@ function Titlebar({
         </div>
       ) : null}
     </div>
+  );
+}
+
+type PaletteResult = {
+  id: string;
+  group: "Views" | "Conversations" | "Settings";
+  label: string;
+  sublabel?: string;
+  icon: JSX.Element;
+  onSelect: () => void;
+};
+
+/** Titlebar Search -> Ctrl/Cmd+K global command palette (DRILL_PLAN Phase 8). Mounted once at
+ *  the App root so it overlays every view. Sources are deliberately limited to what's already
+ *  reachable from here without a fresh fetch: nav destinations (PALETTE_VIEWS), open
+ *  conversations (storedConversations, same list/open path the sidebar uses), and Settings
+ *  sections (SETTINGS_NAV, deep-linked the same way Providers-from-onboarding does). Marketplace
+ *  packages are intentionally NOT a source — the registry list lives inside MarketplaceWorkspace /
+ *  SettingsWorkspace's own state, not up here, and re-fetching it just to power search would
+ *  duplicate a bridge call for a feature that's supposed to be a quick nav shortcut. */
+function CommandPalette({
+  open,
+  onClose,
+  conversations,
+  onNavigate,
+  onOpenConversation,
+  onOpenSettingsSection
+}: {
+  open: boolean;
+  onClose: () => void;
+  conversations: ConversationRecord[];
+  onNavigate: (nav: NavKey) => void;
+  onOpenConversation: (id: string) => void;
+  onOpenSettingsSection: (section: SettingsSection) => void;
+}): JSX.Element | null {
+  const [query, setQuery] = useState("");
+  const [highlighted, setHighlighted] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setQuery("");
+    setHighlighted(0);
+    const id = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => window.clearTimeout(id);
+  }, [open]);
+
+  const results = useMemo<PaletteResult[]>(() => {
+    if (!open) return [];
+    const q = query.trim().toLowerCase();
+    const list: PaletteResult[] = [];
+
+    const views = q ? PALETTE_VIEWS.filter((view) => view.label.toLowerCase().includes(q)) : PALETTE_VIEWS;
+    for (const view of views.slice(0, 6)) {
+      list.push({ id: `view-${view.key}`, group: "Views", label: view.label, icon: view.icon, onSelect: () => onNavigate(view.key) });
+    }
+
+    if (q) {
+      const matchedConversations = conversations.filter((conversation) => conversation.title.toLowerCase().includes(q)).slice(0, 6);
+      for (const conversation of matchedConversations) {
+        list.push({
+          id: `conversation-${conversation.id}`,
+          group: "Conversations",
+          label: conversation.title,
+          icon: <MessageCircle size={14} />,
+          onSelect: () => onOpenConversation(conversation.id)
+        });
+      }
+
+      const matchedSettings = SETTINGS_NAV.filter((item) => item.label.toLowerCase().includes(q)).slice(0, 6);
+      for (const item of matchedSettings) {
+        list.push({
+          id: `settings-${item.section}`,
+          group: "Settings",
+          label: item.label,
+          sublabel: item.group,
+          icon: item.icon,
+          onSelect: () => onOpenSettingsSection(item.section)
+        });
+      }
+    }
+
+    return list;
+  }, [open, query, conversations, onNavigate, onOpenConversation, onOpenSettingsSection]);
+
+  useEffect(() => {
+    setHighlighted(0);
+  }, [query]);
+
+  if (!open) return null;
+
+  function select(index: number): void {
+    const result = results[index];
+    if (!result) return;
+    result.onSelect();
+    onClose();
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlighted((current) => (results.length ? (current + 1) % results.length : 0));
+      return;
+    }
+    if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlighted((current) => (results.length ? (current - 1 + results.length) % results.length : 0));
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      select(highlighted);
+    }
+  }
+
+  let lastGroup: PaletteResult["group"] | null = null;
+
+  return (
+    <>
+      <div className="command-palette-backdrop" onClick={onClose} />
+      <div className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={handleKeyDown}>
+        <div className="command-palette-input-row">
+          <Search size={15} />
+          <input
+            ref={inputRef}
+            type="text"
+            value={query}
+            placeholder="Search views, conversations, settings..."
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <div className="command-palette-results">
+          {results.length === 0 ? (
+            <p className="command-palette-empty">No matches</p>
+          ) : (
+            results.map((result, index) => {
+              const showHeader = result.group !== lastGroup;
+              lastGroup = result.group;
+              return (
+                <div key={result.id} className="command-palette-item-wrap">
+                  {showHeader ? <div className="command-palette-group">{result.group}</div> : null}
+                  <button
+                    type="button"
+                    className={`command-palette-result ${index === highlighted ? "active" : ""}`}
+                    onMouseEnter={() => setHighlighted(index)}
+                    onClick={() => select(index)}
+                  >
+                    {result.icon}
+                    <span className="command-palette-result-label">{result.label}</span>
+                    {result.sublabel ? <span className="command-palette-result-sub">{result.sublabel}</span> : null}
+                  </button>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
