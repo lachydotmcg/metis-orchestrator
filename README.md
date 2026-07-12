@@ -93,6 +93,30 @@ A feed for what is new across Metis: releases, fresh marketplace packages, and w
 ### Settings
 Appearance, chat behaviour, providers and API keys, MCP servers, privacy, and an About section with update checks.
 
+### Ctrl+K command palette
+Press Ctrl+K (Cmd+K on Mac) from anywhere to search your conversations, jump to any settings section, and switch to any nav view without touching the sidebar.
+
+### Prompt templates in the composer
+Slash-command style snippets in the composer turn the prompts you type over and over into a pick instead of a retype.
+
+### Questions from the model, batched and inline
+When a run needs to ask you something, up to four questions can rise in a single popup from the chatbox, each with its own option chips or a free-text answer, instead of stopping you one question at a time.
+
+### Installed-model badges in the picker
+Local models you have actually pulled are badged apart from the ones that are merely available to install, so you never pin a model you have not downloaded. Saved model presets, if you have any, show up as one-click shortcuts in the same picker.
+
+### Onboarding that gets you running, not just welcomed
+First launch walks you through your name, a Local, Cloud, or Hybrid preference, a hardware check with model recommendations, and one-click installs for the picks. You land in the app on a real local profile, BYO (bring-your-own API keys) by default.
+
+### Token usage, right where you are
+A per-conversation line shows what that conversation is actually costing, reusing the telemetry Metis already tracks instead of sending you to a separate dashboard.
+
+### Errors panel
+A last-errors view fed straight from the audit log, so a crash or failure surfaces in the app instead of sending you spelunking through log files.
+
+### System tray
+Metis lives in the tray too: a native icon shows routing status, lets you pause or resume routines, surfaces recent runs, and closes to tray instead of quitting outright.
+
 ## Getting started
 
 Prerequisites:
@@ -113,6 +137,17 @@ Provider API keys are entered in **Settings > Providers**. Local models come fro
 - **Renderer** (`src/renderer/ui/App.tsx`): React 18 + Vite.
 - **Shared contracts** (`src/shared/runtime-contracts.ts`): the types both sides agree on.
 - **Registry** ([github.com/lachydotmcg/metis-registry](https://github.com/lachydotmcg/metis-registry)): the model catalog, marketplace packages, and Community feed, served from a separate repo.
+
+## Documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - the contributor-facing map: process model, the run pipeline, the IPC bridge surface, and where to add things.
+- [`docs/ORACLE.md`](docs/ORACLE.md) - how the speculative prewarm/draft/serve engine actually works, end to end.
+- [`docs/SECURITY.md`](docs/SECURITY.md) - the threat model, permission system, secrets handling, and third-party risk.
+- [`docs/PRIVACY.md`](docs/PRIVACY.md) - the plain-language privacy summary.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) - dev setup, project layout, code style, and how a change lands.
+- [`docs/RELEASING.md`](docs/RELEASING.md) - how to cut a tagged release.
+- [`CHANGELOG.md`](CHANGELOG.md) - what shipped, release by release.
+- [`docs/DRILL_PLAN.md`](docs/DRILL_PLAN.md) - the active roadmap.
 
 ## Publishing to the marketplace
 
