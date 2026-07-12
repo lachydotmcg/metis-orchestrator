@@ -17,7 +17,7 @@ resolveWritableProjectWorkspace() (main.ts ~1799) returns null and writeProjectF
 silently falls back to dataPath("generated-projects") = the app-data area Lachy calls "agent-memory".
 The B2.7 fix only patched the Manager-action path, not this (the real upstream cause).
 
-- [ ] **PF1 — Unify: the folder you attach IS the writable project (Lachy chose unify).** BACKEND
+- [x] **PF1 — Unify: the folder you attach IS the writable project (Lachy chose unify).** BACKEND
   (main.ts): when the user attaches a project folder, establish it as the writable workspace (request
   filesystem.write / project-tools + set the projectWorkspace store) so builds write THERE. Additional
   read-only reference folders may still be added separately. Builds must NEVER silently write to

@@ -1695,16 +1695,16 @@ async function readProjectWorkspace(): Promise<ProjectWorkspace | null> {
   };
 }
 
-async function selectProjectWorkspace(): Promise<ProjectWorkspaceSelectionResult> {
-  const result = await dialog.showOpenDialog({
-    title: "Choose a repo or project folder for Metis project tools",
-    buttonLabel: "Allow Metis here",
-    properties: ["openDirectory", "createDirectory"]
-  });
-  const selected = result.filePaths[0];
-  if (result.canceled || !selected) return { canceled: true };
-
-  const selectedPath = resolve(selected);
+/** Establishes `selectedPath` as THE single writable project workspace: requests the
+ *  filesystem.write/project-tools grant for it and persists it under the `projectWorkspace`
+ *  store key. This is the one place that grants write access to a folder, shared by every
+ *  folder-attach entry point (docs/DRILL_PLAN.md PF1 — "the folder you attach is the writable
+ *  project"): the explicit "Choose folder" picker (selectProjectWorkspace) and the "+ Add
+ *  folder" workspace-resource attach (addProjectResource) both route through here so a folder
+ *  attached either way becomes writable, not just indexed for read-only context. Only one
+ *  workspace is writable at a time — attaching a new folder replaces the previous one, matching
+ *  the app's existing single-workspace model (see readProjectWorkspace/clearProjectWorkspace). */
+async function establishWritableWorkspace(selectedPath: string): Promise<ProjectWorkspace> {
   const grant = await requestPermission({
     scope: "filesystem.write",
     target: "project-tools",
@@ -1722,6 +1722,20 @@ async function selectProjectWorkspace(): Promise<ProjectWorkspaceSelectionResult
     projectPath: workspace.path,
     permissionId: workspace.permissionId
   });
+  return workspace;
+}
+
+async function selectProjectWorkspace(): Promise<ProjectWorkspaceSelectionResult> {
+  const result = await dialog.showOpenDialog({
+    title: "Choose a repo or project folder for Metis project tools",
+    buttonLabel: "Allow Metis here",
+    properties: ["openDirectory", "createDirectory"]
+  });
+  const selected = result.filePaths[0];
+  if (result.canceled || !selected) return { canceled: true };
+
+  const selectedPath = resolve(selected);
+  const workspace = await establishWritableWorkspace(selectedPath);
   return { canceled: false, workspace };
 }
 
@@ -1775,6 +1789,19 @@ async function addProjectResource(kind: ProjectWorkspaceResource["kind"]): Promi
     kind,
     count: next.length - current.length
   });
+
+  // DRILL_PLAN PF1: attaching a folder (the renderer's "+ Add folder" flow) must make it the
+  // writable project, the same as the dedicated "Choose folder" picker — previously this only
+  // requested filesystem.read, so a build against an attached-but-never-selected folder fell
+  // through resolveWritableProjectWorkspace and silently landed in dataPath("generated-projects")
+  // instead. Promote the most recently selected folder from THIS dialog call (last entry in
+  // result.filePaths — if multiple were selected at once, the last one wins) to the writable
+  // workspace, even if it was already an existing resource (re-selecting reaffirms it as active).
+  // Files (kind "file") never affect the writable workspace — only a folder attach does.
+  if (kind === "folder" && result.filePaths.length > 0) {
+    const promotedPath = resolve(result.filePaths[result.filePaths.length - 1]);
+    await establishWritableWorkspace(promotedPath);
+  }
   return next;
 }
 
@@ -1811,6 +1838,35 @@ async function resolveWritableProjectWorkspace(requestedPath?: string): Promise<
       sameResolvedPath(grant.projectPath ?? "", workspace.path)
   );
   return allowed ? workspace : null;
+}
+
+/** DRILL_PLAN PF1 write-target resolver used by every build/preview call site that used to call
+ *  resolveWritableProjectWorkspace(input.projectPath) directly. Now that attaching a folder
+ *  (either "Choose folder" or "+ Add folder") always establishes it as the writable workspace
+ *  (see establishWritableWorkspace), resolveWritableProjectWorkspace returning null should be
+ *  rare — but it can still happen if the write grant was independently revoked (Settings >
+ *  Permissions) or the workspace was cleared while a folder resource stayed attached. In that
+ *  edge case, this falls back to the most recently attached folder resource (by addedAt) rather
+ *  than letting the caller silently redirect into dataPath("generated-projects") — a folder that
+ *  is still attached must never be shadowed by the app-managed scratch folder. Only when there is
+ *  truly nothing attached (no workspace AND no folder resources) does this return null, which
+ *  preserves the existing app-managed fallback + warning for that case. When `requestedPath` is
+ *  given, the fallback only considers a resource whose path matches it, so this never hijacks an
+ *  explicit, unrelated path request. */
+async function resolveActiveProjectWorkspace(requestedPath?: string): Promise<ProjectWorkspace | null> {
+  const writable = await resolveWritableProjectWorkspace(requestedPath);
+  if (writable) return writable;
+
+  const resources = await listProjectResources();
+  const folderResources = resources.filter((resource) => resource.kind === "folder");
+  if (folderResources.length === 0) return null;
+
+  const candidate = requestedPath
+    ? folderResources.find((resource) => sameResolvedPath(resource.path, requestedPath))
+    : folderResources[folderResources.length - 1];
+  if (!candidate) return null;
+
+  return establishWritableWorkspace(candidate.path);
 }
 
 /** Resolves the effective five-mode permission for a session run, preferring
@@ -4723,7 +4779,7 @@ async function runPreviewRequest(args: {
   stream?: SessionStreamController;
 }): Promise<SessionRun> {
   const { input, prompt, conversationId, createdAt, promptHash, decision, stream } = args;
-  const writable = await resolveWritableProjectWorkspace(input.projectPath);
+  const writable = await resolveActiveProjectWorkspace(input.projectPath);
   const steps: SessionPipelineStep[] = [
     { id: "route", label: "Route through Metis Policy", detail: "Recognized a preview request for the current project.", status: "complete" }
   ];
@@ -7058,7 +7114,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // truth (does the selected project actually have files?) before the build
   // gate decides, and so the build branch below reuses the same resolution
   // instead of resolving the workspace twice.
-  const writable = await resolveWritableProjectWorkspace(input.projectPath);
+  const writable = await resolveActiveProjectWorkspace(input.projectPath);
   const editableProject = writable ? await projectHasSourceFiles(writable.path) : false;
 
   // Real multi-model build pipeline (plan -> front end -> functional) for "build me X".
@@ -7390,7 +7446,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const provider = override ? override.provider : providerFromRoute(route.provider, route.runtime, route.kind);
   const model = override ? resolveOverrideModel(override) : route.model ?? providerInfo[provider].defaultModel ?? "auto";
   const effectiveRouteLabel = override ? overrideDisplayLabel(override) : routeLabel;
-  const writableWorkspace = await resolveWritableProjectWorkspace(input.projectPath);
+  const writableWorkspace = await resolveActiveProjectWorkspace(input.projectPath);
   // Fast lane (bug L4b): a short, plain general_chat turn ("Test", "hi") skips
   // the project-snapshot walk and knowledge-bank retrieval below — both add
   // real tokens/latency that a trivial turn never needed. Route ceremony,
