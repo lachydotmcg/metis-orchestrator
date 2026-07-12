@@ -788,7 +788,7 @@ async function healthCheckProvider(provider: ProviderKey): Promise<ProviderStatu
       label: info.label,
       configured: true,
       status: "unavailable",
-      detail: error instanceof Error ? error.message : "Ollama is not reachable.",
+      detail: "Ollama is not running, or not reachable at 127.0.0.1:11434. Start Ollama (or launch the Ollama app), then check again.",
       defaultModel: info.defaultModel
     };
   }
@@ -1005,7 +1005,7 @@ async function invokeProvider(
       return {
         provider: input.provider,
         model: input.model,
-        output: "Ollama is not reachable yet, so Metis recorded the route without running the model.",
+        output: `Ollama is not running, or ${input.model} is not pulled. Start Ollama (or launch the Ollama app), then run: ollama pull ${input.model}, and send again.`,
         source: "placeholder",
         auditId: audit.id
       };
@@ -2985,12 +2985,12 @@ function shouldReusePreviousPipeline(prompt: string): boolean {
   return /\b(it|that|this|the pipeline|same pipeline|ask it|tell it|respond with|say)\b/i.test(prompt) && !pipelineIntentFromPrompt(prompt) && !isAttributionQuestion(prompt);
 }
 
-function initialPipelineSteps(pipelineName: string, decision: RouteDecision, includeProjectTools = true): SessionPipelineStep[] {
+function initialPipelineSteps(pipelineName: string, decision: RouteDecision, includeProjectTools = true, override?: SessionModelOverride): SessionPipelineStep[] {
   const steps: SessionPipelineStep[] = [
     {
       id: "route",
-      label: "Route through Metis Policy",
-      detail: "Classify the prompt, score available routes, and select the primary model plus fallback path.",
+      label: override ? `Calling ${overrideDisplayLabel(override)} directly` : "Route through Metis Policy",
+      detail: override ? "Direct call to your pinned model, no routing decision to make." : "Classify the prompt, score available routes, and select the primary model plus fallback path.",
       status: "pending"
     },
     {
@@ -7155,15 +7155,15 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       emitTimeline(stream, timelineText("Build pipeline invoked manually via /orchestration."));
     }
     if (input.modelOverride) {
-      emitTimeline(stream, timelineText(`You pinned ${overrideDisplayLabel(input.modelOverride)}, so it leads every stage; the usual chain stays as fallback.`));
+      emitTimeline(stream, timelineText(`Calling ${overrideDisplayLabel(input.modelOverride)} directly for every stage. The usual chain only steps in if it fails.`));
     }
     emitTimeline(stream, { id: randomUUID(), kind: "route", label: "Build", pipelineName: "Build Orchestration Pipeline" });
     emitStream(stream, {
       kind: "step",
       step: {
         id: "route",
-        label: input.modelOverride ? `Model pinned: ${overrideDisplayLabel(input.modelOverride)}` : "Route through Metis Policy",
-        detail: input.modelOverride ? "Router bypassed for the primary attempt of each stage." : "Selected the build pipeline.",
+        label: input.modelOverride ? `Calling ${overrideDisplayLabel(input.modelOverride)} directly` : "Route through Metis Policy",
+        detail: input.modelOverride ? "Direct call to your pinned model for the primary attempt of each stage." : "Selected the build pipeline.",
         status: "complete",
         completedAt: new Date().toISOString()
       }
@@ -7461,7 +7461,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
 
   const pipelineName = pipelineNameFor(effectiveDecision);
   const includeProjectTools = shouldCreateFrontendProject(prompt, effectiveDecision);
-  const steps = initialPipelineSteps(pipelineName, effectiveDecision, includeProjectTools);
+  const steps = initialPipelineSteps(pipelineName, effectiveDecision, includeProjectTools, input.modelOverride);
   steps[0] = completeStep(steps[0]);
 
   const orchestrationAudit = await appendAudit("info", "session.pipeline", `Running ${pipelineName}.`, {
@@ -7507,7 +7507,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   if (showRouteCeremony) {
     emitTimeline(
       stream,
-      timelineText(override ? `You pinned ${overrideDisplayLabel(override)} — skipping the router and calling it directly.` : "I’m checking the route and preparing the selected model.")
+      timelineText(override ? `Calling ${overrideDisplayLabel(override)} directly. Skipping the router.` : "I’m checking the route and preparing the selected model.")
     );
     emitTimeline(stream, { id: randomUUID(), kind: "route", label: effectiveRouteLabel ?? pipelineName.replace(/\s*Orchestration Pipeline$/i, "").replace(/\s*Assistant Pipeline$/i, ""), pipelineName });
   }
