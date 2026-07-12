@@ -1,6 +1,6 @@
 {
   "name": "metis-orchestrator",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Desktop orchestration layer for Metis routing policy.",
   "type": "module",
   "main": "dist-electron/electron/main.js",
