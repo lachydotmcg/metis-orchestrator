@@ -150,7 +150,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   expandable to the last few warm events; only rendered when prewarmEnabled is on; (b) surface
   SessionRun.ttftMs on completed chat runs ("first token in XXXms") so warm-vs-cold is measurable
   in the UI, not just the audit log. Slim greyscale, honest (no fake pulses when nothing fired).
-- [ ] **B5.4 — DIRECTION: model-driven routing (Lachy: "its the models decision whether to route
+- [x] **B5.4 — DIRECTION: model-driven routing (Lachy: "its the models decision whether to route
   or not").** Today routing (chat vs build vs edit) is brittle regex heuristics (isBuildQuestionGuard
   / isEditIntent / hasImperativeBuildIntent — the ones PF2 just patched). Lachy wants a MODEL to make
   the call. Proposed: a fast intent-classifier call (cheap/local model) reads the prompt + context
