@@ -116,7 +116,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 - [x] **B2.2 — Benchmark Recommended-setup Model text is cut off.** RENDERER/CSS. In the
   Benchmark tab's Recommended setup card, the Model value text is clipped. Find the card and
   fix the overflow (wrap / min-width:0 / no fixed-width truncation) so the full model name shows.
-- [ ] **B2.1 — Move vision model selection to the Gallery (Lachy: tbh).** RENDERER. The vision
+- [x] **B2.1 — Move vision model selection to the Gallery (Lachy: tbh).** RENDERER. The vision
   model picker currently lives in Settings; move (or also surface) it in the Gallery where
   vision/images are actually used. Confirm the picker stays honest (Auto-detect + local
   Ollama vision models only, as restricted earlier). Lower priority ("tbh") — do after the above.

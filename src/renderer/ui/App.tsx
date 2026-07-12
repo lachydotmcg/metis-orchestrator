@@ -9520,6 +9520,10 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   // after each "Analyze board" run so the palette strips/captions show up immediately.
   const [cards, setCards] = useState<StyleCard[]>([]);
   const [analyzingBoardId, setAnalyzingBoardId] = useState<string | null>(null);
+  // Same "visionModel" store key as the Library panel's picker (Palette, L12b above) — surfaced
+  // here too (docs/DRILL_PLAN.md B2.1) so the model Analyze/Reanalyse actually use is editable
+  // right where those actions live, without duplicating the setting itself.
+  const [visionModel, setVisionModel] = useAppStoreState<string>("visionModel", DEFAULT_VISION_MODEL);
   const [hoveredImageId, setHoveredImageId] = useState<string | null>(null);
   // Selecting an image (docs/FABLE_PLANS.md section 23b): a click selects the image; its
   // title/description/mood-tags then surface for click-to-edit-in-place in the header cluster
@@ -9922,6 +9926,11 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
                 <div className="tag-row">
                   {selectedBoard.tags.map((tag) => <span key={tag}>{tag}</span>)}
                 </div>
+                <label className="gallery-vision-picker" title="Vision model used by Analyze board and Reanalyse. Same setting as the Library panel in Orchestration — changing it here changes it there too.">
+                  Vision model
+                  <CustomSelect ariaLabel="Vision model" value={visionModel} onChange={setVisionModel} options={VISION_MODEL_OPTIONS} />
+                  <small>Auto-detect lets the backend pick; otherwise a specific local model is used.</small>
+                </label>
                 <button
                   type="button"
                   disabled={!window.metisGallery || isAnalyzing || selectedBoard.images.length === 0}

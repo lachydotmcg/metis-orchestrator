@@ -10602,6 +10602,23 @@ a:focus-visible,
   font-weight: 750;
 }
 
+/* Vision model picker surfaced in the Gallery next to "Analyze board" (docs/DRILL_PLAN.md B2.1).
+   Same stacked-label grammar as .palette-option-select in the Library panel, since it's the same
+   setting (store key "visionModel") mounted a second time where it's actually used. */
+.gallery-vision-picker {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+
+.gallery-vision-picker small {
+  color: var(--faint);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
 .gallery-image-area {
   display: grid;
   gap: 14px;
