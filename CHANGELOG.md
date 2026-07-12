@@ -1,0 +1,173 @@
+# Changelog
+
+All notable changes to Metis Orchestrator are documented in this file.
+
+This is the project's first tagged release. Everything below shipped during
+active development leading up to it; there is no prior tagged version to
+diff against, so this entry reads as a feature summary rather than a delta.
+
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the app is put
+together and [`docs/ORACLE.md`](docs/ORACLE.md) for the speculative-inference
+engine referenced below.
+
+## [1.0.0] - 2026-07-12
+
+### Added
+
+- **Metis Oracle**, a speculative inference engine for pinned local Ollama
+  chat. It prewarms the model as you type (invisible prefill), drafts a
+  full speculative answer during natural typing pauses (shown dimmed as
+  "Oracle's guess"), and, when your prompt at send time exactly matches the
+  drafted one, serves the finished answer instantly instead of calling the
+  model again. Real-world testing measured **4.1x to 9.5x** faster
+  time-to-first-token. Off by default, local-only (never sends prompt
+  fragments to a cloud provider), one toggle in Settings > Experiments to
+  try it. An Oracle activity chip near the composer shows warm/draft events
+  and lets you watch it work.
+- **The orchestration graph and router policy.** A visual pipeline builder
+  with router, agent, and skill nodes; each node gets its own model,
+  gateway, and fallback chain, editable right in the UI. The router policy
+  applies per-task rules for quality, cost, and quota so easy work lands on
+  a cheap or local model and hard prompts escalate to the cloud only when
+  needed. Policies can be saved as presets, shared, or dry-run with a quick
+  Run Test without a full build.
+- **The build pipeline.** Runs go Plan, then Frontend, then Functional,
+  writing real files into your project folder, verifying themselves, and
+  self-repairing when something is off. Builds edit an existing folder in
+  place instead of clobbering it. Every model call gets its own visible
+  side-chat so you can watch what each stage said.
+- **Managed-agent fan-out.** Large build tasks decompose into named
+  sub-agents (Nyx, Talos, Echo, Atlas, Juno) that each claim disjoint file
+  territories and run in parallel, similar in spirit to Traycer but
+  local-first, so running many agents at once costs nothing. Agents talk to
+  each other over a shared agent-to-agent bus (steering, questions, review
+  requests, handoffs), rendered as their own side-chat cards, with a
+  merge/verify step at the end. Behind an opt-in flag; a fan-out failure
+  falls back to the single pipeline automatically.
+- **Permission modes and popups.** Compact permission-mode pill (Manual,
+  Accept edits, Plan, Auto, Bypass permissions) replaces the old shield
+  button. Action approval ("would you like to allow this") now rises as a
+  prominent on-screen popup with Allow once / Always allow / Deny, wired to
+  the same permission system as the inline record.
+- **Multi-question ask_user popups.** In-run questions from the model can
+  now carry up to 4 questions at once, each with option chips and an
+  optional custom free-text answer, collected in a single popup that rises
+  from the chatbox.
+- **The Manager**, a built-in assistant that knows your projects and
+  to-dos, can hold conversations on your behalf, turn loose ideas into
+  tasks, and tick off to-do items as they land. It can also take real
+  actions (fire a prompt into a project, add/assign todos, propose an
+  orchestration change) gated behind the same approval-chip ceremony as
+  everything else, never auto-executed. It rides along as a floating widget
+  you can drag anywhere on screen, including while minimized.
+- **First-run onboarding and profile.** A wizard on first launch: set your
+  name, choose Local, Cloud, or Hybrid model preference, run a hardware
+  check with model recommendations (reusing Benchmark's detection), install
+  the picks with one click, and land in the app on a real local `UserProfile`
+  (name, plan) where BYO (bring-your-own API keys) is the default plan.
+  Enter advances each step.
+- **Marketplace and registry.** Browse, install, star, and publish skills,
+  MCP connections, and orchestration presets, all reviewed and merged by
+  pull request against the separate `metis-registry` repo. Installing a
+  package is drag-and-drop; a Publish wizard generates the manifest and
+  opens a pre-filled GitHub PR. Installing a preset now applies its
+  orchestration and auto-installs any prerequisite skills. Basic MCP client
+  wiring: installed MCP packages show live status in Settings > MCP, with
+  spawn + tools/list over stdio for local npx servers, permission-gated.
+- **Knowledge Banks.** Local embeddings over a project's files ground the
+  pipeline's prompts in what's actually in the folder. Conversation
+  embedding now also indexes past conversations so relevant history can be
+  retrieved into chat, not just the current thread.
+- **Metis Gallery**, a style-memory board: drop in reference images and
+  Metis captions and sorts them automatically using local vision models. At
+  build time the pipeline retrieves the right reference image (actual
+  image bytes, not just a text caption) for vision-capable models on the
+  front-end stage, so a build can inherit a real chosen look. Includes
+  best-effort Pinterest board import.
+- **Model presets.** Named shortcuts onto a model or route (e.g. "Coding"
+  -> a specific model, "Default" -> Auto Router) selectable and deletable
+  from the model picker, backed by a dedicated presets store.
+- **Installed-model badges in the model picker.** Local models the user has
+  actually pulled (cross-referenced against Ollama's own model list) are
+  marked distinctly from ones merely available to install.
+- **Ctrl+K command palette.** Search across conversations, project files,
+  settings, and the marketplace, and jump straight to any nav view.
+- **System tray.** A native tray icon with routing status, pause/resume for
+  routines, recent runs, and close-to-tray vs quit.
+- **Per-conversation token usage line**, shown at the top of a conversation,
+  reusing the existing telemetry.
+- **Errors panel.** An in-app "last errors" view fed by the audit log, for
+  surfacing crashes/failures without digging through logs.
+- **Provider key pools.** Multiple keys/accounts per provider with rotation
+  across pooled accounts and per-account cooldowns before falling back to
+  the next provider ("Never Run Dry"), managed from Settings > Providers.
+- **Release pipeline and app icon.** Electron-builder packaging config plus
+  a GitHub Actions release workflow so tagging a release builds installers;
+  a real app icon replaces the placeholder.
+- Conversation export (copy-as-markdown and save-to-file) and auto-titled
+  conversations from a first-run summary.
+- Vision-model selection surfaced in the Gallery (in addition to Settings),
+  with auto-detect as the default.
+- Model-driven routing (an opt-in flag): a lightweight local classifier can
+  decide chat vs. build vs. edit instead of relying solely on regex intent
+  heuristics; a pinned model still bypasses the classifier entirely.
+
+### Changed
+
+- **Pulse renamed to Community** across the app: the nav item, page title,
+  and all user-facing copy.
+- **Removed the redundant "save as preset" control from the model picker.**
+  Presets are for named shortcuts (e.g. Coding -> Opus, Default -> Auto),
+  and the inline save option read as redundant when it just mirrored the
+  picked model.
+- Onboarding's model-preference step gained a third option, Hybrid, next to
+  Local and Cloud.
+- The hardcoded account email shown in the account menu was replaced with
+  the user's profile name.
+
+### Fixed
+
+- **Attached folder is now the writable project (PF1).** Attaching a
+  project folder previously only registered it as a read-only resource;
+  without an explicit writable workspace, builds silently fell back to the
+  app's internal `generated-projects` storage instead of the folder the
+  user pointed at. The folder you attach is now established as the
+  writable workspace builds write into; additional folders can still be
+  added as read-only references.
+- **Advisory/explanatory prompts route to chat, not a build (PF2).** A
+  "walk me through / explain this" prompt was being classified as a build
+  request and tried to write files. Q&A-style prompts now stay on the chat
+  fast-lane; only genuine build/change requests enter the pipeline.
+- **Pinned model runs with no orchestration and no ceremony (PF3, PF5).** A
+  pinned (non-Auto-Router) model previously still triggered the full build
+  pipeline and printed routing ceremony ("Calling X directly", "Skipping
+  the router", pipeline step names) even for a plain chat turn. A pinned
+  model is now a direct, silent call to that model with no file writes and
+  no route/step chatter, other than a slim "first token in Xms" line. Only
+  an explicit `/orchestration` command still runs the pipeline on a pinned
+  model.
+- **Pinned model tag resolution (PF4).** Pretty model names (e.g. "Qwen3
+  8B") now resolve correctly to their real Ollama tag (e.g. `qwen3:8b`)
+  instead of failing to match an installed model.
+- **Router/managed-agent writes landed in agent-memory instead of the
+  attached workspace (B2.7).** A routed run against an attached project
+  folder was resolving its file-write root to the app's internal
+  conversation storage rather than the selected project path; agent writes
+  now land in the attached workspace.
+- **Text-cutoff fixes across the UI:** the Benchmark tab's Recommended
+  setup card no longer clips the model name; the Gallery's image
+  viewer/lightbox no longer clips the opened image.
+- **Minimized/closed Manager widget now drags reliably**, including the
+  closed-state launcher button, with a click-vs-drag threshold so a clean
+  click still opens it.
+- **Cancel now stops generation near-instantly** instead of waiting for the
+  in-flight model call to finish, by threading an abort controller through
+  every provider fetch.
+- **A send no longer queues behind an in-flight Oracle draft** (previously
+  measured at 13390ms of added latency): a newer prompt now aborts and
+  replaces a stale in-flight speculative warm/draft.
+- **Uninstalling a marketplace package now revokes the permission grants**
+  it requested, instead of leaving them dangling.
+- A misleading "Ollama is not reachable" message (which could show even
+  when a model just wasn't pulled) was replaced with an actionable error
+  naming the model and the fix (start Ollama, `ollama pull <model>`).
