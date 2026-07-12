@@ -32,6 +32,34 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ LACHY BATCH 5 (2026-07-12, model picker + router intelligence)
+
+- [ ] **B5.2 — Highlight INSTALLED models in the model picker.** RENDERER. The picker lists many
+  models (great for discovery) but does not show which the user actually has installed, so Lachy
+  picked qwen3:4b he had not pulled. Cross-reference the Ollama /api/tags list (already fetched via
+  metisOllama) and mark installed local models (badge / sort installed first / de-emphasize
+  not-installed with a one-click pull). Honest: only local models have an install state.
+- [ ] **B5.3 — Pinned model = direct call, no routing ceremony + clear Ollama-down error.** When a
+  specific model is pinned, do NOT show "Routed via X" or run route ceremony — present it as a
+  direct call to that model (main.ts ~7157-7166 already bypasses the router for the primary attempt;
+  fix the LANGUAGE + skip unneeded ceremony). And replace the misleading "Ollama is not reachable
+  yet, so Metis recorded the route without running the model" (main.ts ~1008) + "no live model
+  answer was returned" (~4213) with a clear, actionable error: Ollama is not running or the model is
+  not pulled — start Ollama and run ollama pull <model>, then retry.
+- [ ] **B5.1 — Model/route PRESETS.** Instead of only "Auto Router", let the user save a named
+  preset (a model or a route config), select it in place of Auto Router, and overwrite existing
+  presets or save new ones. Renderer picker + a presets store.
+- [ ] **B5.4 — DIRECTION: model-driven routing (Lachy: "its the models decision whether to route
+  or not").** Today routing (chat vs build vs edit) is brittle regex heuristics (isBuildQuestionGuard
+  / isEditIntent / hasImperativeBuildIntent — the ones PF2 just patched). Lachy wants a MODEL to make
+  the call. Proposed: a fast intent-classifier call (cheap/local model) reads the prompt + context
+  (project attached? recent turns?) and returns {mode: chat|build|edit, model?}. Pinned model -> no
+  classifier at all (direct). Fast-path obvious cases to avoid the extra call. Behind a flag /
+  experiment like Oracle; ties to Oracle (classify + prewarm speculatively as you type). NEEDS Lachy
+  sign-off on approach before building.
+
+---
+
 ## ★ LACHY BATCH 2 (2026-07-11, live feedback mid-drill) — DO THESE NEXT, prioritized
 
 Substrate already found (don't rebuild): `PermissionRequestCard` (App.tsx ~4563) already
