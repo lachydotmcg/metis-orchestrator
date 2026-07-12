@@ -809,6 +809,13 @@ const BENCHMARK_ROLE_FILTERS: Array<{ key: string; label: string }> = [
 // persisted via useAppStoreState so it survives restarts.
 const DEFAULT_BENCHMARK_LOCAL_FIRST = true;
 
+// Stable module-level default for the prompt-prewarm experiment (docs/DRILL_PLAN.md
+// E1 v0.1b) — read via useAppStoreState("prewarmEnabled", ...) by both the chat
+// composer (to decide whether to fire the debounced warm call) and the Settings
+// "Experiments" toggle (to flip it). OFF by default; main.ts's prewarmModel() also
+// re-checks this same store key itself as defense-in-depth.
+const DEFAULT_PREWARM_ENABLED = false;
+
 // Prerequisite skills recommended alongside the model install in onboarding.
 // Matched case-insensitively against registry package names — see
 // matchSkillPackage below (docs/DRILL_PLAN.md Phase 4 follow-up).
@@ -4167,6 +4174,38 @@ function SessionComposer({
   useEffect(() => {
     setSuggestionDismissed(false);
   }, [suggestionResetKey]);
+
+  // Speculative prompt prewarm (docs/DRILL_PLAN.md E1 v0.1b) — INVISIBLE warm
+  // only, never a speculative answer and never a change to visible chat
+  // behavior. Reads the same "prewarmEnabled" store key the Settings >
+  // Experiments toggle writes; OFF by default. See main.ts's prewarmModel()
+  // for the backend half (already shipped, commit 8c2e31b).
+  const [prewarmEnabled] = useAppStoreState("prewarmEnabled", DEFAULT_PREWARM_ENABLED);
+  // Resolves the composer's pinned model (if any) to the literal Ollama tag
+  // Ollama's /api/generate expects (e.g. "qwen2.5:72b"), via the LOCAL_MODELS
+  // catalog's `name` <-> `ollamaTag` pairing. Stays null — meaning "don't
+  // warm" — whenever that resolution isn't confident: no model pinned ("Auto
+  // router" may route to a cloud model), the pinned model's provider isn't
+  // LOCAL_MODELS-tier "local", or the picker's display name has no matching
+  // LOCAL_MODELS entry to pull a real tag from. Never guesses.
+  const localPrewarmTarget = useMemo(() => {
+    if (!selectedModel || PROVIDERS[selectedModel.provider].tier !== "local") return null;
+    return LOCAL_MODELS.find((entry) => entry.name === selectedModel.model)?.ollamaTag ?? null;
+  }, [selectedModel]);
+
+  useEffect(() => {
+    if (!prewarmEnabled || !window.metisPrewarm || !localPrewarmTarget || !prompt.trim()) return;
+    const target = localPrewarmTarget;
+    const draft = prompt;
+    // ~400ms pause since the last keystroke before firing — cleared and
+    // re-armed by this effect's own cleanup on every `prompt` change, and by
+    // the same cleanup on unmount. Fire-and-forget: ignore the resolved
+    // value, swallow any rejection, never block typing or surface an error.
+    const timeoutId = window.setTimeout(() => {
+      void window.metisPrewarm?.warm(target, draft).catch(() => {});
+    }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [prompt, prewarmEnabled, localPrewarmTarget]);
 
   const showSuggestion = Boolean(suggestion) && !suggestionDismissed && !sessionBusy && prompt.trim().length === 0;
   // Mirrors main.ts's ORCHESTRATION_COMMAND_RE (/orchestration or /orch as the
@@ -12389,6 +12428,10 @@ function SettingsWorkspace({
   // "Is this done?" critic loop (docs/FABLE_PLANS.md §22) — a top-level store
   // key (not nested in AppSettings) since main.ts reads it directly by name.
   const [selfVerify, setSelfVerify] = useAppStoreState<"off" | "local" | "all">("selfVerify", "local");
+  // Prompt-prewarm experiment (docs/DRILL_PLAN.md E1 v0.1b) — same store key
+  // the chat composer's debounced warm effect reads; see the Experiments panel
+  // in the "chat" settings section below. OFF by default.
+  const [prewarmEnabled, setPrewarmEnabled] = useAppStoreState("prewarmEnabled", DEFAULT_PREWARM_ENABLED);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
@@ -13004,6 +13047,27 @@ function SettingsWorkspace({
             </button>
           </label>
           <p className="settings-hint">Prefers live `runStream` updates when the Electron bridge supports it; off falls back to a single non-streaming response per run.</p>
+        </article>
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Experiments</small>
+              <h2>Prewarm local models as you type</h2>
+            </span>
+          </header>
+          <label className="settings-field toggle-field">
+            <span>Prewarm local models as you type (experimental)</span>
+            <button
+              type="button"
+              className={`toggle-switch ${prewarmEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={prewarmEnabled}
+              onClick={() => setPrewarmEnabled(!prewarmEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">Warms the local model with your draft for a faster first response. Local models only, and off by default.</p>
         </article>
       </section>
       ) : null}

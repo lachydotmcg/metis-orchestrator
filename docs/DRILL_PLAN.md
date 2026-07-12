@@ -132,6 +132,9 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   the composer (~400ms pause) when the flag is on AND the target is a local model, plus a
   Settings experiments toggle. v0.2 later (only if v0.1 shows a real TTFT win): speculative DRAFT
   generation shown dim + instantly confirmed on match. Measure before expanding.
+  STATUS: Oracle v0.1 SHIPPED — backend prewarm engine (8c2e31b), renderer composer debounce +
+  Settings Experiments toggle (only warms when a LOCAL model is pinned), TTFT measurement (525b7c6).
+  NEEDS LIVE TEST for the warm-vs-cold TTFT delta. v0.2 speculative draft is future, gated on a measured win.
 - [ ] **E1 measurement — TTFT (time to first token).** Instrument ms from request-sent to
   first streamed token for chat/session runs; store it on the run/telemetry and surface it so
   the prewarm benefit is measurable (warm vs cold). Lachy wants to ADVERTISE the real number on
