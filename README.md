@@ -22,11 +22,12 @@ Because no single model is best at everything. One plans better, another writes 
 
 ## The Metis stack
 
-Metis is three layers, one story:
+Metis is one story, layer by layer:
 
 - **Metis Benchmark** measures local models: quality x hardware x dollars.
 - **Metis Policy** is the routing brain the benchmark proved out.
-- **Metis Orchestrator** (this app) is where that policy actually runs.
+- **Metis Oracle** is the speculative engine: it prewarms, drafts, and prepares your answer while you are still typing.
+- **Metis Orchestrator** (this app) is where all of it runs.
 
 ## Feature tour
 

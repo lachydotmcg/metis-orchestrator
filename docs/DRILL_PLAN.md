@@ -87,6 +87,29 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ LACHY BATCH 8 (2026-07-12, Oracle everywhere + branding)
+
+- [x] **B8.1 - Metis Oracle joins the stack in the README** (done directly). Metis Gallery is
+  HELD BACK from the stack until the Gallery gets more work (Lachy: hold off until we have
+  worked on it more; future: more specific per-image descriptions).
+- [ ] **B8.2 - O5 EXPANDED: Oracle for ALL cloud models + speculative pre-routing.** Lachy: use
+  Oracle for any and all cloud models, and it could even plan WHERE TO ROUTE before you send.
+  (a) Cloud prewarm/draft behind an explicit paid opt-in (DeepSeek first, automatic context
+  caching; Anthropic prompt caching next; honest cost copy, hard debounce). (b) SPECULATIVE
+  ROUTING: while typing on Auto Router, Oracle runs the route decision (decidePolicy +
+  overrides) on the draft so the route is already chosen at send - zero routing latency - and
+  can prewarm the CHOSEN target. Fable-direct per the Oracle rule.
+- [ ] **B8.3 - Future: split Metis Oracle (and later Metis Gallery) into their own repos and
+  open-source the specific technologies.** Oracle = the prewarm/draft/serve engine as a
+  standalone lib; Gallery = the style-memory concept once matured. Not yet scheduled.
+- [ ] **B8.4 - Preset save copy confusion.** Lachy: why is Save Qwen3 8B as preset an option?
+  Its literally just a model. The affordance is for NAMED shortcuts (Coding -> Opus, Default ->
+  Auto) and future route-configs, but the inline copy reads redundant when it just mirrors the
+  picked model. Polish: subdue the control (e.g. a small Save current selection... link at the
+  bottom of the Presets group only, clearer copy, maybe hide when a preset already matches).
+
+---
+
 ## ★ LACHY BATCH 7 (2026-07-12, parked notes - Lachy: note down and forget for now)
 
 - [ ] **B7.1 - Per-conversation model selection.** The pinned model / preset choice should be
