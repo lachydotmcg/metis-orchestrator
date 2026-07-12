@@ -5428,6 +5428,96 @@ function shouldRunBuildPipeline(prompt: string, decision: RouteDecision, decisio
   return BUILD_TASK_TYPES.has(decision.task_type);
 }
 
+// --- Model-driven routing (DRILL_PLAN B5.4, opt-in experiment) ---
+// shouldRunBuildPipeline above is a set of regex heuristics. This is an
+// OPT-IN alternative (default OFF via the `modelDrivenRoutingEnabled` store
+// key, read by runSession) that asks a fast LOCAL model to classify the
+// prompt instead of pattern-matching it.
+//
+// Deliberately NOT built on callStageWithFallback (the helper planFanoutTasks
+// below and the Manager chat chain use for their own "one cheap local call")
+// — that path rotates through a stage's full provider/account fallback chain
+// with no bounded timeout, which is wrong for a routing gate that must stay
+// fast and must never block a turn on a slow or unreachable model. Instead
+// this talks straight to Ollama with its own short AbortController timeout,
+// mirroring the existing prewarmModel/draftModel fetch pattern (same
+// OLLAMA_BASE_URL, same fail-soft try/catch/finally shape) — no new provider
+// path, just the existing Ollama generate endpoint used a third way.
+//
+// FAIL-SOFT CONTRACT: returns null on ANY failure — Ollama unreachable,
+// aborted (timeout), non-OK response, unparseable JSON, a missing/invalid
+// "mode" field, or a confidence score below MODEL_ROUTER_MIN_CONFIDENCE. The
+// only caller (runSession) treats null exactly like "the flag is off": it
+// falls straight through to shouldRunBuildPipeline, unconditionally. This
+// function can never throw.
+const MODEL_ROUTER_TIMEOUT_MS = 4000;
+const MODEL_ROUTER_MIN_CONFIDENCE = 0.55;
+
+type ModelRouteMode = "chat" | "build" | "edit";
+
+async function classifyRouteWithModel(prompt: string, editableProject: boolean): Promise<{ mode: ModelRouteMode; confidence?: number } | null> {
+  const trimmed = prompt.trim();
+  if (!trimmed) return null;
+  const model = localStageRef().model;
+  const classifyPrompt = [
+    `You are a routing classifier inside a coding assistant. Read the user's message and decide how it should be handled.`,
+    `Reply with STRICT JSON only, no prose, no markdown, no code fences, in exactly this shape:`,
+    `{"mode":"chat"|"build"|"edit","confidence":0.0-1.0}`,
+    `"chat" = the user is asking a question, wants an explanation, or explicitly does not want files created or changed.`,
+    `"build" = the user wants a brand-new project, page, app, or file created from scratch.`,
+    `"edit" = the user wants to change, fix, or add to an EXISTING project's files.`,
+    editableProject
+      ? `A project with existing files is currently attached to this conversation, so "edit" is a real option.`
+      : `No project with files is currently attached, so "edit" cannot be correct right now.`,
+    ``,
+    `User message:`,
+    trimmed
+  ].join("\n");
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), MODEL_ROUTER_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({
+        model,
+        prompt: classifyPrompt,
+        stream: false,
+        keep_alive: "5m",
+        options: { num_predict: 48, temperature: 0 }
+      })
+    });
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { response?: string };
+    const raw = typeof payload.response === "string" ? payload.response : "";
+    if (!raw.trim()) return null;
+    const cleanOutput = stripThinkBlocks(raw);
+    const jsonMatch = cleanOutput.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonMatch[0]);
+    } catch {
+      return null;
+    }
+    if (!parsed || typeof parsed !== "object") return null;
+    const mode = (parsed as { mode?: unknown }).mode;
+    if (mode !== "chat" && mode !== "build" && mode !== "edit") return null;
+    const confidenceRaw = (parsed as { confidence?: unknown }).confidence;
+    const confidence = typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw) ? confidenceRaw : undefined;
+    if (confidence !== undefined && confidence < MODEL_ROUTER_MIN_CONFIDENCE) return null;
+    return { mode, confidence };
+  } catch {
+    // Ollama unreachable, aborted (timeout), malformed response, or any other
+    // failure — the caller falls back to the regex gate unconditionally.
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 // Bug L4b: a trivial "Test"/"hi" turn was paying for a full project-snapshot
 // walk + knowledge-bank retrieval before the model ever saw the prompt — real
 // latency for a message that needed neither. This gate is deliberately
@@ -7222,12 +7312,35 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const writable = await resolveActiveProjectWorkspace(input.projectPath);
   const editableProject = writable ? await projectHasSourceFiles(writable.path) : false;
 
+  // Model-driven routing (DRILL_PLAN B5.4, opt-in experiment, default OFF):
+  // when the `modelDrivenRoutingEnabled` store flag is on, ask
+  // classifyRouteWithModel to decide chat/build/edit instead of the regex
+  // gate below. Only even attempted when NOT forced (/orchestration already
+  // decided) and NOT pinned (PF3: a pinned model means no orchestration, so
+  // the classifier must never run in that case either) — the exact same two
+  // conditions the regex gate is already guarded by just below. Left null —
+  // and therefore inert — whenever the flag is off or the classifier fails
+  // for any reason, so modelBuildPipelineDecision ?? shouldRunBuildPipeline(...)
+  // in the condition below falls through to shouldRunBuildPipeline exactly as
+  // it did before this feature existed.
+  let modelBuildPipelineDecision: boolean | null = null;
+  if (!forceBuildPipeline && !input.modelOverride && (await readStoreValue<boolean>("modelDrivenRoutingEnabled", false))) {
+    const modelRouteDecision = await classifyRouteWithModel(prompt, editableProject);
+    if (modelRouteDecision) {
+      modelBuildPipelineDecision = modelRouteDecision.mode !== "chat" && !isBuildOptOut(prompt);
+      emitTimeline(stream, timelineText(`Router model chose: ${modelRouteDecision.mode}.`));
+    }
+  }
+
   // Real multi-model build pipeline (plan -> front end -> functional) for "build me X".
   // A PINNED model (not Auto Router) means a direct chat with that model, so automatic
   // orchestration never fires when one is pinned (Lachy: "if the model is not on Auto Router,
   // there should be NO orchestration"). Only an explicit /orchestration command
   // (forceBuildPipeline) still runs the pipeline with a pinned model leading the stages.
-  if (forceBuildPipeline || (!input.modelOverride && shouldRunBuildPipeline(prompt, effectiveDecision, decision.source, editableProject))) {
+  if (
+    forceBuildPipeline ||
+    (!input.modelOverride && (modelBuildPipelineDecision ?? shouldRunBuildPipeline(prompt, effectiveDecision, decision.source, editableProject)))
+  ) {
     const singleFile = wantsSingleFileFrontend(prompt);
     emitTimeline(stream, timelineText("I’ll run this through the build pipeline and turn the model output into real project files."));
     if (forceBuildPipeline) {
