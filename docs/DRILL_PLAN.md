@@ -70,7 +70,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 - [x] **B3.1 — Rename Pulse to Community app-wide.** RENDERER. The Pulse nav item / page title /
   any user-facing "Pulse" string becomes "Community". Grep App.tsx (and the sidebar order + any
   labels) for Pulse and rename the user-facing copy; keep internal keys stable unless trivial.
-- [ ] **B3.2 — User profile + plan (replaces the hardcoded "Pro" badge).** Lachy wants real
+- [x] **B3.2 — User profile + plan (replaces the hardcoded "Pro" badge).** Lachy wants real
   accounts: set your name, and a plan concept where BYO (bring-your-own keys) is the default,
   with paid subscription tiers as a FUTURE product decision (do NOT build payments now). (a)
   BACKEND (main.ts + contracts + preload): a UserProfile { name?, plan: "byo", modelPreference?:
@@ -81,7 +81,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   STATUS: (a) BACKEND DONE — UserProfile/MetisPlan contracts, metis-store/profile.json store
   (readUserProfile/writeUserProfile, never throws, BYO default), metis-profile:get/set ipc,
   metisProfile preload + global.d.ts. (b) RENDERER (name UI + replace Pro badge) still to build.
-- [ ] **B3.3 — First-run onboarding experience.** RENDERER (reuses Benchmark). On first launch
+- [x] **B3.3 — First-run onboarding experience.** RENDERER (reuses Benchmark). On first launch
   (profile.onboardedAt absent), run a wizard: (1) welcome + set your name, (2) preference Local
   Models or Cloud, (3) hardware check + model recommendations (reuse the Benchmark's hardware
   detection + recommend flow), (4) install the picks (reuse the one-click / drag-drop Ollama

@@ -9141,6 +9141,188 @@ a:focus-visible,
   border-color: #244932;
 }
 
+/* ---- First-run onboarding overlay (docs/DRILL_PLAN.md B3.2b + B3.3) ---- */
+
+.onboarding-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 500;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(10 10 10 / 0.72);
+  backdrop-filter: blur(2px);
+}
+
+.onboarding-card {
+  width: min(560px, 100%);
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 28px 30px 26px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  box-shadow: 0 24px 80px rgb(0 0 0 / 0.55);
+  animation: chatbox-popup-rise 0.18s ease-out;
+}
+
+.onboarding-dots {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 22px;
+}
+
+.onboarding-dot {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  color: var(--faint);
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 800;
+}
+
+.onboarding-dot.active {
+  color: var(--accent-text);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.onboarding-dot.done {
+  color: var(--soft);
+  background: var(--surface-2);
+  border-color: var(--soft);
+}
+
+.onboarding-step {
+  display: grid;
+  gap: 14px;
+}
+
+.onboarding-step h1 {
+  margin: 0;
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.onboarding-step > p {
+  margin: 0;
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.onboarding-deeplink {
+  display: flex;
+}
+
+.onboarding-pref-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.onboarding-pref-card {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+  padding: 14px;
+  color: var(--soft);
+  text-align: left;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.onboarding-pref-card:hover {
+  border-color: var(--soft);
+}
+
+.onboarding-pref-card.selected {
+  color: var(--text);
+  background: var(--surface-2);
+  border-color: var(--accent);
+}
+
+.onboarding-pref-card strong {
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.onboarding-pref-card small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.onboarding-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.onboarding-actions-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.onboarding-skip {
+  padding: 0 4px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.onboarding-skip:hover {
+  color: var(--soft);
+  text-decoration: underline;
+}
+
+.primary-action:disabled {
+  color: var(--faint);
+  background: var(--node);
+  cursor: default;
+}
+
+.primary-action:disabled:hover {
+  background: var(--node);
+}
+
+.onboarding-resume {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 500;
+}
+
+.onboarding-resume-btn {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 14px;
+  color: var(--accent-text);
+  background: var(--accent);
+  border: 0;
+  border-radius: 999px;
+  font-size: 12.5px;
+  font-weight: 800;
+  box-shadow: 0 14px 40px rgb(0 0 0 / 0.45);
+}
+
+.onboarding-resume-btn:hover {
+  background: var(--soft);
+}
+
 /* ---- Benchmark: hardware + recommended models ---- */
 
 .bench-grid {

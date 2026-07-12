@@ -38,6 +38,7 @@ import {
   CheckCircle2,
   Circle,
   ClipboardList,
+  Cloud,
   Copy,
   Cpu,
   Download,
@@ -54,6 +55,7 @@ import {
   HelpCircle,
   ImageIcon,
   ImagePlus,
+  KeyRound,
   Layers,
   ListTodo,
   LogOut,
@@ -126,6 +128,7 @@ import type {
   ProjectWorkspace,
   ProjectWorkspaceResource,
   AgentOperation,
+  MetisPlan,
   PulseFeed,
   RegistryPackage,
   RegistryPackageKind,
@@ -140,6 +143,7 @@ import type {
   SecretStatus,
   StyleCard,
   UpdateCheckResult,
+  UserProfile,
   UserQuestionAnswer
 } from "../../shared/runtime-contracts";
 
@@ -455,6 +459,15 @@ type ConversationTurn = {
 
 const ACCOUNT_EMAIL = "bytehavencreations@gmail.com";
 const METIS_REPO_URL = "https://github.com/lachydotmcg/metis-orchestrator";
+/** Fallback owner display name when no profile name is set yet (matches the
+ *  pre-profile hardcoded placeholder so first paint never looks broken). */
+const DEFAULT_PROFILE_NAME = "bro";
+/** Human label for each MetisPlan value (docs/DRILL_PLAN.md B3.2b) — "byo" is
+ *  the only plan today; this map exists so a future paid tier only needs a
+ *  new entry here, not a new render branch. */
+const PLAN_LABELS: Record<MetisPlan, string> = { byo: "BYO" };
+/** Step labels for the first-run onboarding stepper (docs/DRILL_PLAN.md B3.2b/B3.3). */
+const ONBOARDING_STEP_LABELS = ["Welcome", "Preference", "Hardware", "Install", "Keys"] as const;
 
 /** Lets deeply-nested "Preview" links (inside CompletedRun / TimelineOperations)
  *  open the live preview rail without prop-drilling through every layer. */
@@ -1435,6 +1448,63 @@ export function App(): JSX.Element {
   const [openConversation, setOpenConversation] = useState<ConversationRecord | null>(null);
   const initialNavResolved = useRef(false);
 
+  // Owner profile (docs/DRILL_PLAN.md B3.2b/B3.3) — fetched once from the
+  // metisProfile bridge (undefined in the preview, where onboarding never
+  // shows). `profileChecked` gates the onboarding decision so a fresh app
+  // never flashes the overlay before the real profile has loaded.
+  const [ownerProfile, setOwnerProfile] = useState<UserProfile | null>(null);
+  const [profileChecked, setProfileChecked] = useState(false);
+  // Settings > Profile's "Add a key now" deep link (docs/DRILL_PLAN.md B3.2b
+  // step 5) stages this so SettingsWorkspace opens straight on Providers;
+  // SettingsWorkspace resets it back to "general" once consumed so a later
+  // plain Settings visit doesn't stick on Providers.
+  const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>("general");
+
+  useEffect(() => {
+    if (!window.metisProfile) {
+      setProfileChecked(true);
+      return;
+    }
+    let alive = true;
+    void window.metisProfile
+      .get()
+      .then((loaded) => {
+        if (!alive) return;
+        setOwnerProfile(loaded);
+        setProfileChecked(true);
+      })
+      .catch(() => {
+        if (alive) setProfileChecked(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const updateProfile = useCallback(async (patch: Partial<UserProfile>): Promise<void> => {
+    if (!window.metisProfile) {
+      // Preview / no bridge: honest local-only fallback so the Settings
+      // profile field still reflects an edit instead of silently no-op'ing.
+      setOwnerProfile((current) => (current ? { ...current, ...patch } : current));
+      return;
+    }
+    const next = await window.metisProfile.set(patch);
+    setOwnerProfile(next);
+  }, []);
+
+  const showOnboarding = profileChecked && Boolean(window.metisProfile) && Boolean(ownerProfile) && !ownerProfile?.onboardedAt;
+  const profileDisplayName = ownerProfile?.name?.trim() || DEFAULT_PROFILE_NAME;
+  const profilePlanLabel = ownerProfile ? PLAN_LABELS[ownerProfile.plan] : PLAN_LABELS.byo;
+
+  function openBenchmarkFromOnboarding(): void {
+    setActiveNav("benchmark");
+  }
+
+  function openProvidersFromOnboarding(): void {
+    setSettingsInitialSection("providers");
+    setActiveNav("settings");
+  }
+
   // Parallel sessions phase A (docs/FABLE_PLANS.md section 3) — pending-turn
   // and busy state live HERE, not inside NewSessionWorkspace, because that
   // component remounts (key={sessionKey}) every time the user opens a new
@@ -1689,6 +1759,8 @@ export function App(): JSX.Element {
           onTogglePinned={toggleConversationPinned}
           pinnedConversationIds={pinnedConversationIds}
           pinnedConversations={pinnedConversations}
+          planLabel={profilePlanLabel}
+          profileName={profileDisplayName}
           projects={sidebarProjects}
         />
       ) : null}
@@ -1718,13 +1790,229 @@ export function App(): JSX.Element {
       {activeNav === "manager" ? <ManagerWorkspace onNavigate={setActiveNav} /> : null}
       {activeNav === "pulse" ? <PulseWorkspace /> : null}
       {activeNav === "settings" ? (
-        <SettingsWorkspace onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")} onOpenMcpMarketplace={openMcpMarketplace} />
+        <SettingsWorkspace
+          onBack={() => setActiveNav(benchmarkWizard.status === "complete" ? "orchestration" : "benchmark")}
+          onOpenMcpMarketplace={openMcpMarketplace}
+          initialSection={settingsInitialSection}
+          onInitialSectionConsumed={() => setSettingsInitialSection("general")}
+          profile={ownerProfile}
+          onProfileChange={updateProfile}
+        />
       ) : null}
       {activeNav !== "session" && activeNav !== "graph" && activeNav !== "benchmark" && activeNav !== "gallery" && activeNav !== "marketplace" && activeNav !== "routines" && activeNav !== "todo" && activeNav !== "manager" && activeNav !== "pulse" && activeNav !== "settings" ? (
         <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} galleryVisuals={galleryVisuals} />
       ) : null}
       </div>
       <ManagerWidget onNavigate={setActiveNav} />
+      {showOnboarding && ownerProfile ? (
+        <FirstRunOnboarding
+          profile={ownerProfile}
+          onOpenBenchmark={openBenchmarkFromOnboarding}
+          onOpenProviders={openProvidersFromOnboarding}
+          onFinish={(patch) => void updateProfile(patch)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/** First-run onboarding overlay (docs/DRILL_PLAN.md B3.2b + B3.3) — shown once, above
+ *  everything, only when the metisProfile bridge exists and the local profile has never
+ *  finished onboarding (`onboardedAt` unset). Walks the owner through a name, a
+ *  local-vs-cloud model preference, hardware picks and local-model install (both
+ *  deep-linked into the existing BenchmarkWorkspace rather than reimplemented here — that
+ *  workspace already owns GPU-based recommendation and one-click Ollama pulls), and a short
+ *  BYO-keys explainer that can deep-link to Settings > Providers. Finishing OR skipping
+ *  always stamps `onboardedAt` so the overlay never reappears once dismissed. */
+function FirstRunOnboarding({
+  profile,
+  onOpenBenchmark,
+  onOpenProviders,
+  onFinish
+}: {
+  profile: UserProfile;
+  onOpenBenchmark: () => void;
+  onOpenProviders: () => void;
+  onFinish: (patch: Partial<UserProfile>) => void;
+}): JSX.Element {
+  const [step, setStep] = useState(1);
+  // Deep-linking into Benchmark (steps 3/4) hides the overlay so the owner can
+  // actually use that page, replaced by a small floating pill to come back —
+  // the wizard step itself stays intact underneath since this component never
+  // unmounts while onboarding is incomplete.
+  const [minimized, setMinimized] = useState(false);
+  const [name, setName] = useState(profile.name ?? "");
+  const [preference, setPreference] = useState<"local" | "cloud" | null>(profile.modelPreference ?? null);
+
+  function finish(): void {
+    const trimmed = name.trim();
+    onFinish({
+      name: trimmed || undefined,
+      modelPreference: preference ?? undefined,
+      onboardedAt: new Date().toISOString()
+    });
+  }
+
+  function addKeyNow(): void {
+    finish();
+    onOpenProviders();
+  }
+
+  function deepLinkBenchmark(): void {
+    setMinimized(true);
+    onOpenBenchmark();
+  }
+
+  if (minimized) {
+    return (
+      <div className="onboarding-resume">
+        <button type="button" className="onboarding-resume-btn" onClick={() => setMinimized(false)}>
+          <Sparkles size={14} />
+          Continue setup, step {step} of {ONBOARDING_STEP_LABELS.length}
+          <ArrowRight size={14} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="onboarding-overlay">
+      <div className="onboarding-card" role="dialog" aria-modal="true" aria-label="Welcome to Metis">
+        <div className="onboarding-dots" aria-hidden="true">
+          {ONBOARDING_STEP_LABELS.map((label, index) => {
+            const stepNumber = index + 1;
+            return (
+              <span key={label} className={`onboarding-dot ${step === stepNumber ? "active" : step > stepNumber ? "done" : ""}`}>
+                {step > stepNumber ? <Check size={11} /> : stepNumber}
+              </span>
+            );
+          })}
+        </div>
+
+        {step === 1 ? (
+          <section className="onboarding-step">
+            <span className="hero-icon">
+              <Sparkles size={20} />
+            </span>
+            <h1>Welcome to Metis</h1>
+            <p>Let&rsquo;s get your workspace set up. It only takes a minute, and you can change any of this later in Settings.</p>
+            <label className="settings-field">
+              <span>Your name</span>
+              <input autoFocus value={name} placeholder="What should we call you?" onChange={(event) => setName(event.target.value)} />
+            </label>
+            <div className="onboarding-actions">
+              <button type="button" className="onboarding-skip" onClick={finish}>
+                Do this later
+              </button>
+              <button type="button" className="primary-action" onClick={() => setStep(2)}>
+                Continue <ArrowRight size={15} />
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {step === 2 ? (
+          <section className="onboarding-step">
+            <h1>How do you want to run models?</h1>
+            <p>You can mix both later, this just sets a starting point.</p>
+            <div className="onboarding-pref-grid">
+              <button type="button" className={`onboarding-pref-card ${preference === "local" ? "selected" : ""}`} onClick={() => setPreference("local")}>
+                <HardDrive size={18} />
+                <strong>Local models</strong>
+                <small>Keep it free and private. Runs on your own hardware through Ollama.</small>
+              </button>
+              <button type="button" className={`onboarding-pref-card ${preference === "cloud" ? "selected" : ""}`} onClick={() => setPreference("cloud")}>
+                <Cloud size={18} />
+                <strong>Cloud</strong>
+                <small>Use hosted models instead. No local install needed.</small>
+              </button>
+            </div>
+            <div className="onboarding-actions">
+              <button type="button" className="ghost-action" onClick={() => setStep(1)}>
+                <ArrowLeft size={14} /> Back
+              </button>
+              <button type="button" className="primary-action" disabled={!preference} onClick={() => setStep(3)}>
+                Continue <ArrowRight size={15} />
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {step === 3 ? (
+          <section className="onboarding-step">
+            <h1>{preference === "cloud" ? "Cloud needs no local install" : "Check your hardware"}</h1>
+            {preference === "cloud" ? (
+              <p>You picked cloud, so there&rsquo;s nothing to install locally. Metis routes prompts to whichever providers you connect in Settings. You can still add local models anytime from Benchmark.</p>
+            ) : (
+              <>
+                <p>Metis already matches your hardware to a recommended local setup on the Benchmark page, no run required. Open it to check your hardware and see the picks, then come back here to continue.</p>
+                <div className="onboarding-deeplink">
+                  <button type="button" className="ghost-action" onClick={deepLinkBenchmark}>
+                    <Cpu size={15} /> Open Benchmark
+                  </button>
+                </div>
+              </>
+            )}
+            <div className="onboarding-actions">
+              <button type="button" className="ghost-action" onClick={() => setStep(2)}>
+                <ArrowLeft size={14} /> Back
+              </button>
+              <button type="button" className="primary-action" onClick={() => setStep(4)}>
+                Continue <ArrowRight size={15} />
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {step === 4 ? (
+          <section className="onboarding-step">
+            <h1>{preference === "cloud" ? "Nothing to install" : "Install your recommended models"}</h1>
+            {preference === "cloud" ? (
+              <p>Cloud preference selected, so this step is skippable. You can install local models anytime from Benchmark if you change your mind.</p>
+            ) : (
+              <>
+                <p>The Benchmark page has a one-click install for the models it just recommended, pulled straight from Ollama with live progress.</p>
+                <div className="onboarding-deeplink">
+                  <button type="button" className="ghost-action" onClick={deepLinkBenchmark}>
+                    <Download size={15} /> Open Benchmark to install
+                  </button>
+                </div>
+              </>
+            )}
+            <div className="onboarding-actions">
+              <button type="button" className="ghost-action" onClick={() => setStep(3)}>
+                <ArrowLeft size={14} /> Back
+              </button>
+              <button type="button" className="primary-action" onClick={() => setStep(5)}>
+                Continue <ArrowRight size={15} />
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {step === 5 ? (
+          <section className="onboarding-step">
+            <h1>Bring your own keys</h1>
+            <p>
+              Metis is free to use, there&rsquo;s no subscription. You bring your own provider keys (Anthropic, OpenAI, Gemini, DeepSeek and more), or a
+              single OpenRouter key covers most of them. Your plan is <strong>BYO</strong>, always.
+            </p>
+            <div className="onboarding-actions">
+              <button type="button" className="ghost-action" onClick={() => setStep(4)}>
+                <ArrowLeft size={14} /> Back
+              </button>
+              <div className="onboarding-actions-right">
+                <button type="button" className="onboarding-skip" onClick={finish}>
+                  Skip for now
+                </button>
+                <button type="button" className="primary-action" onClick={addKeyNow}>
+                  <KeyRound size={15} /> Add a key now
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -2068,6 +2356,8 @@ function Sidebar({
   onTogglePinned,
   pinnedConversationIds,
   pinnedConversations,
+  planLabel,
+  profileName,
   projects
 }: {
   activeNav: NavKey;
@@ -2094,6 +2384,11 @@ function Sidebar({
   onTogglePinned: (id: string) => void;
   pinnedConversationIds: string[];
   pinnedConversations: { id: string; title: string }[];
+  /** Plan label from the owner profile (docs/DRILL_PLAN.md B3.2b) — "BYO" today. */
+  planLabel: string;
+  /** Owner display name from the profile, already falling back to the
+   *  default placeholder when no name is set (see DEFAULT_PROFILE_NAME). */
+  profileName: string;
   projects: ProjectFolder[];
 }): JSX.Element {
   const [accountOpen, setAccountOpen] = useState(false);
@@ -2497,8 +2792,8 @@ function Sidebar({
           </>
         ) : null}
         <button className={`account-row ${accountOpen || activeNav === "settings" ? "active" : ""}`} type="button" onClick={() => setAccountOpen((open) => !open)}>
-          <span>bro</span>
-          <small>Pro</small>
+          <span>{profileName}</span>
+          <small>{planLabel}</small>
           <ChevronDown size={15} />
         </button>
       </div>
@@ -12035,8 +12330,49 @@ const SETTINGS_SECTION_META: Record<SettingsSection, { subtitle: string; title: 
   about: { title: "About", subtitle: "App version, update check, and project links." }
 };
 
-function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => void; onOpenMcpMarketplace: () => void }): JSX.Element {
+function SettingsWorkspace({
+  onBack,
+  onOpenMcpMarketplace,
+  initialSection,
+  onInitialSectionConsumed,
+  profile,
+  onProfileChange
+}: {
+  onBack: () => void;
+  onOpenMcpMarketplace: () => void;
+  /** Deep-link target set by the first-run onboarding overlay's "Add a key
+   *  now" step (docs/DRILL_PLAN.md B3.2b) — read once on mount only. */
+  initialSection?: SettingsSection;
+  /** Fires once, right after `initialSection` is applied, so the caller can
+   *  reset its staged value back to "general" without racing the mount that
+   *  needs to read it first. */
+  onInitialSectionConsumed?: () => void;
+  profile: UserProfile | null;
+  onProfileChange: (patch: Partial<UserProfile>) => Promise<void>;
+}): JSX.Element {
   const [section, setSection] = useState<SettingsSection>("general");
+  useEffect(() => {
+    if (initialSection && initialSection !== "general") {
+      setSection(initialSection);
+      onInitialSectionConsumed?.();
+    }
+    // Deliberately mount-only: initialSection is a one-shot deep-link value,
+    // not something this view should keep resyncing to on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Settings > Profile (docs/DRILL_PLAN.md B3.2b step 4) — local draft so
+  // typing doesn't round-trip through the bridge on every keystroke; commits
+  // on blur. Resyncs if the underlying profile changes from elsewhere (e.g.
+  // onboarding finishing while Settings happens to already be open).
+  const [profileNameDraft, setProfileNameDraft] = useState(profile?.name ?? "");
+  useEffect(() => {
+    setProfileNameDraft(profile?.name ?? "");
+  }, [profile?.name]);
+  function commitProfileName(): void {
+    const trimmed = profileNameDraft.trim();
+    if (trimmed === (profile?.name ?? "")) return;
+    void onProfileChange({ name: trimmed || undefined });
+  }
   const [navQuery, setNavQuery] = useState("");
   const [rawSettings, setSettings] = useAppStoreState("settings", DEFAULT_SETTINGS);
   // Backfills fields added to AppSettings after a store blob was already
@@ -12300,6 +12636,28 @@ function SettingsWorkspace({ onBack, onOpenMcpMarketplace }: { onBack: () => voi
 
       {section === "general" ? (
       <section className="settings-grid">
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Profile</small>
+              <h2>{profile?.name?.trim() || DEFAULT_PROFILE_NAME}</h2>
+            </span>
+            <span className="status-pill">{profile ? PLAN_LABELS[profile.plan] : PLAN_LABELS.byo}</span>
+          </header>
+          <p>Your local Metis profile. This isn&rsquo;t a server account, just a per-install identity kept on this machine. Change your name here anytime without redoing onboarding.</p>
+          <label className="settings-field">
+            <span>Your name</span>
+            <input
+              value={profileNameDraft}
+              placeholder={DEFAULT_PROFILE_NAME}
+              disabled={!window.metisProfile}
+              onChange={(event) => setProfileNameDraft(event.target.value)}
+              onBlur={commitProfileName}
+            />
+          </label>
+          {!window.metisProfile ? <p className="settings-warning">Profile editing needs the desktop app; this preview has no profile bridge.</p> : null}
+        </article>
+
         <article className="settings-panel policy-panel">
           <header>
             <span>
