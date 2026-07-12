@@ -41,7 +41,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ## ★ LACHY BATCH 6 (2026-07-12, pinned-chat silence + Oracle preview) — DRILL HARD
 
-- [ ] **PF5 — Pinned chat: ZERO ceremony (Lachy: "just dont show that man just fucking call the
+- [x] **PF5 — Pinned chat: ZERO ceremony (Lachy: "just dont show that man just fucking call the
   model").** His pinned run showed: "Calling Qwen Qwen3 8B directly. Skipping the router." +
   "Called Qwen Qwen3 8B directly" + steps "Run Front End Orchestration Pipeline / Call selected
   model / Write response and audit trace". ALL of it must go for pinned chat. (a) BACKEND: when
@@ -52,7 +52,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   the model name alone when it already carries the brand. (b) RENDERER: for pinned runs hide the
   route/Called-directly line entirely; KEEP "first token Xms" (Lachy engaged with it) as the only
   slim run metadata. Old routed runs unchanged.
-- [ ] **O2 — Oracle v0.2: show the precognition (Lachy: "I do want to see a preview of what the
+- [x] **O2 — Oracle v0.2: show the precognition (Lachy: "I do want to see a preview of what the
   ai is thinking... for now atleast").** (a) BACKEND: metis-prewarm:draft(model, draft) -> { text }
   - same guards as warm (flag, local-only, dedupe, in-flight, fail-soft) but generates a SHORT
   speculative draft (num_predict ~96-128, keep_alive 5m) and RETURNS the text instead of

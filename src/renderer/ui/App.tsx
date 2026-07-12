@@ -857,6 +857,30 @@ type OracleActivity = { phase: "idle" } | { phase: "warming"; model: string } | 
 const ORACLE_IDLE: OracleActivity = { phase: "idle" };
 const ORACLE_LOG_CAP = 5;
 
+/** A speculative "what would the model say" preview (docs/DRILL_PLAN.md O2b —
+ *  "I do want to see a preview of what the ai is thinking"). Resolved from
+ *  window.metisPrewarm.draft() on the slower 800ms debounce below; `thoughts`
+ *  is only present when the backend surfaces a reasoning/thinking trace ahead
+ *  of the final text. Shown ONLY in the Oracle popover — never inserted into
+ *  the chat transcript or the composer, since it's a guess, not an answer. */
+type OracleDraftResult = { text: string; thoughts?: string };
+
+/** Local, contained type for the not-yet-landed metisPrewarm.draft bridge
+ *  (docs/DRILL_PLAN.md O2b). A concurrent backend round this same batch is
+ *  adding metis-prewarm:draft to main.ts/preload/src/renderer/global.d.ts —
+ *  those files are off limits for this round, so this mirrors the expected
+ *  shape locally instead of editing the real declaration. Every call site
+ *  optional-chains through `?.metisPrewarm?.draft?.(...)` and treats a
+ *  missing method or an undefined/null resolution as "no draft available" —
+ *  correct whether the backend half has landed yet or not. Once
+ *  global.d.ts's real metisPrewarm gains this field, this cast is redundant
+ *  but never wrong, so nothing here needs to change when it does. */
+type PrewarmBridgeWithDraft = {
+  metisPrewarm?: {
+    draft?: (model: string, draft: string) => Promise<OracleDraftResult | null>;
+  };
+};
+
 // Prerequisite skills recommended alongside the model install in onboarding.
 // Matched case-insensitively against registry package names — see
 // matchSkillPackage below (docs/DRILL_PLAN.md Phase 4 follow-up).
@@ -4350,6 +4374,15 @@ function SessionComposer({
   const [oracleActivity, setOracleActivity] = useState<OracleActivity>(ORACLE_IDLE);
   const [oracleLog, setOracleLog] = useState<OracleWarmEvent[]>([]);
   const [oracleLogOpen, setOracleLogOpen] = useState(false);
+  // Latest speculative draft (docs/DRILL_PLAN.md O2b) — set only from a real
+  // metisPrewarm.draft() resolution below, never simulated. Deliberately NOT
+  // cleared when `prompt` changes: a stale guess staying visible (labeled as
+  // a guess) until a fresher one replaces it is acceptable per the spec.
+  const [oracleDraft, setOracleDraft] = useState<OracleDraftResult | null>(null);
+  // Monotonic id of the most recently *issued* draft request — lets a slow
+  // older request's resolution recognize it's been superseded and discard
+  // itself instead of clobbering a newer (possibly already-resolved) guess.
+  const oracleDraftRequestId = useRef(0);
 
   useEffect(() => {
     if (!prewarmEnabled || !window.metisPrewarm || !localPrewarmTarget || !prompt.trim()) return;
@@ -4375,6 +4408,44 @@ function SessionComposer({
           setOracleActivity((current) => (current.phase === "warming" && current.model === target ? ORACLE_IDLE : current));
         });
     }, 400);
+    return () => window.clearTimeout(timeoutId);
+  }, [prompt, prewarmEnabled, localPrewarmTarget]);
+
+  // Oracle "precognition" draft preview (docs/DRILL_PLAN.md O2b) — a SECOND,
+  // harder debounce (~800ms pause, its own timer entirely separate from the
+  // 400ms warm debounce above) that asks the backend for a full speculative
+  // draft of what the model would likely say, shown only in the Oracle
+  // popover (never the chat, never the composer — see OracleChip below).
+  // Same firing guards as the warm effect: experiment flag on, a
+  // confidently-resolved local target, and a non-trivial prompt.
+  // window.metisPrewarm?.draft is optional-chained through the local
+  // PrewarmBridgeWithDraft cast since the backend half of this may not have
+  // landed in global.d.ts yet this round — a missing method or an
+  // undefined/null resolution is treated as "no draft", never an error.
+  useEffect(() => {
+    if (!prewarmEnabled || !localPrewarmTarget || !prompt.trim()) return;
+    const draftFn = (window as PrewarmBridgeWithDraft).metisPrewarm?.draft;
+    if (!draftFn) return;
+    const target = localPrewarmTarget;
+    const draftPrompt = prompt;
+    // ~800ms pause — deliberately slower than the 400ms warm debounce, since
+    // a full speculative draft is a heavier ask than just loading the model.
+    const timeoutId = window.setTimeout(() => {
+      const requestId = ++oracleDraftRequestId.current;
+      void draftFn(target, draftPrompt)
+        .then((result) => {
+          // Stale-result guard: only the most recently *issued* request gets
+          // to update the popover. A slower older request that resolves
+          // after a newer one was fired is silently discarded — latest wins.
+          if (requestId !== oracleDraftRequestId.current) return;
+          if (!result) return;
+          setOracleDraft(result);
+        })
+        .catch(() => {
+          // Fail quiet, same policy as the warm effect — any existing guess
+          // just stays put rather than being cleared on a transient error.
+        });
+    }, 800);
     return () => window.clearTimeout(timeoutId);
   }, [prompt, prewarmEnabled, localPrewarmTarget]);
 
@@ -4803,6 +4874,7 @@ function SessionComposer({
             <OracleChip
               activity={oracleActivity}
               log={oracleLog}
+              draft={oracleDraft}
               open={oracleLogOpen}
               onToggle={() => setOracleLogOpen((open) => !open)}
               onClose={() => setOracleLogOpen(false)}
@@ -4852,21 +4924,25 @@ function secondsAgoLabel(at: number): string {
 }
 
 /** Composer-adjacent status strip for the Oracle prewarm experiment
- *  (docs/DRILL_PLAN.md B5.5) — the only visible surface for the invisible
- *  debounced warm hook in SessionComposer. Every state shown here comes from
- *  a warm call that actually fired: "warming" while
- *  window.metisPrewarm.warm() is in flight, "warm" once it resolves with the
- *  renderer-timed round trip. Click/tap expands a small in-memory log of the
- *  last few warm events (model, duration, how long ago). */
+ *  (docs/DRILL_PLAN.md B5.5, extended O2b). Every state shown here comes from
+ *  a call that actually fired: "warming" while window.metisPrewarm.warm() is
+ *  in flight, "warm" once it resolves with the renderer-timed round trip.
+ *  Click/tap expands a popover with a small in-memory log of the last few
+ *  warm events (model, duration, how long ago), plus — when one exists — a
+ *  clearly-labeled speculative preview of the latest draft() resolution
+ *  ("Oracle's guess"). The chip itself grows a small dot when a fresh draft
+ *  is available, so there's a reason to peek even while idle/warm. */
 function OracleChip({
   activity,
   log,
+  draft,
   open,
   onToggle,
   onClose
 }: {
   activity: OracleActivity;
   log: OracleWarmEvent[];
+  draft: OracleDraftResult | null;
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
@@ -4877,6 +4953,7 @@ function OracleChip({
       : activity.phase === "warm"
       ? `Oracle: ${activity.model} warm, ${activity.ms}ms`
       : "Oracle ready";
+  const hasDraft = Boolean(draft && (draft.text?.trim() || draft.thoughts?.trim()));
   return (
     <div className="oracle-chip-wrap">
       <button
@@ -4884,15 +4961,26 @@ function OracleChip({
         className={`composer-suggestion-chip oracle-chip ${activity.phase}`}
         onClick={onToggle}
         aria-expanded={open}
-        aria-label={`${label} — click for recent warm calls`}
+        aria-label={hasDraft ? `${label} — a speculative guess is ready to preview` : `${label} — click for recent warm calls`}
       >
         {activity.phase === "warming" ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
         <span>{label}</span>
+        {hasDraft ? <span className="oracle-chip-dot" aria-hidden="true" /> : null}
       </button>
       {open ? (
         <>
           <div className="oracle-backdrop" onClick={onClose} />
-          <div className="oracle-log-popover" role="dialog" aria-label="Recent Oracle warm calls">
+          <div className="oracle-log-popover" role="dialog" aria-label="Recent Oracle activity">
+            {hasDraft && draft ? (
+              <div className="oracle-draft-block">
+                <p className="oracle-draft-title">Oracle&apos;s guess</p>
+                <div className="oracle-draft-body">
+                  {draft.thoughts?.trim() ? <p className="oracle-draft-thinking">{draft.thoughts}</p> : null}
+                  {draft.text?.trim() ? <p className="oracle-draft-text">{draft.text}</p> : null}
+                </div>
+                <p className="oracle-draft-hint">Speculative. Updates as you pause typing.</p>
+              </div>
+            ) : null}
             {log.length === 0 ? (
               <p className="oracle-log-empty">No warm calls yet this session.</p>
             ) : (
@@ -5300,13 +5388,22 @@ function LiveRunTimeline({ turn }: { turn: ConversationTurn }): JSX.Element {
           return <AssistantResponse key={event.id} source={{ kind: "metis", label: "Metis synthesis" }}>{event.content}</AssistantResponse>;
         }
         if (event.kind === "route") {
+          // Pinned runs render no route/direct-call line at all
+          // (docs/DRILL_PLAN.md PF5b) — this covers the old-run fallback
+          // where the backend still emitted a "Calling {label} directly."
+          // text event ahead of this one; new backend runs stop sending
+          // that text event entirely, so turnHasPinnedModelSignal will
+          // simply never be true for them and this branch is moot. No
+          // first-token line renders here either — ttftMs isn't known until
+          // the run completes, at which point CompletedRun takes over.
+          if (turnHasPinnedModelSignal(turn)) return null;
           const label = event.label ?? "Metis";
           return (
             <details className="route-line-details" key={event.id}>
               <summary className="route-line">
                 <ChevronRight className="stage-caret" size={14} />
                 <Waypoints size={13} />
-                <span>{turnHasPinnedModelSignal(turn) ? `Called ${label} directly` : `Routed via ${label}`}</span>
+                <span>Routed via {label}</span>
               </summary>
               <div className="route-trace-body">
                 {turn.streamSteps?.length ? <PipelineSteps steps={turn.streamSteps} /> : <p className="live-pending-note">Route selected. Waiting for the next pipeline event.</p>}
@@ -5575,9 +5672,13 @@ function isPinnedRun(run: SessionRun): boolean {
   return Boolean(run.steps?.find((step) => step.id === "route")?.label?.startsWith("Calling "));
 }
 
-/** Route summary line text: "Called {label} directly" for a pinned model (no
- *  routing framing, per Lachy's rule that a pinned model is a direct call),
- *  "Routed via {label}" for a genuinely routed run. */
+/** Route summary line text for a genuinely routed run: "Routed via {label}".
+ *  Only ever called from the non-pinned branch of RouteLine below — a pinned
+ *  run never reaches this text at all per docs/DRILL_PLAN.md PF5b (Lachy:
+ *  seeing "Called Qwen Qwen3 8B directly" on a run he deliberately pinned is
+ *  just noise; he pinned it, of course it was called directly). Still
+ *  guarded with isPinnedRun here too, defensively, in case a future caller
+ *  forgets to check first. */
 function routeLineText(run: SessionRun): string {
   const label = routeDisplayName(run);
   return isPinnedRun(run) ? `Called ${label} directly` : `Routed via ${label}`;
@@ -5604,6 +5705,37 @@ function turnHasPinnedModelSignal(turn: ConversationTurn): boolean {
  *  placeholder. */
 function ttftSuffix(run: SessionRun): JSX.Element | null {
   return typeof run.ttftMs === "number" ? <em>first token {run.ttftMs}ms</em> : null;
+}
+
+/** Completed-run route line (docs/DRILL_PLAN.md PF5b). A pinned run
+ *  (isPinnedRun) shows NO route/direct-call line at all — "Called {label}
+ *  directly" is gone entirely, not just reworded. The ONLY metadata that
+ *  survives for a pinned run is the existing first-token time, rendered as a
+ *  slim standalone line (no icon, no expand affordance — there's no "Routed
+ *  via" to hide a trace behind); if ttftMs isn't set, nothing renders at
+ *  all. A genuinely routed run is completely unchanged: the expandable
+ *  "Routed via {label}" line with its pipeline-steps trace, ttft appended
+ *  inline as before. `withCaret` matches the RunTimeline "route" event site,
+ *  which prefixes a ChevronRight caret the other two completed-run sites
+ *  don't have. */
+function RouteLine({ run, withCaret }: { run: SessionRun; withCaret?: boolean }): JSX.Element | null {
+  if (isPinnedRun(run)) {
+    const ttft = ttftSuffix(run);
+    return ttft ? <div className="route-line pinned-ttft">{ttft}</div> : null;
+  }
+  return (
+    <details className="route-line-details">
+      <summary className="route-line">
+        {withCaret ? <ChevronRight className="stage-caret" size={14} /> : null}
+        <Waypoints size={13} />
+        <span>{routeLineText(run)}</span>
+        {ttftSuffix(run)}
+      </summary>
+      <div className="route-trace-body">
+        <PipelineSteps steps={run.steps} />
+      </div>
+    </details>
+  );
 }
 
 function providerLabel(provider: ProviderKey): string {
@@ -5833,16 +5965,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
           <StageBlock stage={stage} key={stage.id} />
         ))}
         {run.projectResult ? <ProjectArtifacts run={run} /> : null}
-        <details className="route-line-details">
-          <summary className="route-line">
-            <Waypoints size={13} />
-            <span>{routeLineText(run)}</span>
-            {ttftSuffix(run)}
-          </summary>
-          <div className="route-trace-body">
-            <PipelineSteps steps={run.steps} />
-          </div>
-        </details>
+        <RouteLine run={run} />
         {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
         <RunProposedActions run={run} onNavigate={navigate} />
       </>
@@ -5858,18 +5981,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
       {run.modelThoughts ? <ModelThoughts text={run.modelThoughts} /> : null}
       {run.projectResult ? <ProjectArtifacts run={run} /> : null}
       {!run.projectResult && run.operations?.length ? <RunOperations operations={run.operations} /> : null}
-      {showRouteTrace ? (
-        <details className="route-line-details">
-          <summary className="route-line">
-            <Waypoints size={13} />
-            <span>{routeLineText(run)}</span>
-            {ttftSuffix(run)}
-          </summary>
-          <div className="route-trace-body">
-            <PipelineSteps steps={run.steps} />
-          </div>
-        </details>
-      ) : null}
+      {showRouteTrace ? <RouteLine run={run} /> : null}
       {showRouteTrace && followUp ? <AssistantResponse source={source}>{followUp}</AssistantResponse> : null}
       {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
       <RunProposedActions run={run} onNavigate={navigate} />
@@ -5887,19 +5999,7 @@ function RunTimeline({ events, run, warnings }: { events: SessionTimelineEvent[]
           return <AssistantResponse key={event.id} source={source}>{event.content}</AssistantResponse>;
         }
         if (event.kind === "route") {
-          return (
-            <details className="route-line-details" key={event.id}>
-              <summary className="route-line">
-                <ChevronRight className="stage-caret" size={14} />
-                <Waypoints size={13} />
-                <span>{routeLineText(run)}</span>
-                {ttftSuffix(run)}
-              </summary>
-              <div className="route-trace-body">
-                <PipelineSteps steps={run.steps} />
-              </div>
-            </details>
-          );
+          return <RouteLine run={run} withCaret key={event.id} />;
         }
         if (event.kind === "stage") {
           const stage = run.stages?.find((item) => item.id === event.stageId);
