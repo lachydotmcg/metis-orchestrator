@@ -513,7 +513,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 - [x] Electron-builder packaging config + a GitHub Actions release workflow (so Lachy can
   cut releases by tagging). NOTE: run `npm i -D electron-builder` locally + commit the
   lockfile before CI `npm ci` will pass; see docs/RELEASING.md.
-- [ ] Error/crash reporting surface (an in-app "last errors" view fed by the audit log).
+- [x] Error/crash reporting surface (an in-app "last errors" view fed by the audit log).
 - [ ] Routine templates ("Daily standup summary", "Nightly repo tidy", "Morning news
   brief" using Pulse).
 - [ ] Sidebar keyboard navigation + shortcuts (1-9 to switch views).

@@ -7826,6 +7826,38 @@ button.pulse-tile:hover {
   white-space: nowrap;
 }
 
+/* ---- Errors panel (Settings > Audit, docs/DRILL_PLAN.md Phase 8) ---- */
+
+.audit-error-summary {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: initial !important;
+}
+
+.audit-error-summary.clickable {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+}
+
+.audit-error-metadata {
+  margin: 6px 0 0;
+  padding: 8px;
+  overflow-x: auto;
+  color: #a9afba;
+  background: #14171f;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.settings-actions.inline {
+  gap: 6px;
+}
+
 /* ---- Provider key-pool (Settings > Providers, docs/DRILL_PLAN.md Phase 6 §19) ---- */
 
 .provider-group {

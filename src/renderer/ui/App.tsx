@@ -13120,6 +13120,22 @@ function ManagerWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => void })
   );
 }
 
+/** Coarse relative-time label for audit rows ("just now", "5m ago", "3h ago",
+ *  "2d ago") — audit events are recent-window by nature so this stays coarse
+ *  on purpose rather than pulling in a date-formatting dependency. */
+function formatRelativeTime(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return iso;
+  const diffSeconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+  if (diffSeconds < 60) return "just now";
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  const diffDays = Math.floor(diffHours / 24);
+  return `${diffDays}d ago`;
+}
+
 /** Settings left-rail section keys — Claude-Code-specific tabs with no
  *  backing bridge (Profile, Configuration, Personalization, Browser, Computer
  *  use, Hooks, Git, Worktrees) were dropped; every section below renders real
@@ -13220,6 +13236,12 @@ function SettingsWorkspace({
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
   const [permissions, setPermissions] = useState<PermissionGrant[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
+  // Errors panel (docs/DRILL_PLAN.md Phase 8) — a wider recent-events window
+  // than the main audit list, filtered client-side to error/warning so Lachy
+  // has an in-app crash/last-errors view instead of opening audit-log.jsonl.
+  const [errorEvents, setErrorEvents] = useState<AuditEvent[]>([]);
+  const [errorsBusy, setErrorsBusy] = useState(false);
+  const [expandedErrorId, setExpandedErrorId] = useState<string | null>(null);
   const [registry, setRegistry] = useState<RegistryState>(FALLBACK_REGISTRY);
   const [installedPackages, setInstalledPackages] = useState<RegistryPackage[]>([]);
   const [secretDrafts, setSecretDrafts] = useState<Partial<Record<ProviderKey, string>>>({});
@@ -13260,6 +13282,20 @@ function SettingsWorkspace({
   useEffect(() => {
     void refreshRuntime();
   }, [refreshRuntime]);
+
+  const refreshErrors = useCallback(async () => {
+    setErrorsBusy(true);
+    try {
+      const recent = await (window.metisAudit?.list(100) ?? Promise.resolve<AuditEvent[]>([]));
+      setErrorEvents(recent.filter((event) => event.level === "error" || event.level === "warning"));
+    } finally {
+      setErrorsBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshErrors();
+  }, [refreshErrors]);
 
   async function runBusy(label: string, work: () => Promise<void>): Promise<void> {
     setBusy(label);
@@ -14022,6 +14058,51 @@ function SettingsWorkspace({
               </div>
             ))}
           </div>
+        </article>
+
+        <article className="settings-panel audit-panel">
+          <header>
+            <span>
+              <small>Crash log</small>
+              <h2>Errors</h2>
+            </span>
+            <span className="settings-actions inline">
+              <button type="button" onClick={() => void refreshErrors()} disabled={errorsBusy}>
+                {errorsBusy ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
+                Refresh
+              </button>
+            </span>
+          </header>
+          <p>Errors and warnings pulled from the same audit log — a quick way to spot recent failures without opening audit-log.jsonl.</p>
+          {!window.metisAudit ? (
+            <small className="mcp-probe-note">Needs the desktop app — unavailable in this preview</small>
+          ) : (
+            <div className="audit-list">
+              {errorEvents.length === 0 ? <p>No errors recorded.</p> : null}
+              {errorEvents.slice(0, 15).map((event) => {
+                const expanded = expandedErrorId === event.id;
+                const hasMetadata = !!event.metadata && Object.keys(event.metadata).length > 0;
+                return (
+                  <div className={`audit-row ${event.level}`} key={event.id}>
+                    <span>
+                      <strong>{event.kind}</strong>
+                      <small
+                        className={hasMetadata ? "audit-error-summary clickable" : "audit-error-summary"}
+                        title={event.summary}
+                        onClick={hasMetadata ? () => setExpandedErrorId(expanded ? null : event.id) : undefined}
+                      >
+                        {event.summary.length > 140 && !expanded ? `${event.summary.slice(0, 140)}…` : event.summary}
+                      </small>
+                      {expanded && hasMetadata ? (
+                        <pre className="audit-error-metadata">{JSON.stringify(event.metadata, null, 2)}</pre>
+                      ) : null}
+                    </span>
+                    <em>{formatRelativeTime(event.createdAt)}</em>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </article>
       </section>
       ) : null}
