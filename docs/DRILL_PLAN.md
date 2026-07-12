@@ -111,6 +111,9 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   the prewarm benefit is measurable (warm vs cold). Lachy wants to ADVERTISE the real number on
   the README (e.g. local models on 8GB VRAM first-token latency). Use the MEASURED number, never
   a made-up one; the README line only goes in once we have a real reading.
+  STATUS: BACKEND DONE — ttftMs captured in the Ollama streaming path (start before fetch,
+  first-delta guard), stored on ProviderInvokeResult + SessionRun, folded into the session.timing
+  audit. Cloud skipped (no streaming seam). Renderer TTFT display + the real README number pending.
 
 ---
 

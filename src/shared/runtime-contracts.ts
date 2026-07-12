@@ -555,6 +555,13 @@ export interface ProviderInvokeResult {
   source: "ollama" | "anthropic" | "openai" | "gemini" | "deepseek" | "openrouter" | "nvidia" | "groq" | "placeholder";
   auditId: string;
   usage?: { inputTokens: number; outputTokens: number; estimated?: boolean };
+  /** Time-to-first-token (DRILL_PLAN E1): ms from when this provider request
+   *  was about to be sent to the moment its first streamed delta (output or
+   *  thought) was observed. Only populated for a real streaming call (today:
+   *  the Ollama streaming path, invokeOllamaProviderStream) — undefined for
+   *  every non-streaming provider call, including the placeholder/error
+   *  fallbacks above, so this is purely additive telemetry. */
+  ttftMs?: number;
 }
 
 export type SessionPipelineStatus = "pending" | "running" | "complete" | "skipped" | "error";
@@ -813,6 +820,13 @@ export interface SessionRun {
   decision: PolicyDecisionResult;
   providerResult?: ProviderInvokeResult;
   modelThoughts?: string;
+  /** Time-to-first-token for this run's provider call (DRILL_PLAN E1),
+   *  promoted from providerResult.ttftMs the same way modelThoughts is
+   *  promoted from providerResult.thoughts. Undefined whenever the run's
+   *  provider call wasn't a streaming call that produced a token (e.g. cloud
+   *  providers today, or an Ollama call with no active stream controller) —
+   *  a follow-up round wires this into the renderer once real readings exist. */
+  ttftMs?: number;
   projectResult?: ProjectToolResult;
   operations?: AgentOperation[];
   timeline?: SessionTimelineEvent[];

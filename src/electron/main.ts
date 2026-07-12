@@ -1100,6 +1100,16 @@ async function invokeProvider(
 }
 
 async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: SessionStreamController, signal?: AbortSignal): Promise<ProviderInvokeResult> {
+  // TTFT instrumentation (DRILL_PLAN E1): requestStart is the moment the model
+  // request is about to be sent, so it captures queueing/load time on a cold
+  // model too — exactly what the prewarm experiment is meant to shave off.
+  const requestStart = Date.now();
+  let ttftMs: number | undefined;
+  const markFirstToken = (): void => {
+    // Guard against double-counting: only the very first observed delta
+    // (output or thought, whichever arrives first) sets ttftMs.
+    if (ttftMs === undefined) ttftMs = Date.now() - requestStart;
+  };
   const response = await fetch("http://127.0.0.1:11434/api/generate", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -1118,10 +1128,12 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
   let thoughts = "";
   const splitter = createThinkTagStreamSplitter(
     (delta) => {
+      markFirstToken();
       output += delta;
       emitStream(stream, { kind: "message_delta", delta });
     },
     (delta) => {
+      markFirstToken();
       thoughts += delta;
       emitStream(stream, { kind: "thought_delta", delta });
     }
@@ -1144,6 +1156,7 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
     if (thoughtField) {
       // Newer Ollama API: reasoning arrives as its own field, routed straight
       // to thought_delta instead of through the inline <think> tag splitter.
+      markFirstToken();
       thoughts += thoughtField;
       emitStream(stream, { kind: "thought_delta", delta: thoughtField });
     }
@@ -1184,7 +1197,8 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
     thoughts: thoughts.trim() || undefined,
     source: "ollama",
     auditId: audit.id,
-    usage
+    usage,
+    ttftMs
   };
 }
 
@@ -7572,6 +7586,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     decision: effectiveDecisionResult,
     providerResult,
     modelThoughts: providerResult.thoughts,
+    ttftMs: providerResult.ttftMs,
     projectResult,
     operations: [...metisOperations, ...projectCommandOperations, ...(projectResult ? operationsForProject(projectResult) : [])],
     steps,
@@ -7598,18 +7613,29 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // Bug L4b instrumentation: surface where a chat turn's time actually went
   // (policy route, snapshot build, knowledge retrieval, provider invoke) so a
   // slow turn is visible in the audit trail instead of just "it took a while".
+  // DRILL_PLAN E1: ttftMs (time to first streamed token, undefined for a
+  // non-streaming provider call) rides along on the same line so a prewarm
+  // A/B comparison can be read straight from the audit log.
   const totalMs = Date.now() - runStart;
-  await appendAudit("info", "session.timing", `Chat turn timing — policy ${policyMs}ms, snapshot ${snapshotMs}ms, knowledge ${knowledgeMs}ms, provider ${providerMs}ms, total ${totalMs}ms.`, {
-    policyMs,
-    snapshotMs,
-    knowledgeMs,
-    providerMs,
-    totalMs,
-    fastLane,
-    task_type: effectiveDecision.task_type,
-    provider,
-    model
-  });
+  await appendAudit(
+    "info",
+    "session.timing",
+    `Chat turn timing — policy ${policyMs}ms, snapshot ${snapshotMs}ms, knowledge ${knowledgeMs}ms, provider ${providerMs}ms, total ${totalMs}ms${
+      typeof run.ttftMs === "number" ? `, ttft ${run.ttftMs}ms` : ""
+    }.`,
+    {
+      policyMs,
+      snapshotMs,
+      knowledgeMs,
+      providerMs,
+      totalMs,
+      ttftMs: run.ttftMs,
+      fastLane,
+      task_type: effectiveDecision.task_type,
+      provider,
+      model
+    }
+  );
 
   await appendRunToConversation(run, prompt);
   await writeSessionRun(run);
