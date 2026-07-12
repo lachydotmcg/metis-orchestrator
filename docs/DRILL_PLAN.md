@@ -148,13 +148,13 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ## ★ LACHY BATCH 4 (2026-07-12, onboarding polish + cleanup)
 
-- [ ] **B4.1 — Onboarding: Enter advances the step.** RENDERER. In the first-run wizard,
+- [x] **B4.1 — Onboarding: Enter advances the step.** RENDERER. In the first-run wizard,
   pressing Enter should act as Continue/Next (advance to the next step; on the name step, Enter
   submits the name and moves on). Do not let Enter submit nothing or skip the whole flow.
-- [ ] **B4.2 — Onboarding preference: add Hybrid.** modelPreference becomes "local" | "cloud" |
+- [x] **B4.2 — Onboarding preference: add Hybrid.** modelPreference becomes "local" | "cloud" |
   "hybrid" (contract addition). The step-2 cards offer Local, Cloud, and Hybrid (let me choose /
   use both). Persist the choice to the profile. Backend contract touch + renderer card.
-- [ ] **B4.3 — Remove the hardcoded account email.** RENDERER. `ACCOUNT_EMAIL =
+- [x] **B4.3 — Remove the hardcoded account email.** RENDERER. `ACCOUNT_EMAIL =
   "bytehavencreations@gmail.com"` (App.tsx ~460) is shown in the account menu head (~2758) and
   is now redundant + a privacy leak. Show the profile NAME instead (reuse the profile the sidebar
   already uses); drop the hardcoded email constant. No email feature exists, so nothing else to remove.

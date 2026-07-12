@@ -143,7 +143,7 @@ export type MetisPlan = "byo"; // bring-your-own keys; future: paid tiers
 export interface UserProfile {
   name?: string;
   plan: MetisPlan;
-  modelPreference?: "local" | "cloud";
+  modelPreference?: "local" | "cloud" | "hybrid";
   createdAt: string;
   onboardedAt?: string;
 }

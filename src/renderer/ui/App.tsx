@@ -88,6 +88,7 @@ import {
   Shield,
   ShieldAlert,
   ShieldCheck,
+  Shuffle,
   SlidersHorizontal,
   Sparkles,
   Square,
@@ -457,7 +458,6 @@ type ConversationTurn = {
   };
 };
 
-const ACCOUNT_EMAIL = "bytehavencreations@gmail.com";
 const METIS_REPO_URL = "https://github.com/lachydotmcg/metis-orchestrator";
 /** Fallback owner display name when no profile name is set yet (matches the
  *  pre-profile hardcoded placeholder so first paint never looks broken). */
@@ -1849,7 +1849,7 @@ function FirstRunOnboarding({
   // unmounts while onboarding is incomplete.
   const [minimized, setMinimized] = useState(false);
   const [name, setName] = useState(profile.name ?? "");
-  const [preference, setPreference] = useState<"local" | "cloud" | null>(profile.modelPreference ?? null);
+  const [preference, setPreference] = useState<"local" | "cloud" | "hybrid" | null>(profile.modelPreference ?? null);
 
   function finish(): void {
     const trimmed = name.trim();
@@ -1869,6 +1869,32 @@ function FirstRunOnboarding({
     setMinimized(true);
     onOpenBenchmark();
   }
+
+  // Enter-to-advance (docs/DRILL_PLAN.md B4.1) — a window-level listener rather than an
+  // onKeyDown on the card, because each step's Continue button unmounts on transition and
+  // takes focus with it (focus reverts to <body>, outside any element-level handler's
+  // bubble path). Skips BUTTON targets so a focused button's own native Enter-click keeps
+  // working untouched (Back, "Do this later", a preference card), and skips TEXTAREA so a
+  // future multi-line field still gets a real newline. On step 2 it only advances once a
+  // preference is picked, mirroring the disabled Continue button. Final step runs the same
+  // `finish()` the "Skip for now" action uses, not the extra provider deep-link.
+  useEffect(() => {
+    if (minimized) return;
+    function onKeyDown(event: KeyboardEvent): void {
+      if (event.key !== "Enter" || event.shiftKey) return;
+      const tag = (event.target as HTMLElement | null)?.tagName;
+      if (tag === "TEXTAREA" || tag === "BUTTON") return;
+      event.preventDefault();
+      if (step === 1) setStep(2);
+      else if (step === 2) {
+        if (preference) setStep(3);
+      } else if (step === 3) setStep(4);
+      else if (step === 4) setStep(5);
+      else if (step === 5) finish();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [minimized, step, preference, name]);
 
   if (minimized) {
     return (
@@ -1932,6 +1958,11 @@ function FirstRunOnboarding({
                 <Cloud size={18} />
                 <strong>Cloud</strong>
                 <small>Use hosted models instead. No local install needed.</small>
+              </button>
+              <button type="button" className={`onboarding-pref-card ${preference === "hybrid" ? "selected" : ""}`} onClick={() => setPreference("hybrid")}>
+                <Shuffle size={18} />
+                <strong>Hybrid</strong>
+                <small>Let me choose. Use both local and cloud, whichever fits the task.</small>
               </button>
             </div>
             <div className="onboarding-actions">
@@ -2755,7 +2786,7 @@ function Sidebar({
           <>
             <button className="account-backdrop" type="button" aria-label="Close account menu" onClick={() => setAccountOpen(false)} />
             <div className="account-menu" role="menu">
-              <div className="account-menu-head">{ACCOUNT_EMAIL}</div>
+              <div className="account-menu-head">{profileName}</div>
               <div className="account-menu-group">
                 <button type="button" role="menuitem" onClick={openSettings}>
                   <Settings size={15} />
