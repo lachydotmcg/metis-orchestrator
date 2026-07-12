@@ -67,7 +67,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ## ★ LACHY BATCH 3 (2026-07-11, accounts + onboarding) — DO AFTER BATCH 2
 
-- [ ] **B3.1 — Rename Pulse to Community app-wide.** RENDERER. The Pulse nav item / page title /
+- [x] **B3.1 — Rename Pulse to Community app-wide.** RENDERER. The Pulse nav item / page title /
   any user-facing "Pulse" string becomes "Community". Grep App.tsx (and the sidebar order + any
   labels) for Pulse and rename the user-facing copy; keep internal keys stable unless trivial.
 - [ ] **B3.2 — User profile + plan (replaces the hardcoded "Pro" badge).** Lachy wants real

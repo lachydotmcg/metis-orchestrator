@@ -1854,7 +1854,7 @@ function Titlebar({
         <button className="titlebar-icon" type="button" aria-label="Search" title="Global search — coming soon" disabled>
           <Search size={16} />
         </button>
-        <button className="titlebar-icon" type="button" aria-label="Pulse" onClick={handleOpenPulse}>
+        <button className="titlebar-icon" type="button" aria-label="Community" onClick={handleOpenPulse}>
           <Newspaper size={16} />
           {hasUnseenUpdate ? <span className="pulse-dot" aria-hidden="true" /> : null}
         </button>
@@ -1888,8 +1888,9 @@ function Titlebar({
   );
 }
 
-/** Pulse, promoted from a titlebar popover to a full nav view (docs/FABLE_PLANS.md section 18) —
- *  a centered, generously-spaced feed: Changelog as a vertical timeline, Community as cards,
+/** Community (internally still "pulse" — see NavKey / window.metisPulse), promoted from a
+ *  titlebar popover to a full nav view (docs/FABLE_PLANS.md section 18) — a centered,
+ *  generously-spaced feed: Changelog as a vertical timeline, Community projects as cards,
  *  News as compact link rows via openExternal. Reuses window.metisPulse.feed() verbatim. */
 function PulseWorkspace(): JSX.Element {
   const [pulse, setPulse] = useState<PulseFeed>(FALLBACK_PULSE);
@@ -1927,10 +1928,10 @@ function PulseWorkspace(): JSX.Element {
   const restCommunity = heroCommunity ? pulse.community.slice(1) : pulse.community;
 
   return (
-    <main className="product-workspace pulse-workspace" aria-label="Pulse">
+    <main className="product-workspace pulse-workspace" aria-label="Community">
       <div className="pulse-workspace-column">
         <header className="pulse-workspace-head">
-          <h1>Pulse</h1>
+          <h1>Community</h1>
           <p>{pulse.status === "offline" ? "Showing the cached feed — offline" : "News, community projects, and what's new"}</p>
           <button type="button" className="pulse-workspace-refresh" onClick={refresh} disabled={loading}>
             {loading ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}
