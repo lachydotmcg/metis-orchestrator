@@ -865,22 +865,6 @@ const ORACLE_LOG_CAP = 5;
  *  the chat transcript or the composer, since it's a guess, not an answer. */
 type OracleDraftResult = { text: string; thoughts?: string };
 
-/** Local, contained type for the not-yet-landed metisPrewarm.draft bridge
- *  (docs/DRILL_PLAN.md O2b). A concurrent backend round this same batch is
- *  adding metis-prewarm:draft to main.ts/preload/src/renderer/global.d.ts —
- *  those files are off limits for this round, so this mirrors the expected
- *  shape locally instead of editing the real declaration. Every call site
- *  optional-chains through `?.metisPrewarm?.draft?.(...)` and treats a
- *  missing method or an undefined/null resolution as "no draft available" —
- *  correct whether the backend half has landed yet or not. Once
- *  global.d.ts's real metisPrewarm gains this field, this cast is redundant
- *  but never wrong, so nothing here needs to change when it does. */
-type PrewarmBridgeWithDraft = {
-  metisPrewarm?: {
-    draft?: (model: string, draft: string) => Promise<OracleDraftResult | null>;
-  };
-};
-
 // Prerequisite skills recommended alongside the model install in onboarding.
 // Matched case-insensitively against registry package names — see
 // matchSkillPackage below (docs/DRILL_PLAN.md Phase 4 follow-up).
@@ -4187,6 +4171,7 @@ function NewSessionWorkspace({
         <SessionComposer
           sessionBusy={sessionBusy}
           projectWorkspace={projectWorkspace}
+          activeConversationId={activeConversationId}
           suggestion={composerSuggestion}
           suggestionResetKey={`${lastRun?.id ?? "none"}::${activeConversationId ?? "none"}`}
           onSubmit={submitPrompt}
@@ -4249,6 +4234,7 @@ type SessionComposerModelGroups = { tier: "cloud" | "local"; label: string; bran
 function SessionComposer({
   sessionBusy,
   projectWorkspace,
+  activeConversationId,
   suggestion,
   suggestionResetKey,
   onSubmit,
@@ -4277,6 +4263,9 @@ function SessionComposer({
 }: {
   sessionBusy: boolean;
   projectWorkspace: ProjectWorkspace | null;
+  /** Active conversation id, passed to Oracle warm/draft as context so the
+   *  backend can assemble the same prompt the real run will send (O3). */
+  activeConversationId?: string;
   suggestion: string | null | undefined;
   suggestionResetKey: string;
   onSubmit: (text: string, attachments?: SessionAttachment[]) => void | Promise<void>;
@@ -4396,7 +4385,9 @@ function SessionComposer({
       setOracleActivity({ phase: "warming", model: target });
       const startedAt = Date.now();
       void window.metisPrewarm
-        ?.warm(target, draft)
+        // O3: pass conversation + project context so the backend warms with
+        // the SAME assembled prompt the real run will send (prefix cache hit).
+        ?.warm(target, draft, { conversationId: activeConversationId, projectPath: projectWorkspace?.path })
         .then(() => {
           const ms = Date.now() - startedAt;
           setOracleActivity({ phase: "warm", model: target, ms });
@@ -4409,7 +4400,7 @@ function SessionComposer({
         });
     }, 400);
     return () => window.clearTimeout(timeoutId);
-  }, [prompt, prewarmEnabled, localPrewarmTarget]);
+  }, [prompt, prewarmEnabled, localPrewarmTarget, activeConversationId, projectWorkspace?.path]);
 
   // Oracle "precognition" draft preview (docs/DRILL_PLAN.md O2b) — a SECOND,
   // harder debounce (~800ms pause, its own timer entirely separate from the
@@ -4418,13 +4409,11 @@ function SessionComposer({
   // popover (never the chat, never the composer — see OracleChip below).
   // Same firing guards as the warm effect: experiment flag on, a
   // confidently-resolved local target, and a non-trivial prompt.
-  // window.metisPrewarm?.draft is optional-chained through the local
-  // PrewarmBridgeWithDraft cast since the backend half of this may not have
-  // landed in global.d.ts yet this round — a missing method or an
+  // window.metisPrewarm?.draft is optional-chained — a missing method or an
   // undefined/null resolution is treated as "no draft", never an error.
   useEffect(() => {
     if (!prewarmEnabled || !localPrewarmTarget || !prompt.trim()) return;
-    const draftFn = (window as PrewarmBridgeWithDraft).metisPrewarm?.draft;
+    const draftFn = window.metisPrewarm?.draft;
     if (!draftFn) return;
     const target = localPrewarmTarget;
     const draftPrompt = prompt;
@@ -4432,7 +4421,9 @@ function SessionComposer({
     // a full speculative draft is a heavier ask than just loading the model.
     const timeoutId = window.setTimeout(() => {
       const requestId = ++oracleDraftRequestId.current;
-      void draftFn(target, draftPrompt)
+      // O3: same assembled-prompt context as the warm call, so the guess is
+      // contextual (sees the conversation) and shares the warmed prefix.
+      void draftFn(target, draftPrompt, { conversationId: activeConversationId, projectPath: projectWorkspace?.path })
         .then((result) => {
           // Stale-result guard: only the most recently *issued* request gets
           // to update the popover. A slower older request that resolves
@@ -4447,7 +4438,7 @@ function SessionComposer({
         });
     }, 800);
     return () => window.clearTimeout(timeoutId);
-  }, [prompt, prewarmEnabled, localPrewarmTarget]);
+  }, [prompt, prewarmEnabled, localPrewarmTarget, activeConversationId, projectWorkspace?.path]);
 
   const showSuggestion = Boolean(suggestion) && !suggestionDismissed && !sessionBusy && prompt.trim().length === 0;
   // Mirrors main.ts's ORCHESTRATION_COMMAND_RE (/orchestration or /orch as the

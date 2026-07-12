@@ -8373,6 +8373,59 @@ const PREWARM_MIN_DRAFT_LENGTH = 8;
 const PREWARM_DEDUPE_WINDOW_MS = 3000;
 const PREWARM_FETCH_TIMEOUT_MS = 10000;
 
+/** Optional context the renderer can pass so the warm/draft is built from the
+ *  SAME assembled prompt the real pinned chat run will send (docs/DRILL_PLAN.md
+ *  O3). Without it, warming uses the raw draft text, which only keeps the
+ *  model resident: the real call sends system+context+prompt, a different
+ *  prefix, so Ollama's prompt cache misses and prefill runs in full at send
+ *  time. With it, the assembled prefix matches and send-time prefill reduces
+ *  to just the characters typed since the last warm. */
+type PrewarmContext = { conversationId?: string; projectPath?: string };
+
+/** Rebuilds the pinned-chat session prompt for the prewarm path, mirroring
+ *  runSession's pre-invoke assembly (decidePolicy -> overrides -> fastLane ->
+ *  snapshot/metis/context/knowledge -> sessionProviderPrompt). MUST stay in
+ *  lockstep with the pinned branch of runSession (~7509-7605): any text drift
+ *  between the two shifts the shared prefix and silently costs cache hits —
+ *  if you change one, change the other. Known accepted divergences (all
+ *  small, all documented): uses resolveWritableProjectWorkspace (pure) rather
+ *  than resolveActiveProjectWorkspace so a background warm can never trigger
+ *  a permission grant; decidePolicy runs without a preset; knowledge
+ *  retrieval queries the draft rather than the final prompt (the retrieved
+ *  chunks rarely change across the last few keystrokes). Fails soft: null on
+ *  any error, and the caller falls back to warming the raw draft. */
+async function assembleChatPrewarmPrompt(draft: string, context?: PrewarmContext): Promise<string | null> {
+  if (!context) return null;
+  try {
+    const decision = await decidePolicy({ prompt: draft });
+    const previousRun = isAttributionQuestion(draft) ? await previousConversationRun(context.conversationId) : null;
+    const routeContext = shouldReusePreviousPipeline(draft) ? await previousConversationTaskType(context.conversationId) : null;
+    const effectiveDecision = applySessionRouteOverrides(draft, decision.decision, routeContext);
+    // Pinned runs always use the neutral pipeline name (PF5a) — stable prefix.
+    const pipelineName = "Direct chat";
+    const workspace = await resolveWritableProjectWorkspace(context.projectPath);
+    const fastLane = isFastLaneEligible(draft, effectiveDecision);
+    const projectSnapshot = !fastLane && workspace ? await buildProjectSnapshot(workspace.path) : undefined;
+    const metisFile = await loadProjectMetisFile(workspace?.path ?? context.projectPath);
+    const conversationContext = await recentConversationContext(context.conversationId);
+    const knowledge = fastLane ? null : await retrieveKnowledgeForPrompt(workspace?.path, draft);
+    return sessionProviderPrompt(
+      draft,
+      effectiveDecision,
+      pipelineName,
+      previousRun,
+      projectSnapshot,
+      undefined,
+      metisFile,
+      conversationContext,
+      knowledge?.block,
+      !fastLane
+    );
+  } catch {
+    return null;
+  }
+}
+
 let lastPrewarm: { model: string; hash: string; at: number } | null = null;
 // Guards against overlapping requests for the same model while a previous
 // warm for it is still in flight (e.g. the owner typed two keystrokes fast
@@ -8389,7 +8442,7 @@ const prewarmInFlightModels = new Set<string>();
  *  file — this must stay a pure fire-and-forget warmup fetch whose response
  *  body is discarded, so toggling `prewarmEnabled` back off leaves zero
  *  trace behind. */
-async function prewarmModel(model: string, draft: string): Promise<void> {
+async function prewarmModel(model: string, draft: string, context?: PrewarmContext): Promise<void> {
   const trimmedModel = typeof model === "string" ? model.trim() : "";
   const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
   if (!trimmedModel || trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return;
@@ -8409,13 +8462,18 @@ async function prewarmModel(model: string, draft: string): Promise<void> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), PREWARM_FETCH_TIMEOUT_MS);
     try {
+      // O3: warm with the SAME assembled prompt the real pinned run will send
+      // so Ollama's prompt cache prefix-matches at send time and prefill
+      // reduces to the trailing keystrokes. Falls back to the raw draft
+      // (model-residency benefit only) when assembly is unavailable.
+      const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context);
       await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
           model: trimmedModel,
-          prompt: trimmedDraft,
+          prompt: assembled ?? trimmedDraft,
           stream: false,
           keep_alive: "5m",
           options: { num_predict: 1 }
@@ -8464,7 +8522,7 @@ const draftInFlightModels = new Set<string>();
  *  a reasoning model's draft text is clean; the stripped thinking is
  *  returned alongside it when present, since the renderer may want to show
  *  what the model is "thinking" while the owner is still typing. */
-async function draftModel(model: string, draft: string): Promise<{ text: string; thoughts?: string } | null> {
+async function draftModel(model: string, draft: string, context?: PrewarmContext): Promise<{ text: string; thoughts?: string } | null> {
   const trimmedModel = typeof model === "string" ? model.trim() : "";
   const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
   if (!trimmedModel || trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return null;
@@ -8484,13 +8542,18 @@ async function draftModel(model: string, draft: string): Promise<{ text: string;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), PREWARM_DRAFT_FETCH_TIMEOUT_MS);
     try {
+      // O3: draft from the assembled prompt too — the guess then sees the
+      // same context the real run will (conversation continuity, project
+      // snapshot, instructions), which both makes the preview representative
+      // and shares the warmed prefix with the eventual real call.
+      const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context);
       const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
           model: trimmedModel,
-          prompt: trimmedDraft,
+          prompt: assembled ?? trimmedDraft,
           stream: false,
           keep_alive: "5m",
           options: { num_predict: 128, temperature: 0.4 }
@@ -9259,11 +9322,11 @@ app.whenReady().then(async () => {
   // from the renderer's perspective; prewarmModel resolves to void/undefined
   // in every case (including all its own no-op/fail-soft paths), so there is
   // nothing meaningful to await here beyond letting IPC settle.
-  ipcMain.handle("metis-prewarm:warm", (_event, model: string, draft: string) => prewarmModel(model, draft));
+  ipcMain.handle("metis-prewarm:warm", (_event, model: string, draft: string, context?: PrewarmContext) => prewarmModel(model, draft, context));
   // Speculative draft (docs/DRILL_PLAN.md O2a v0.1) — sibling to the warm
   // channel above, but resolves to the actual drafted text (or null on any
   // failure/guard) instead of void, so the renderer can choose to show it.
-  ipcMain.handle("metis-prewarm:draft", (_event, model: string, draft: string) => draftModel(model, draft));
+  ipcMain.handle("metis-prewarm:draft", (_event, model: string, draft: string, context?: PrewarmContext) => draftModel(model, draft, context));
   ipcMain.handle("metis-routines:list", () => listRoutines());
   ipcMain.handle("metis-routines:save", (_event, input: Routine) => saveRoutine(input));
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));

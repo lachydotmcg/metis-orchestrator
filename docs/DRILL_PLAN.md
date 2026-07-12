@@ -65,6 +65,18 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ LACHY BATCH 7 (2026-07-12, parked notes - Lachy: note down and forget for now)
+
+- [ ] **B7.1 - Per-conversation model selection.** The pinned model / preset choice should be
+  remembered PER CONVERSATION (switching conversations restores that conversation's model), not a
+  single global composer state.
+- [ ] **B7.2 - Thoroughness meter.** A configurable refinement dial: how many times a response is
+  fact-checked/refined by other models before it lands (0 = raw, N = cross-checked passes). Also
+  detect INCOMPLETE outputs (Lachy hit a case where a task silently did not complete) and auto-retry
+  or flag them - completion verification should be part of the same dial.
+
+---
+
 ## ★ LACHY BATCH 5 (2026-07-12, model picker + router intelligence)
 
 - [x] **B5.2 — Highlight INSTALLED models in the model picker.** RENDERER. The picker lists many

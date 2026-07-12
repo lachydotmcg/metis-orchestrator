@@ -174,10 +174,14 @@ contextBridge.exposeInMainWorld("metisOllama", {
 });
 
 contextBridge.exposeInMainWorld("metisPrewarm", {
-  warm: (model: string, draft: string) => ipcRenderer.invoke("metis-prewarm:warm", model, draft) as Promise<void>,
+  // The optional context ({ conversationId, projectPath }) lets the backend
+  // warm/draft with the SAME assembled prompt the real pinned run will send
+  // (DRILL_PLAN O3), so send-time prefill prefix-matches Ollama's cache.
+  warm: (model: string, draft: string, context?: { conversationId?: string; projectPath?: string }) =>
+    ipcRenderer.invoke("metis-prewarm:warm", model, draft, context) as Promise<void>,
   // DRILL_PLAN O2a v0.1 — sibling to warm, resolves the drafted text (or null).
-  draft: (model: string, draft: string) =>
-    ipcRenderer.invoke("metis-prewarm:draft", model, draft) as Promise<{ text: string; thoughts?: string } | null>
+  draft: (model: string, draft: string, context?: { conversationId?: string; projectPath?: string }) =>
+    ipcRenderer.invoke("metis-prewarm:draft", model, draft, context) as Promise<{ text: string; thoughts?: string } | null>
 });
 
 contextBridge.exposeInMainWorld("metisManager", {

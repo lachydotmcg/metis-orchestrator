@@ -155,12 +155,20 @@ declare global {
       onPullProgress(cb: (progress: OllamaPullProgress) => void): () => void;
     };
     metisPrewarm?: {
-      warm: (model: string, draft: string) => Promise<void>;
+      // The optional context ({ conversationId, projectPath }) makes the
+      // backend warm/draft with the SAME assembled prompt the real pinned
+      // run sends (DRILL_PLAN O3), so Ollama's prompt cache prefix-matches
+      // at send time. Without it, warming only keeps the model resident.
+      warm: (model: string, draft: string, context?: { conversationId?: string; projectPath?: string }) => Promise<void>;
       // DRILL_PLAN O2a v0.1 — sibling to warm, but resolves the actual
       // speculative draft text (null on any failure/guard/off-flag).
       // `thoughts` is only present when the model emitted a <think> block
       // that was stripped from `text`.
-      draft: (model: string, draft: string) => Promise<{ text: string; thoughts?: string } | null>;
+      draft: (
+        model: string,
+        draft: string,
+        context?: { conversationId?: string; projectPath?: string }
+      ) => Promise<{ text: string; thoughts?: string } | null>;
     };
     metisManager?: {
       chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;
