@@ -156,6 +156,11 @@ declare global {
     };
     metisPrewarm?: {
       warm: (model: string, draft: string) => Promise<void>;
+      // DRILL_PLAN O2a v0.1 — sibling to warm, but resolves the actual
+      // speculative draft text (null on any failure/guard/off-flag).
+      // `thoughts` is only present when the model emitted a <think> block
+      // that was stripped from `text`.
+      draft: (model: string, draft: string) => Promise<{ text: string; thoughts?: string } | null>;
     };
     metisManager?: {
       chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;

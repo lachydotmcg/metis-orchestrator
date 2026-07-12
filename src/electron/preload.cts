@@ -174,7 +174,10 @@ contextBridge.exposeInMainWorld("metisOllama", {
 });
 
 contextBridge.exposeInMainWorld("metisPrewarm", {
-  warm: (model: string, draft: string) => ipcRenderer.invoke("metis-prewarm:warm", model, draft) as Promise<void>
+  warm: (model: string, draft: string) => ipcRenderer.invoke("metis-prewarm:warm", model, draft) as Promise<void>,
+  // DRILL_PLAN O2a v0.1 — sibling to warm, resolves the drafted text (or null).
+  draft: (model: string, draft: string) =>
+    ipcRenderer.invoke("metis-prewarm:draft", model, draft) as Promise<{ text: string; thoughts?: string } | null>
 });
 
 contextBridge.exposeInMainWorld("metisManager", {

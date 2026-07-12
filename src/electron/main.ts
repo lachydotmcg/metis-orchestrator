@@ -2986,11 +2986,41 @@ function shouldReusePreviousPipeline(prompt: string): boolean {
 }
 
 function initialPipelineSteps(pipelineName: string, decision: RouteDecision, includeProjectTools = true, override?: SessionModelOverride): SessionPipelineStep[] {
+  if (override) {
+    // Pinned model = direct chat: there is no routing decision and no
+    // orchestration pipeline running, so the step list shrinks to what
+    // actually happens (call the pinned model, write the response) instead
+    // of narrating a pipeline that never ran (DRILL_PLAN PF5a — a pinned run
+    // used to show "Run Front End Orchestration Pipeline" purely because
+    // that's what the auto-router *would* have picked). appendAudit calls
+    // elsewhere still record the full trail; this only shrinks the
+    // user-visible step list.
+    return [
+      {
+        id: "route",
+        label: `Calling ${overrideDisplayLabel(override)} directly`,
+        detail: "Direct call to your pinned model, no routing decision to make.",
+        status: "pending"
+      },
+      {
+        id: "provider",
+        label: "Call selected model",
+        detail: `Send the task to ${override.provider} / ${resolveOverrideModel(override)}.`,
+        status: "pending"
+      },
+      {
+        id: "finalize",
+        label: "Write response",
+        detail: "Return the model output and save the audit record.",
+        status: "pending"
+      }
+    ];
+  }
   const steps: SessionPipelineStep[] = [
     {
       id: "route",
-      label: override ? `Calling ${overrideDisplayLabel(override)} directly` : "Route through Metis Policy",
-      detail: override ? "Direct call to your pinned model, no routing decision to make." : "Classify the prompt, score available routes, and select the primary model plus fallback path.",
+      label: "Route through Metis Policy",
+      detail: "Classify the prompt, score available routes, and select the primary model plus fallback path.",
       status: "pending"
     },
     {
@@ -4659,7 +4689,25 @@ function overrideStageRef(override: SessionModelOverride): StageModelRef {
 }
 
 function overrideDisplayLabel(override: SessionModelOverride): string {
-  return override.label ?? `${providerInfo[override.provider].label} ${override.model}`;
+  const model = override.model;
+  const raw = override.label ?? `${providerInfo[override.provider].label} ${model}`;
+  // Labels are built as "<brand> <model>" — either the renderer's own
+  // "<brand> <model>" override.label (e.g. "Qwen" + "Qwen3 8B"), or the
+  // providerInfo fallback above. When the model name already starts with
+  // that brand, or the brand's first word ("Qwen3 8B" already starts with
+  // "Qwen"), prefixing it again just doubles it ("Qwen Qwen3 8B") — collapse
+  // to the bare model name. Otherwise keep the concat as-is.
+  const modelLower = model.toLowerCase();
+  const rawLower = raw.toLowerCase();
+  if (rawLower.endsWith(modelLower) && rawLower.length > modelLower.length) {
+    const brand = raw.slice(0, raw.length - model.length).trim();
+    const brandFirstWord = brand.split(/\s+/)[0] ?? "";
+    const brandLower = brand.toLowerCase();
+    if (brand && (modelLower.startsWith(brandLower) || (brandFirstWord && modelLower.startsWith(brandFirstWord.toLowerCase())))) {
+      return model;
+    }
+  }
+  return raw;
 }
 
 // Default agentic build pipeline. The model per stage will later come from the
@@ -7472,19 +7520,28 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     return run;
   }
 
-  const pipelineName = pipelineNameFor(effectiveDecision);
+  // DRILL_PLAN PF5a: a pinned model is a direct chat with no routing decision,
+  // so the pipeline name must not leak the auto-router's task_type framing —
+  // "Front End Orchestration Pipeline" makes no sense once the router never
+  // ran. Pinned runs get a neutral name; Auto Router keeps the task-type name.
+  const pipelineName = input.modelOverride ? "Direct chat" : pipelineNameFor(effectiveDecision);
   // A pinned model is a pure direct chat: no orchestration means no chat-path project
   // file creation / design seed either, so this gates on Auto Router (no modelOverride).
   const includeProjectTools = !input.modelOverride && shouldCreateFrontendProject(prompt, effectiveDecision);
   const steps = initialPipelineSteps(pipelineName, effectiveDecision, includeProjectTools, input.modelOverride);
   steps[0] = completeStep(steps[0]);
 
+  // The audit trail always records the pipeline event (internal record stays
+  // intact); the "orchestration" step only exists in `steps` for an Auto
+  // Router run — a pinned run's minimal step list has none, so this is found
+  // by id rather than assumed at a fixed index.
   const orchestrationAudit = await appendAudit("info", "session.pipeline", `Running ${pipelineName}.`, {
     pipeline: pipelineName,
     task_type: effectiveDecision.task_type,
     prompt_sha256: promptHash
   });
-  steps[1] = completeStep(steps[1], orchestrationAudit.id);
+  const orchestrationIndex = steps.findIndex((step) => step.id === "orchestration");
+  if (orchestrationIndex >= 0) steps[orchestrationIndex] = completeStep(steps[orchestrationIndex], orchestrationAudit.id);
 
   const route = effectiveDecision.selected_route;
   const override = input.modelOverride;
@@ -7518,7 +7575,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Read METIS.md", operationIds: [metisOp.id] });
   }
   const projectCommandOperations = await maybeRunRequestedProjectCommand(prompt, writableWorkspace, permissionMode, stream);
-  const showRouteCeremony = Boolean(override) || shouldStreamRouteCeremony(prompt, effectiveDecision, includeProjectTools, projectCommandOperations);
+  // DRILL_PLAN PF5a: a pinned model emits zero route ceremony — no "calling X
+  // directly" line, no route chip, no "recording the trace" line further
+  // below — just the answer and the completion event. This used to be
+  // `Boolean(override) || ...`, which forced ceremony on for every pinned
+  // run; Auto Router behavior (the `shouldStreamRouteCeremony` call) is
+  // unchanged.
+  const showRouteCeremony = !override && shouldStreamRouteCeremony(prompt, effectiveDecision, includeProjectTools, projectCommandOperations);
   if (showRouteCeremony) {
     emitTimeline(
       stream,
@@ -7582,7 +7645,10 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     }
   }
   if (showRouteCeremony) emitTimeline(stream, timelineText("The selected model responded. I’m recording the trace and any follow-up project tools."));
-  steps[2] = completeStep(steps[2], providerResult.auditId);
+  // Found by id, not assumed at index 2 — a pinned run's minimal step list
+  // (route, provider, finalize) still has "provider" at index 1, not 2.
+  const providerIndex = steps.findIndex((step) => step.id === "provider");
+  if (providerIndex >= 0) steps[providerIndex] = completeStep(steps[providerIndex], providerResult.auditId);
 
   let projectResult: ProjectToolResult | undefined;
   let noProjectFilesWritten = false;
@@ -8370,6 +8436,85 @@ async function prewarmModel(model: string, draft: string): Promise<void> {
   }
 }
 
+// --- Speculative draft (docs/DRILL_PLAN.md O2a, v0.1) ---
+// A sibling to prewarmModel above, but instead of a discarded num_predict:1
+// prefill call, this actually generates a short speculative continuation
+// from the in-progress draft prompt and returns it, so the renderer can show
+// "here's roughly where this is going" before the owner even submits. Same
+// fail-soft, LOCAL-ONLY-Ollama, flag-gated posture as prewarmModel: never
+// throws, resolves null on any failure, and only ever talks to
+// OLLAMA_BASE_URL (127.0.0.1). Still touches no conversation/session-run
+// record, no file, and emits no stage/stream event — the caller decides
+// what (if anything) to do with the returned text.
+
+const PREWARM_DRAFT_FETCH_TIMEOUT_MS = 20000; // Longer than the 1-token warm timeout — this generates up to 128 tokens.
+
+let lastDraft: { model: string; hash: string; at: number } | null = null;
+// Deliberately separate from prewarmInFlightModels: a warm and a draft for
+// the same model must be able to run concurrently without either blocking
+// (starving) the other.
+const draftInFlightModels = new Set<string>();
+
+/** Speculatively drafts a short continuation from the in-progress prompt
+ *  against a LOCAL Ollama model (docs/DRILL_PLAN.md O2a v0.1). Same guard
+ *  posture as prewarmModel: OFF by default behind `prewarmEnabled`, fails
+ *  soft and silent (resolves null, never throws) on any failure — model
+ *  missing, Ollama unreachable, aborted, malformed response, or empty
+ *  output. Strips a `<think>...</think>` block via the existing splitter so
+ *  a reasoning model's draft text is clean; the stripped thinking is
+ *  returned alongside it when present, since the renderer may want to show
+ *  what the model is "thinking" while the owner is still typing. */
+async function draftModel(model: string, draft: string): Promise<{ text: string; thoughts?: string } | null> {
+  const trimmedModel = typeof model === "string" ? model.trim() : "";
+  const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
+  if (!trimmedModel || trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return null;
+  try {
+    if (!(await readStoreValue<boolean>("prewarmEnabled", false))) return null;
+
+    const hash = sha256(`${trimmedModel}\n${trimmedDraft}`);
+    const now = Date.now();
+    if (lastDraft && lastDraft.model === trimmedModel && lastDraft.hash === hash && now - lastDraft.at < PREWARM_DEDUPE_WINDOW_MS) {
+      return null; // Same model+draft drafted too recently to be worth repeating.
+    }
+    if (draftInFlightModels.has(trimmedModel)) {
+      return null; // A draft for this model is already in flight.
+    }
+
+    draftInFlightModels.add(trimmedModel);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PREWARM_DRAFT_FETCH_TIMEOUT_MS);
+    try {
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: trimmedModel,
+          prompt: trimmedDraft,
+          stream: false,
+          keep_alive: "5m",
+          options: { num_predict: 128, temperature: 0.4 }
+        })
+      });
+      if (!response.ok) return null;
+      const payload = (await response.json()) as { response?: string };
+      lastDraft = { model: trimmedModel, hash, at: Date.now() };
+      const raw = typeof payload.response === "string" ? payload.response : "";
+      const { output, thoughts } = splitThinkTaggedOutput(raw);
+      if (!output) return null;
+      return thoughts ? { text: output, thoughts } : { text: output };
+    } finally {
+      clearTimeout(timeout);
+      draftInFlightModels.delete(trimmedModel);
+    }
+  } catch {
+    // Ollama unreachable, model missing, aborted, malformed JSON, or any
+    // other failure — drafting is best-effort only, so stay quiet and never
+    // throw out of this function.
+    return null;
+  }
+}
+
 /** Rasterizes a `data:image/svg+xml,...` (URL-encoded, NOT base64) data URL to a PNG
  *  nativeImage via a hidden, off-screen BrowserWindow capture. Electron's `nativeImage`
  *  cannot decode SVG at all (createFromDataURL silently yields an empty image for it),
@@ -9115,6 +9260,10 @@ app.whenReady().then(async () => {
   // in every case (including all its own no-op/fail-soft paths), so there is
   // nothing meaningful to await here beyond letting IPC settle.
   ipcMain.handle("metis-prewarm:warm", (_event, model: string, draft: string) => prewarmModel(model, draft));
+  // Speculative draft (docs/DRILL_PLAN.md O2a v0.1) — sibling to the warm
+  // channel above, but resolves to the actual drafted text (or null on any
+  // failure/guard) instead of void, so the renderer can choose to show it.
+  ipcMain.handle("metis-prewarm:draft", (_event, model: string, draft: string) => draftModel(model, draft));
   ipcMain.handle("metis-routines:list", () => listRoutines());
   ipcMain.handle("metis-routines:save", (_event, input: Routine) => saveRoutine(input));
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));
