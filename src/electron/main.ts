@@ -9591,6 +9591,15 @@ async function createWindow(): Promise<void> {
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
   });
+  // Close-to-tray intercept: only takes effect when the setting is on AND a
+  // tray actually exists (otherwise hiding the window would trap the user
+  // with no way to get it back) AND the app isn't already quitting (so the
+  // tray's Quit / Cmd+Q / any other before-quit path always fully closes).
+  win.on("close", (event) => {
+    if (isQuitting || !tray || closeToTrayCache !== true) return;
+    event.preventDefault();
+    win.hide();
+  });
 
   if (process.env.VITE_DEV_SERVER_URL) {
     await win.loadURL(process.env.VITE_DEV_SERVER_URL);
@@ -9600,9 +9609,11 @@ async function createWindow(): Promise<void> {
 }
 
 /** Focuses the existing main window if one is open, otherwise opens a new
- *  one. Used by the tray's "Open Metis" item — on non-darwin the app has
- *  already quit once the last window closes (window-all-closed), so this
- *  path only ever needs to restore/focus, but the fallback keeps it safe. */
+ *  one. Used by the tray's "Open Metis" item. Covers three cases: the window
+ *  is merely minimized (restore, then show/focus); the window is hidden via
+ *  close-to-tray (show()/focus() alone bring it back); or, on non-darwin
+ *  with close-to-tray off, the app has already quit once the last window
+ *  closed (window-all-closed), so the fallback below creates a fresh one. */
 async function openOrFocusMainWindow(): Promise<void> {
   if (mainWindow && !mainWindow.isDestroyed()) {
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -9615,11 +9626,34 @@ async function openOrFocusMainWindow(): Promise<void> {
 
 // --- System tray (DRILL_PLAN F1) ------------------------------------------
 // A small always-available control surface: current status, pause/resume for
-// background routines, the last few completed runs, and quit. Scope for this
-// round is additive only — closing the main window still quits the app on
-// non-darwin exactly as before; making the window close-to-tray instead of
-// quit is a deliberate follow-up, not implemented here.
+// background routines, the last few completed runs, close-to-tray, and quit.
 let tray: Tray | null = null;
+
+// Close-to-tray (DRILL_PLAN F1 follow-up): opt-in, off by default so existing
+// behavior (closing the window quits the app on non-darwin) is unchanged
+// unless the user turns this on from the tray menu. Cached in memory (same
+// pattern as routinesPausedCache above) because the window's "close" handler
+// has to decide synchronously whether to preventDefault() — there is no time
+// to await a store read once that event has fired.
+let closeToTrayCache: boolean | undefined;
+
+async function isCloseToTrayEnabled(): Promise<boolean> {
+  if (closeToTrayCache === undefined) {
+    closeToTrayCache = await readStoreValue<boolean>("closeToTray", false);
+  }
+  return closeToTrayCache;
+}
+
+async function setCloseToTray(enabled: boolean): Promise<void> {
+  closeToTrayCache = enabled;
+  await writeStoreValue("closeToTray", enabled);
+  refreshTrayMenu();
+}
+
+// Set true once the app has actually started quitting (tray "Quit Metis",
+// before-quit for any other reason). The main window's close handler checks
+// this so close-to-tray can never trap the real quit path behind a hide.
+let isQuitting = false;
 
 function trayStatusLabel(paused: boolean): string {
   if (activeSessionRunCount > 0) return "running";
@@ -9650,6 +9684,7 @@ async function refreshTrayMenu(): Promise<void> {
   if (!tray) return;
   try {
     const paused = await isRoutinesPaused();
+    const closeToTray = await isCloseToTrayEnabled();
     const status = trayStatusLabel(paused);
     const recentRuns = (await readSessionRuns())
       .filter((run) => Boolean(run.completedAt))
@@ -9672,10 +9707,24 @@ async function refreshTrayMenu(): Promise<void> {
         label: paused ? "Resume background routines" : "Pause background routines",
         click: () => void setRoutinesPaused(!paused)
       },
+      {
+        label: closeToTray ? "Close to tray: On" : "Close to tray: Off",
+        click: () => void setCloseToTray(!closeToTray)
+      },
       { type: "separator" },
       { label: "Recent runs", submenu: recentRunItems },
       { type: "separator" },
-      { label: "Quit Metis", click: () => app.quit() }
+      {
+        label: "Quit Metis",
+        click: () => {
+          // Belt-and-suspenders: app.quit() also fires "before-quit" (which
+          // sets isQuitting too), but setting it here first guarantees the
+          // close-to-tray intercept never sees a window-close event before
+          // isQuitting is true, regardless of Electron's exact event timing.
+          isQuitting = true;
+          app.quit();
+        }
+      }
     ]);
 
     tray.setContextMenu(menu);
@@ -9875,8 +9924,11 @@ app.on("window-all-closed", () => {
   }
 });
 
-// Avoids a dangling tray icon in the Windows notification area after quit.
+// Marks a real quit in progress (so the close-to-tray intercept in
+// createWindow() steps aside) and avoids a dangling tray icon in the
+// Windows notification area after quit.
 app.on("before-quit", () => {
+  isQuitting = true;
   if (tray) {
     tray.destroy();
     tray = null;
