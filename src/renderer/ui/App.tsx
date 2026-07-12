@@ -5695,6 +5695,12 @@ function turnHasPinnedModelSignal(turn: ConversationTurn): boolean {
  *  wasn't a streaming Ollama call, today) renders nothing rather than a
  *  placeholder. */
 function ttftSuffix(run: SessionRun): JSX.Element | null {
+  // Oracle-served runs (v0.3, DRILL_PLAN O4) are labeled honestly: the answer
+  // was pre-drafted while typing and served on an exact prompt match, so the
+  // ms shown is the serve time, not a fresh generation's first token.
+  if (run.oracleServed) {
+    return <em>{typeof run.ttftMs === "number" ? `Oracle answered instantly, ${run.ttftMs}ms` : "Oracle answered instantly"}</em>;
+  }
   return typeof run.ttftMs === "number" ? <em>first token {run.ttftMs}ms</em> : null;
 }
 

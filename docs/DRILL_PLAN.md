@@ -65,6 +65,23 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ O4 — Oracle v0.3: serve the precognition (SHIPPED 2026-07-12, Fable direct)
+
+- [x] **O4 - confidence-gated instant serving (Lachy: if nothing changed, it's ready to go).**
+  O3 measured 365ms (from 1285ms). v0.3 closes the loop: draftModel now generates with the SAME
+  default sampling as the real call (no temperature override), num_predict 768 as a runaway cap,
+  and only a draft that finished naturally (done_reason stop) from an ASSEMBLED prompt is cached
+  as servable (model + sha256 of the exact prompt string, 3min TTL, one-shot claim). In runSession
+  pinned chat, before invoking the provider: pinned + local Ollama + no images + prewarmEnabled +
+  EXACT hash match -> the draft is served instantly (thought_delta + message_delta emitted, real
+  audit line, providerResult built with measured serve ms), run.oracleServed = true, renderer
+  shows Oracle answered instantly, Xms. Any mismatch falls back to the normal call (which still
+  gets the O3 warmed prefix). Exact-match only by design: near-miss similarity serving is a
+  possible v0.4, needs a real confidence metric. NEEDS LIVE TEST: type, pause until the guess
+  lands, send unchanged -> instant.
+
+---
+
 ## ★ LACHY BATCH 7 (2026-07-12, parked notes - Lachy: note down and forget for now)
 
 - [ ] **B7.1 - Per-conversation model selection.** The pinned model / preset choice should be

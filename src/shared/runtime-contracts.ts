@@ -827,6 +827,11 @@ export interface SessionRun {
    *  providers today, or an Ollama call with no active stream controller) —
    *  a follow-up round wires this into the renderer once real readings exist. */
   ttftMs?: number;
+  /** Oracle v0.3 (DRILL_PLAN O4): true when this run's answer was served
+   *  from Oracle's pre-drafted response for an exact assembled-prompt match
+   *  (same pinned local model, same default sampling) instead of a fresh
+   *  generation. The renderer labels these honestly. */
+  oracleServed?: boolean;
   projectResult?: ProjectToolResult;
   operations?: AgentOperation[];
   timeline?: SessionTimelineEvent[];

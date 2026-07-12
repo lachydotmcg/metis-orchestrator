@@ -7610,7 +7610,37 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const overrideWarnings: string[] = [];
   let providerResult: ProviderInvokeResult;
   const providerStart = Date.now();
-  try {
+  // Oracle v0.3 (DRILL_PLAN O4): if Oracle already drafted a COMPLETE answer
+  // to this EXACT assembled prompt (byte-identical, hash-matched) for this
+  // exact pinned local model, serve it instantly instead of re-generating.
+  // The draft was produced by the same model with the same default sampling,
+  // so it is a legitimate sample of the model's answer, not a shortcut fake.
+  // Conservative gates: pinned + local Ollama + no images + experiment flag
+  // on + exact hash match + draft finished naturally + one-shot claim.
+  let oracleServed = false;
+  const servedDraft =
+    override && provider === "ollama" && !chatImages && (await readStoreValue<boolean>("prewarmEnabled", false))
+      ? takeServableDraft(model, sha256(sessionPrompt))
+      : null;
+  if (servedDraft) {
+    oracleServed = true;
+    if (servedDraft.thoughts) emitStream(stream, { kind: "thought_delta", delta: servedDraft.thoughts });
+    emitStream(stream, { kind: "message_delta", delta: servedDraft.text });
+    const servedAudit = await appendAudit("info", "session.provider", "Oracle served the pre-drafted response for an exact prompt match.", {
+      provider,
+      model,
+      prompt_sha256: promptHash
+    });
+    providerResult = {
+      provider,
+      model,
+      output: servedDraft.text,
+      thoughts: servedDraft.thoughts,
+      source: "ollama",
+      auditId: servedAudit.id,
+      ttftMs: Date.now() - providerStart
+    };
+  } else try {
     providerResult = await invokeProvider({ provider, model, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
   } catch (error) {
     // A Stop-button cancellation must end the run immediately — never trigger
@@ -7754,6 +7784,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     providerResult,
     modelThoughts: providerResult.thoughts,
     ttftMs: providerResult.ttftMs,
+    oracleServed: oracleServed || undefined,
     projectResult,
     operations: [...metisOperations, ...projectCommandOperations, ...(projectResult ? operationsForProject(projectResult) : [])],
     steps,
@@ -8505,13 +8536,40 @@ async function prewarmModel(model: string, draft: string, context?: PrewarmConte
 // record, no file, and emits no stage/stream event — the caller decides
 // what (if anything) to do with the returned text.
 
-const PREWARM_DRAFT_FETCH_TIMEOUT_MS = 20000; // Longer than the 1-token warm timeout — this generates up to 128 tokens.
+const PREWARM_DRAFT_FETCH_TIMEOUT_MS = 45000; // Generates a full candidate response (up to PREWARM_DRAFT_MAX_TOKENS) — needs far more headroom than the 1-token warm.
+const PREWARM_DRAFT_MAX_TOKENS = 768;
+const SERVABLE_DRAFT_TTL_MS = 3 * 60 * 1000;
 
 let lastDraft: { model: string; hash: string; at: number } | null = null;
 // Deliberately separate from prewarmInFlightModels: a warm and a draft for
 // the same model must be able to run concurrently without either blocking
 // (starving) the other.
 const draftInFlightModels = new Set<string>();
+
+/** Oracle v0.3 (DRILL_PLAN O4): the most recent COMPLETE speculative draft,
+ *  keyed by the sha256 of the exact prompt string it was generated from.
+ *  When a pinned chat run assembles a session prompt whose hash matches, the
+ *  draft IS a legitimate sample of the model's answer to that exact prompt
+ *  (same model, same default sampling as the real streaming call), so it can
+ *  be served instantly instead of re-generating. Only drafts that finished
+ *  naturally (done_reason "stop", not the num_predict cap) are servable, and
+ *  each is served at most once (one-shot) within a short TTL. */
+let servableDraft: { model: string; promptHash: string; text: string; thoughts?: string; at: number } | null = null;
+
+/** One-shot claim of a cached servable draft for an exact (model, prompt
+ *  hash) match. Clears the cache on claim so a stale draft can never be
+ *  served twice, and expires quietly after SERVABLE_DRAFT_TTL_MS. */
+function takeServableDraft(model: string, promptHash: string): { text: string; thoughts?: string } | null {
+  if (!servableDraft) return null;
+  if (Date.now() - servableDraft.at > SERVABLE_DRAFT_TTL_MS) {
+    servableDraft = null;
+    return null;
+  }
+  if (servableDraft.model !== model || servableDraft.promptHash !== promptHash) return null;
+  const claimed = { text: servableDraft.text, thoughts: servableDraft.thoughts };
+  servableDraft = null;
+  return claimed;
+}
 
 /** Speculatively drafts a short continuation from the in-progress prompt
  *  against a LOCAL Ollama model (docs/DRILL_PLAN.md O2a v0.1). Same guard
@@ -8547,24 +8605,36 @@ async function draftModel(model: string, draft: string, context?: PrewarmContext
       // snapshot, instructions), which both makes the preview representative
       // and shares the warmed prefix with the eventual real call.
       const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context);
+      const sentPrompt = assembled ?? trimmedDraft;
+      // O4 (v0.3): default sampling, NO temperature override — the draft must
+      // be generated exactly the way the real streaming call generates so a
+      // cached draft is a legitimate stand-in answer. num_predict is only a
+      // runaway cap; done_reason tells us whether the model finished
+      // naturally ("stop", servable) or hit the cap ("length", preview-only).
       const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
           model: trimmedModel,
-          prompt: assembled ?? trimmedDraft,
+          prompt: sentPrompt,
           stream: false,
           keep_alive: "5m",
-          options: { num_predict: 128, temperature: 0.4 }
+          options: { num_predict: PREWARM_DRAFT_MAX_TOKENS }
         })
       });
       if (!response.ok) return null;
-      const payload = (await response.json()) as { response?: string };
+      const payload = (await response.json()) as { response?: string; done_reason?: string };
       lastDraft = { model: trimmedModel, hash, at: Date.now() };
       const raw = typeof payload.response === "string" ? payload.response : "";
       const { output, thoughts } = splitThinkTaggedOutput(raw);
       if (!output) return null;
+      // Cache for instant serving only when generated from an ASSEMBLED
+      // prompt (raw-draft prompts can never hash-match a real run) and the
+      // model finished on its own rather than being truncated by the cap.
+      if (assembled && payload.done_reason === "stop") {
+        servableDraft = { model: trimmedModel, promptHash: sha256(assembled), text: output, thoughts, at: Date.now() };
+      }
       return thoughts ? { text: output, thoughts } : { text: output };
     } finally {
       clearTimeout(timeout);
