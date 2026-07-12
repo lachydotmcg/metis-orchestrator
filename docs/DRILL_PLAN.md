@@ -49,6 +49,19 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   model picker currently lives in Settings; move (or also surface) it in the Gallery where
   vision/images are actually used. Confirm the picker stays honest (Auto-detect + local
   Ollama vision models only, as restricted earlier). Lower priority ("tbh") — do after the above.
+- [ ] **B2.7 — Router/managed-agent wrote to agent-memory instead of the attached workspace
+  (2026-07-11 live bug, HIGH — correctness).** Lachy attached a workspace (metistest4) and ran
+  a routed agent; it edited files under the app's conversation/agent-memory storage instead of
+  the attached project folder. The run's file-write root resolved to the dataPath conversation
+  store rather than the selected projectPath/workspace. BACKEND (main.ts): trace how projectPath
+  flows from the selected workspace into the run's file operations (grep dataPath ~543,
+  writeConversations ~4105, the stage file-write/apply path, and the routing/managed-agent path);
+  find where projectPath is empty/overridden so writes fall back to a data dir, and make the
+  agent write to the attached workspace. NEEDS a clear root-cause report + live test.
+- [ ] **B2.6 — Gallery image viewer cut off when you click an image.** RENDERER/CSS. Clicking an
+  image in the Gallery opens a viewer/lightbox whose image is clipped (same overflow family as
+  the earlier doc-view cutoff). Find the gallery image click handler + its viewer CSS and fix the
+  overflow so the full image fits (max-width/height:100%, object-fit:contain, no fixed clip).
 
 ---
 
