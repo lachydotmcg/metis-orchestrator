@@ -7618,6 +7618,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // Conservative gates: pinned + local Ollama + no images + experiment flag
   // on + exact hash match + draft finished naturally + one-shot claim.
   let oracleServed = false;
+  // O4.1: a real send NEVER queues behind Oracle's speculation — Ollama
+  // serializes per-model requests, so an in-flight 2048-token draft would
+  // stall this call by many seconds (measured 13390ms). Abort all
+  // speculative work first, then claim any already-completed draft.
+  abortOracleSpeculativeWork();
   const servedDraft =
     override && provider === "ollama" && !chatImages && (await readStoreValue<boolean>("prewarmEnabled", false))
       ? takeServableDraft(model, sha256(sessionPrompt))
@@ -8460,8 +8465,10 @@ async function assembleChatPrewarmPrompt(draft: string, context?: PrewarmContext
 let lastPrewarm: { model: string; hash: string; at: number } | null = null;
 // Guards against overlapping requests for the same model while a previous
 // warm for it is still in flight (e.g. the owner typed two keystrokes fast
-// enough that both requests would otherwise race to Ollama).
-const prewarmInFlightModels = new Set<string>();
+// enough that both requests would otherwise race to Ollama). Tracks the
+// AbortController so a real send can cancel speculative prefill instantly
+// (see abortOracleSpeculativeWork below).
+const prewarmAborts = new Map<string, AbortController>();
 
 /** Speculatively warms a LOCAL Ollama model with the in-progress draft
  *  prompt (docs/DRILL_PLAN.md E1 v0.1). OFF by default behind the
@@ -8485,12 +8492,12 @@ async function prewarmModel(model: string, draft: string, context?: PrewarmConte
     if (lastPrewarm && lastPrewarm.model === trimmedModel && lastPrewarm.hash === hash && now - lastPrewarm.at < PREWARM_DEDUPE_WINDOW_MS) {
       return; // Same model+draft warmed too recently to be worth repeating.
     }
-    if (prewarmInFlightModels.has(trimmedModel)) {
+    if (prewarmAborts.has(trimmedModel)) {
       return; // A warm for this model is already in flight.
     }
 
-    prewarmInFlightModels.add(trimmedModel);
     const controller = new AbortController();
+    prewarmAborts.set(trimmedModel, controller);
     const timeout = setTimeout(() => controller.abort(), PREWARM_FETCH_TIMEOUT_MS);
     try {
       // O3: warm with the SAME assembled prompt the real pinned run will send
@@ -8516,7 +8523,7 @@ async function prewarmModel(model: string, draft: string, context?: PrewarmConte
       lastPrewarm = { model: trimmedModel, hash, at: Date.now() };
     } finally {
       clearTimeout(timeout);
-      prewarmInFlightModels.delete(trimmedModel);
+      if (prewarmAborts.get(trimmedModel) === controller) prewarmAborts.delete(trimmedModel);
     }
   } catch {
     // Ollama unreachable, model missing, aborted, network error, or any
@@ -8536,15 +8543,33 @@ async function prewarmModel(model: string, draft: string, context?: PrewarmConte
 // record, no file, and emits no stage/stream event — the caller decides
 // what (if anything) to do with the returned text.
 
-const PREWARM_DRAFT_FETCH_TIMEOUT_MS = 45000; // Generates a full candidate response (up to PREWARM_DRAFT_MAX_TOKENS) — needs far more headroom than the 1-token warm.
-const PREWARM_DRAFT_MAX_TOKENS = 768;
+const PREWARM_DRAFT_FETCH_TIMEOUT_MS = 90000; // Generates a full candidate response (up to PREWARM_DRAFT_MAX_TOKENS) — needs far more headroom than the 1-token warm.
+// Thinking models spend their budget on <think> tokens first — 768 got eaten
+// before the answer finished (done_reason "length", never servable, Lachy's
+// truncated guess). 2048 gives the thought + answer room to finish naturally.
+const PREWARM_DRAFT_MAX_TOKENS = 2048;
 const SERVABLE_DRAFT_TTL_MS = 3 * 60 * 1000;
 
 let lastDraft: { model: string; hash: string; at: number } | null = null;
-// Deliberately separate from prewarmInFlightModels: a warm and a draft for
-// the same model must be able to run concurrently without either blocking
-// (starving) the other.
-const draftInFlightModels = new Set<string>();
+// Deliberately separate from the warm guard: a warm and a draft for the same
+// model must be able to run concurrently without either starving the other.
+// Values carry the AbortController + the draft hash so a NEWER prompt aborts
+// and replaces a stale in-flight draft (latest wins) instead of skipping,
+// and so a real send can cancel all speculative work instantly.
+const draftAborts = new Map<string, { controller: AbortController; hash: string }>();
+
+/** Oracle must never delay a real answer (DRILL_PLAN O4.1): Ollama processes
+ *  requests for a model serially, so an in-flight 2048-token speculative
+ *  draft would QUEUE a real send behind it — Lachy measured 13390ms TTFT
+ *  from exactly that. Called at the top of the chat invoke path: aborts
+ *  every in-flight Oracle warm and draft so the real call goes straight to
+ *  the front. The aborted fetches fail soft inside their own try/catch. */
+function abortOracleSpeculativeWork(): void {
+  for (const [, entry] of draftAborts) entry.controller.abort();
+  draftAborts.clear();
+  for (const [, controller] of prewarmAborts) controller.abort();
+  prewarmAborts.clear();
+}
 
 /** Oracle v0.3 (DRILL_PLAN O4): the most recent COMPLETE speculative draft,
  *  keyed by the sha256 of the exact prompt string it was generated from.
@@ -8592,12 +8617,21 @@ async function draftModel(model: string, draft: string, context?: PrewarmContext
     if (lastDraft && lastDraft.model === trimmedModel && lastDraft.hash === hash && now - lastDraft.at < PREWARM_DEDUPE_WINDOW_MS) {
       return null; // Same model+draft drafted too recently to be worth repeating.
     }
-    if (draftInFlightModels.has(trimmedModel)) {
-      return null; // A draft for this model is already in flight.
+    const inFlight = draftAborts.get(trimmedModel);
+    if (inFlight) {
+      if (inFlight.hash === hash) {
+        return null; // The exact same draft is already being generated — let it finish.
+      }
+      // The prompt changed while an older draft was still generating: abort
+      // it and start fresh (latest wins). The old skip-if-inflight behavior
+      // left a stale draft running to completion, wasting GPU on an answer
+      // for a prompt that no longer exists.
+      inFlight.controller.abort();
+      draftAborts.delete(trimmedModel);
     }
 
-    draftInFlightModels.add(trimmedModel);
     const controller = new AbortController();
+    draftAborts.set(trimmedModel, { controller, hash });
     const timeout = setTimeout(() => controller.abort(), PREWARM_DRAFT_FETCH_TIMEOUT_MS);
     try {
       // O3: draft from the assembled prompt too — the guess then sees the
@@ -8638,7 +8672,7 @@ async function draftModel(model: string, draft: string, context?: PrewarmContext
       return thoughts ? { text: output, thoughts } : { text: output };
     } finally {
       clearTimeout(timeout);
-      draftInFlightModels.delete(trimmedModel);
+      if (draftAborts.get(trimmedModel)?.controller === controller) draftAborts.delete(trimmedModel);
     }
   } catch {
     // Ollama unreachable, model missing, aborted, malformed JSON, or any
