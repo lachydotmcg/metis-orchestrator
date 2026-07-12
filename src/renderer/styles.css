@@ -6784,6 +6784,89 @@ details.artifact-row[open] summary {
   cursor: default;
 }
 
+/* Oracle prewarm activity chip (docs/DRILL_PLAN.md B5.5) — sits between the
+   composer's model picker and its send button, reusing the same slim chip
+   look as .composer-suggestion-chip above. Only ever rendered by App.tsx
+   when the warm hook could actually fire; state colors are a subtle,
+   non-animated shift so idle never reads as busy. */
+.oracle-chip-wrap {
+  position: relative;
+}
+
+.oracle-chip {
+  gap: 5px;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.oracle-chip svg {
+  flex: 0 0 auto;
+  color: var(--faint);
+}
+
+.oracle-chip.warming {
+  color: var(--muted);
+}
+
+.oracle-chip.warming svg {
+  color: var(--muted);
+}
+
+.oracle-chip.warm {
+  color: var(--soft);
+}
+
+.oracle-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 24;
+  background: transparent;
+}
+
+.oracle-log-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  z-index: 25;
+  display: grid;
+  gap: 5px;
+  width: 210px;
+  padding: 8px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 18px 52px rgb(0 0 0 / 0.45);
+}
+
+.oracle-log-empty {
+  margin: 0;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.oracle-log-row {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.oracle-log-row strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--soft);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oracle-log-row em {
+  flex: 0 0 auto;
+  color: var(--faint);
+  font-style: normal;
+}
+
 /* ---- Pulse: full nav view (docs/FABLE_PLANS.md section 18) — a GX-Corner-style bento
    mosaic: a featured hero, news/community tiles, a compact "what's new" tile, and a static
    Discord tile. Image-backed tiles use a dark scrim + overlaid title; text tiles are plain

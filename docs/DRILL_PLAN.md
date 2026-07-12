@@ -60,7 +60,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 - [ ] **B5.1 — Model/route PRESETS.** Instead of only "Auto Router", let the user save a named
   preset (a model or a route config), select it in place of Auto Router, and overwrite existing
   presets or save new ones. Renderer picker + a presets store.
-- [ ] **B5.5 — Oracle visibility (Lachy: "add a demo thinking tab to actually show that its
+- [x] **B5.5 — Oracle visibility (Lachy: "add a demo thinking tab to actually show that its
   working").** RENDERER. Oracle's prewarm is deliberately invisible, so testing feels inconclusive.
   Make it visible: (a) a slim Oracle activity chip near the composer that lights up when a warm
   fires ("Oracle: warming <model>" -> "warm, XXXms", renderer times the invoke round-trip),

@@ -827,6 +827,27 @@ const DEFAULT_BENCHMARK_LOCAL_FIRST = true;
 // re-checks this same store key itself as defense-in-depth.
 const DEFAULT_PREWARM_ENABLED = false;
 
+/** A single Oracle warm call the composer chip's expandable log remembers
+ *  (docs/DRILL_PLAN.md B5.5) — in-memory only, capped to ORACLE_LOG_CAP
+ *  entries, never persisted. `ms` is the renderer-timed round trip
+ *  (Date.now() delta wrapping the window.metisPrewarm.warm() call), not a
+ *  model-reported figure. */
+interface OracleWarmEvent {
+  model: string;
+  ms: number;
+  at: number;
+}
+
+/** The Oracle composer chip's current phase (docs/DRILL_PLAN.md B5.5). Set
+ *  ONLY from a window.metisPrewarm.warm() call that actually fired — never a
+ *  simulated or optimistic state. "warming" while that call is in flight,
+ *  "warm" once it resolves with the renderer-timed round trip in `ms`. A
+ *  rejected call reverts silently back to "idle" (fail quiet, honest UI). */
+type OracleActivity = { phase: "idle" } | { phase: "warming"; model: string } | { phase: "warm"; model: string; ms: number };
+
+const ORACLE_IDLE: OracleActivity = { phase: "idle" };
+const ORACLE_LOG_CAP = 5;
+
 // Prerequisite skills recommended alongside the model install in onboarding.
 // Matched case-insensitively against registry package names — see
 // matchSkillPackage below (docs/DRILL_PLAN.md Phase 4 follow-up).
@@ -4272,6 +4293,14 @@ function SessionComposer({
   // LOCAL_MODELS entry to pull a real tag from. Never guesses.
   const localPrewarmTarget = useMemo(() => (selectedModel ? localOllamaTagFor(selectedModel) : null), [selectedModel]);
 
+  // Oracle activity chip state (docs/DRILL_PLAN.md B5.5) — the only visible
+  // surface for the otherwise-invisible prewarm hook above. `oracleActivity`
+  // and `oracleLog` are updated ONLY from inside the real warm call below;
+  // nothing here simulates activity.
+  const [oracleActivity, setOracleActivity] = useState<OracleActivity>(ORACLE_IDLE);
+  const [oracleLog, setOracleLog] = useState<OracleWarmEvent[]>([]);
+  const [oracleLogOpen, setOracleLogOpen] = useState(false);
+
   useEffect(() => {
     if (!prewarmEnabled || !window.metisPrewarm || !localPrewarmTarget || !prompt.trim()) return;
     const target = localPrewarmTarget;
@@ -4281,7 +4310,20 @@ function SessionComposer({
     // the same cleanup on unmount. Fire-and-forget: ignore the resolved
     // value, swallow any rejection, never block typing or surface an error.
     const timeoutId = window.setTimeout(() => {
-      void window.metisPrewarm?.warm(target, draft).catch(() => {});
+      setOracleActivity({ phase: "warming", model: target });
+      const startedAt = Date.now();
+      void window.metisPrewarm
+        ?.warm(target, draft)
+        .then(() => {
+          const ms = Date.now() - startedAt;
+          setOracleActivity({ phase: "warm", model: target, ms });
+          setOracleLog((current) => [{ model: target, ms, at: Date.now() }, ...current].slice(0, ORACLE_LOG_CAP));
+        })
+        .catch(() => {
+          // Fail quiet — only revert to idle if nothing newer has already
+          // taken over the chip (e.g. a later keystroke's warm call).
+          setOracleActivity((current) => (current.phase === "warming" && current.model === target ? ORACLE_IDLE : current));
+        });
     }, 400);
     return () => window.clearTimeout(timeoutId);
   }, [prompt, prewarmEnabled, localPrewarmTarget]);
@@ -4291,6 +4333,12 @@ function SessionComposer({
   // leading token) purely for the composer nicety chip below — no autocomplete
   // menu, just a small heads-up that this prompt will force the build pipeline.
   const showOrchestrationChip = /^\s*\/(orchestration|orch)\b/i.test(prompt);
+  // Oracle chip visibility (docs/DRILL_PLAN.md B5.5) — every condition the
+  // warm effect above itself needs before it could ever fire. Requiring the
+  // bridge here too (not just prewarmEnabled + a resolved target) is what
+  // keeps the chip honest in the preview harness, where window.metisPrewarm
+  // is undefined: Oracle genuinely cannot act there, so nothing renders.
+  const oracleVisible = prewarmEnabled && Boolean(localPrewarmTarget) && Boolean(window.metisPrewarm);
 
   function handleAttachFiles(event: ChangeEvent<HTMLInputElement>): void {
     const files = event.target.files;
@@ -4620,6 +4668,15 @@ function SessionComposer({
               </>
             ) : null}
           </div>
+          {oracleVisible ? (
+            <OracleChip
+              activity={oracleActivity}
+              log={oracleLog}
+              open={oracleLogOpen}
+              onToggle={() => setOracleLogOpen((open) => !open)}
+              onClose={() => setOracleLogOpen(false)}
+            />
+          ) : null}
           {sessionBusy && !prompt.trim() ? (
             <button
               className="send-btn stop-btn"
@@ -4649,6 +4706,77 @@ function SessionComposer({
         </div>
       </div>
     </form>
+  );
+}
+
+/** Renders how long ago an Oracle warm event happened, computed at render
+ *  time (docs/DRILL_PLAN.md B5.5) — no interval ticker, so it only refreshes
+ *  when the popover re-renders (e.g. on open). Fine for a "recent events"
+ *  list that isn't meant to be a live clock. */
+function secondsAgoLabel(at: number): string {
+  const seconds = Math.max(0, Math.round((Date.now() - at) / 1000));
+  if (seconds < 1) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  return `${Math.round(seconds / 60)}m ago`;
+}
+
+/** Composer-adjacent status strip for the Oracle prewarm experiment
+ *  (docs/DRILL_PLAN.md B5.5) — the only visible surface for the invisible
+ *  debounced warm hook in SessionComposer. Every state shown here comes from
+ *  a warm call that actually fired: "warming" while
+ *  window.metisPrewarm.warm() is in flight, "warm" once it resolves with the
+ *  renderer-timed round trip. Click/tap expands a small in-memory log of the
+ *  last few warm events (model, duration, how long ago). */
+function OracleChip({
+  activity,
+  log,
+  open,
+  onToggle,
+  onClose
+}: {
+  activity: OracleActivity;
+  log: OracleWarmEvent[];
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}): JSX.Element {
+  const label =
+    activity.phase === "warming"
+      ? `Oracle: warming ${activity.model}`
+      : activity.phase === "warm"
+      ? `Oracle: ${activity.model} warm, ${activity.ms}ms`
+      : "Oracle ready";
+  return (
+    <div className="oracle-chip-wrap">
+      <button
+        type="button"
+        className={`composer-suggestion-chip oracle-chip ${activity.phase}`}
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label={`${label} — click for recent warm calls`}
+      >
+        {activity.phase === "warming" ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
+        <span>{label}</span>
+      </button>
+      {open ? (
+        <>
+          <div className="oracle-backdrop" onClick={onClose} />
+          <div className="oracle-log-popover" role="dialog" aria-label="Recent Oracle warm calls">
+            {log.length === 0 ? (
+              <p className="oracle-log-empty">No warm calls yet this session.</p>
+            ) : (
+              log.map((event, index) => (
+                <div className="oracle-log-row" key={`${event.at}-${index}`}>
+                  <strong>{event.model}</strong>
+                  <span>{event.ms}ms</span>
+                  <em>{secondsAgoLabel(event.at)}</em>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      ) : null}
+    </div>
   );
 }
 
@@ -5302,6 +5430,14 @@ function routeDisplayName(run: SessionRun): string {
   return name || "Metis";
 }
 
+/** Slim time-to-first-token addition for a completed run's route line
+ *  (docs/DRILL_PLAN.md B5.5) — undefined ttftMs (every provider call that
+ *  wasn't a streaming Ollama call, today) renders nothing rather than a
+ *  placeholder. */
+function ttftSuffix(run: SessionRun): JSX.Element | null {
+  return typeof run.ttftMs === "number" ? <em>first token {run.ttftMs}ms</em> : null;
+}
+
 function providerLabel(provider: ProviderKey): string {
   if (provider === "anthropic") return "Anthropic";
   if (provider === "openai") return "OpenAI";
@@ -5533,6 +5669,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
           <summary className="route-line">
             <Waypoints size={13} />
             <span>Routed via {routeDisplayName(run)}</span>
+            {ttftSuffix(run)}
           </summary>
           <div className="route-trace-body">
             <PipelineSteps steps={run.steps} />
@@ -5558,6 +5695,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
           <summary className="route-line">
             <Waypoints size={13} />
             <span>Routed via {routeDisplayName(run)}</span>
+            {ttftSuffix(run)}
           </summary>
           <div className="route-trace-body">
             <PipelineSteps steps={run.steps} />
@@ -5587,6 +5725,7 @@ function RunTimeline({ events, run, warnings }: { events: SessionTimelineEvent[]
                 <ChevronRight className="stage-caret" size={14} />
                 <Waypoints size={13} />
                 <span>Routed via {routeDisplayName(run)}</span>
+                {ttftSuffix(run)}
               </summary>
               <div className="route-trace-body">
                 <PipelineSteps steps={run.steps} />
