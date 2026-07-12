@@ -191,6 +191,9 @@ type ModelRef = { provider: ProviderId; model: string };
 // B5.1) — model: null means the preset captures "Auto router" itself (a
 // named default), otherwise it's a direct shortcut onto a specific ModelRef.
 type ModelPreset = { id: string; name: string; model: ModelRef | null };
+// A saved reusable prompt snippet (DRILL_PLAN Phase 8) — inserted into the
+// composer via the "/" popover, mirroring the ModelPreset pattern above.
+type PromptTemplate = { id: string; name: string; text: string };
 type ProjectFolder = { name: string; latest: string; age: string; path?: string };
 
 type GraphNode = {
@@ -650,6 +653,12 @@ const MODEL_LIBRARY: ModelRef[] = [
 // saves one from the composer picker; never seeded with demo entries.
 const DEFAULT_MODEL_PRESETS: ModelPreset[] = [];
 const MAX_MODEL_PRESETS = 12;
+
+// Persisted via useAppStoreState("promptTemplates", ...) — empty until Lachy
+// saves a draft as a template from the composer toolbar; never seeded with
+// demo entries (DRILL_PLAN Phase 8).
+const DEFAULT_PROMPT_TEMPLATES: PromptTemplate[] = [];
+const MAX_PROMPT_TEMPLATES = 20;
 
 function providerConnectionStatus(provider: ProviderId, states: Partial<Record<ProviderKey, ProviderConnectionState>>): ProviderConnectionState {
   const key = PROVIDER_CONNECTIONS[provider];
@@ -3583,6 +3592,10 @@ function NewSessionWorkspace({
   const [draftModelProvider, setDraftModelProvider] = useState<ProviderId>("claude");
   const [customModels, setCustomModels] = useAppStoreState("customModels", [] as ModelRef[]);
   const [modelPresets, setModelPresets] = useAppStoreState("modelPresets", DEFAULT_MODEL_PRESETS);
+  // Saved prompt snippets (DRILL_PLAN Phase 8) — persisted here (the parent)
+  // rather than inside SessionComposer so they survive its per-draft remount,
+  // same reasoning as modelPresets above.
+  const [promptTemplates, setPromptTemplates] = useAppStoreState("promptTemplates", DEFAULT_PROMPT_TEMPLATES);
   const [remoteModelCatalog, setRemoteModelCatalog] = useState<CatalogModel[]>([]);
   const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
 
@@ -3687,6 +3700,31 @@ function NewSessionWorkspace({
   // MAX_MODEL_PRESETS so the group never grows unbounded.
   function deleteModelPreset(id: string): void {
     void setModelPresets((current) => current.filter((preset) => preset.id !== id));
+  }
+
+  // Saved prompt snippets (DRILL_PLAN Phase 8) — same overwrite-by-name +
+  // cap behavior as deleteModelPreset/MAX_MODEL_PRESETS above: saving under a
+  // name that already exists (case-insensitive) overwrites that template's
+  // text in place, otherwise appends and drops the oldest entry once past
+  // MAX_PROMPT_TEMPLATES so the list never grows unbounded.
+  function savePromptTemplate(name: string, text: string): void {
+    const trimmedName = name.trim();
+    const trimmedText = text.trim();
+    if (!trimmedName || !trimmedText) return;
+    void setPromptTemplates((current) => {
+      const existingIndex = current.findIndex((template) => template.name.toLowerCase() === trimmedName.toLowerCase());
+      if (existingIndex >= 0) {
+        const next = [...current];
+        next[existingIndex] = { ...next[existingIndex], text: trimmedText };
+        return next;
+      }
+      const next = [...current, { id: `tpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: trimmedName, text: trimmedText }];
+      return next.length > MAX_PROMPT_TEMPLATES ? next.slice(next.length - MAX_PROMPT_TEMPLATES) : next;
+    });
+  }
+
+  function deletePromptTemplate(id: string): void {
+    void setPromptTemplates((current) => current.filter((template) => template.id !== id));
   }
   const [activeConversationId, setActiveConversationId] = useState<string | undefined>();
   // This workspace instance's own draft key, minted once per mount. Every
@@ -4439,6 +4477,9 @@ function NewSessionWorkspace({
           resolveRouteSuffix={resolveRouteSuffix}
           modelPresets={modelPresets}
           deleteModelPreset={deleteModelPreset}
+          promptTemplates={promptTemplates}
+          savePromptTemplate={savePromptTemplate}
+          deletePromptTemplate={deletePromptTemplate}
         />
       </div>
     </div>
@@ -4500,7 +4541,10 @@ function SessionComposer({
   addCustomModel,
   resolveRouteSuffix,
   modelPresets,
-  deleteModelPreset
+  deleteModelPreset,
+  promptTemplates,
+  savePromptTemplate,
+  deletePromptTemplate
 }: {
   sessionBusy: boolean;
   projectWorkspace: ProjectWorkspace | null;
@@ -4537,11 +4581,27 @@ function SessionComposer({
    *  the picker; saving lives in Orchestration now, not the model selector. */
   modelPresets: ModelPreset[];
   deleteModelPreset: (id: string) => void;
+  /** Saved prompt snippets (DRILL_PLAN Phase 8) — persisted in the parent so
+   *  they survive SessionComposer's per-draft remount, same reasoning as
+   *  modelPresets above. Listed + inserted + deleted from the "/" popover;
+   *  saving happens from the composer's own toolbar affordance. */
+  promptTemplates: PromptTemplate[];
+  savePromptTemplate: (name: string, text: string) => void;
+  deletePromptTemplate: (id: string) => void;
 }): JSX.Element {
   const [prompt, setPrompt] = useState("");
   const [permOpen, setPermOpen] = useState(false);
   const [routerOpen, setRouterOpen] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  // Prompt template "/" popover (DRILL_PLAN Phase 8). templateDismissed lets
+  // Escape or a backdrop click hide the popover without touching the typed
+  // "/query" text, same idiom as suggestionDismissed above; it's reset
+  // whenever the composer leaves slash mode so re-entering it later (e.g.
+  // after backspacing to just "/") shows the popover again.
+  const [templateDismissed, setTemplateDismissed] = useState(false);
+  const [templateActiveIndex, setTemplateActiveIndex] = useState(0);
+  const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
+  const [draftTemplateName, setDraftTemplateName] = useState("");
   // Installed-Ollama-tags lookup for the picker's local-model install badges
   // (DRILL_PLAN B5.2) — reuses the same window.metisOllama.list() bridge the
   // Benchmark wizard already uses to show install state + drive its pull flow
@@ -4681,6 +4741,49 @@ function SessionComposer({
   // leading token) purely for the composer nicety chip below — no autocomplete
   // menu, just a small heads-up that this prompt will force the build pipeline.
   const showOrchestrationChip = /^\s*\/(orchestration|orch)\b/i.test(prompt);
+
+  // Prompt template "/" popover (DRILL_PLAN Phase 8): only while the ENTIRE
+  // prompt is a slash followed by a single space-free query token — i.e. it
+  // can only begin when "/" is the very first character typed into an empty
+  // composer, and closes itself the moment a space is typed (same hand-off
+  // point as /orchestration's own "command token, then remainder" shape —
+  // once there's a space the rest is free-form text, not a filter query).
+  // templateQuery is null outside slash mode.
+  const templateSlashMatch = /^\/(\S{0,40})$/.exec(prompt);
+  const templateQuery = templateSlashMatch ? templateSlashMatch[1] : null;
+  const templateSlashMode = templateQuery !== null;
+  useEffect(() => {
+    if (!templateSlashMode) setTemplateDismissed(false);
+  }, [templateSlashMode]);
+  useEffect(() => {
+    setTemplateActiveIndex(0);
+  }, [templateQuery]);
+  const templatePopoverVisible = templateSlashMode && !templateDismissed;
+  const templateFilter = (templateQuery ?? "").trim().toLowerCase();
+  const filteredTemplates = promptTemplates.filter((template) => !templateFilter || template.name.toLowerCase().includes(templateFilter));
+  // Built-in /orchestration row (mirrors main.ts's ORCHESTRATION_COMMAND_RE
+  // above) listed alongside saved templates purely for discoverability —
+  // selecting it inserts the canonical command text, it never becomes a
+  // saved/deletable PromptTemplate.
+  const orchestrationRowMatches = !templateFilter || "orchestration".includes(templateFilter) || "orch".includes(templateFilter);
+  const templateRows: ({ kind: "builtin" } | { kind: "template"; template: PromptTemplate })[] = [
+    ...(orchestrationRowMatches ? [{ kind: "builtin" as const }] : []),
+    ...filteredTemplates.map((template) => ({ kind: "template" as const, template }))
+  ];
+  const templateActiveRow = templateRows.length ? templateRows[Math.min(templateActiveIndex, templateRows.length - 1)] : undefined;
+
+  function insertTemplateRow(row: { kind: "builtin" } | { kind: "template"; template: PromptTemplate }): void {
+    setPrompt(row.kind === "builtin" ? "/orchestration " : row.template.text);
+  }
+
+  function handleSaveTemplate(): void {
+    const name = draftTemplateName.trim();
+    if (!name || !prompt.trim()) return;
+    savePromptTemplate(name, prompt);
+    setSaveTemplateOpen(false);
+    setDraftTemplateName("");
+  }
+
   // Oracle chip visibility (docs/DRILL_PLAN.md B5.5) — every condition the
   // warm effect above itself needs before it could ever fire. Requiring the
   // bridge here too (not just prewarmEnabled + a resolved target) is what
@@ -4788,6 +4891,28 @@ function SessionComposer({
             if (event.target.value) setSuggestionDismissed(true);
           }}
           onKeyDown={(event) => {
+            if (templatePopoverVisible) {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setTemplateActiveIndex((index) => (templateRows.length ? (index + 1) % templateRows.length : 0));
+                return;
+              }
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setTemplateActiveIndex((index) => (templateRows.length ? (index - 1 + templateRows.length) % templateRows.length : 0));
+                return;
+              }
+              if (event.key === "Enter" && !event.shiftKey && templateActiveRow) {
+                event.preventDefault();
+                insertTemplateRow(templateActiveRow);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setTemplateDismissed(true);
+                return;
+              }
+            }
             if (event.key === "Tab" && showSuggestion && suggestion) {
               event.preventDefault();
               setPrompt(suggestion);
@@ -4798,6 +4923,71 @@ function SessionComposer({
             }
           }}
         />
+        {templatePopoverVisible ? (
+          <>
+            <div className="resource-backdrop" onClick={() => setTemplateDismissed(true)} />
+            <div className="template-popover" role="listbox" aria-label="Prompt templates">
+              <div className="router-tier-label">Templates</div>
+              <div className="router-menu-scroll">
+                {templateRows.length === 0 ? (
+                  <p className="router-empty">No templates match “{templateQuery}”.</p>
+                ) : (
+                  templateRows.map((row, index) => {
+                    const active = index === templateActiveIndex;
+                    if (row.kind === "builtin") {
+                      return (
+                        <button
+                          key="builtin-orchestration"
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => insertTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>/orchestration</strong>
+                            <small>Forces the build pipeline for this prompt · alias /orch</small>
+                          </span>
+                        </button>
+                      );
+                    }
+                    const template = row.template;
+                    return (
+                      <div className="router-preset-row" key={template.id}>
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => insertTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>{template.name}</strong>
+                            <small>{template.text}</small>
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          className="router-preset-remove"
+                          aria-label={`Delete template ${template.name}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onClick={(event) => { event.stopPropagation(); deletePromptTemplate(template.id); }}
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+              {promptTemplates.length === 0 ? <p className="router-presets-hint">Save a draft as a template to see it here.</p> : null}
+            </div>
+          </>
+        ) : null}
         {showSuggestion && suggestion ? (
           <button
             type="button"
@@ -4933,6 +5123,44 @@ function SessionComposer({
             className="composer-file-input"
             onChange={handleAttachFiles}
           />
+          <div className="template-save-wrap">
+            <button
+              className={`tool-btn ${saveTemplateOpen ? "active" : ""}`}
+              type="button"
+              aria-label="Save as template"
+              aria-expanded={saveTemplateOpen}
+              title={prompt.trim() ? "Save this draft as a reusable template" : "Type something to save it as a template"}
+              disabled={!prompt.trim()}
+              onClick={() => { setDraftTemplateName(""); setSaveTemplateOpen((open) => !open); }}
+            >
+              <Save size={16} />
+            </button>
+            {saveTemplateOpen ? (
+              <>
+                <div className="resource-backdrop" onClick={() => setSaveTemplateOpen(false)} />
+                <div className="template-save-popover" role="dialog" aria-label="Save as template">
+                  <input
+                    value={draftTemplateName}
+                    placeholder="Template name"
+                    autoFocus
+                    onChange={(event) => setDraftTemplateName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleSaveTemplate();
+                      } else if (event.key === "Escape") {
+                        setSaveTemplateOpen(false);
+                      }
+                    }}
+                  />
+                  <div className="router-add-actions">
+                    <button type="button" disabled={!draftTemplateName.trim()} onClick={handleSaveTemplate}>Save</button>
+                    <button type="button" className="ghost" onClick={() => setSaveTemplateOpen(false)}>Cancel</button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+          </div>
           <button className="tool-btn" type="button" aria-label="Voice input" title="Voice input — coming soon" disabled>
             <Mic size={16} />
           </button>

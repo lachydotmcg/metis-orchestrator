@@ -530,7 +530,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   NEEDS LIVE TEST for the save dialog.
 - [ ] Streaming Manager chat (SSE-style token streaming into the widget).
 - [x] Per-conversation token/cost line (reuse telemetry; show at conversation top).
-- [ ] Prompt templates / snippets library in the composer (slash-command style).
+- [x] Prompt templates / snippets library in the composer (slash-command style).
 - [ ] First-run tour: a 5-step overlay pointing at Orchestration, Manager, Marketplace,
   Gallery, Benchmark (ties into §17 onboarding).
 - [x] Electron-builder packaging config + a GitHub Actions release workflow (so Lachy can

@@ -8535,6 +8535,73 @@ html.density-compact .nav-row {
   font-size: 11px;
 }
 
+/* Prompt template "/" popover (DRILL_PLAN Phase 8) — triggered by typing "/"
+   at the start of an empty composer, not a toolbar click, so it anchors to
+   .composer-input-wrap (which wraps just the textarea) rather than a pill.
+   Reuses .router-tier-label / .router-menu-scroll / .router-option /
+   .router-preset-row / .router-preset-remove / .router-empty /
+   .router-presets-hint for its rows and empty states so it reads as part of
+   the same picker family as the model router menu above, not a bolted-on
+   widget. Its click-outside backdrop reuses .resource-backdrop (z-index 24)
+   since only one of these composer popovers is ever open at a time. */
+.template-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 25;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, 100%);
+  max-height: 280px;
+  padding: 6px;
+  background: #1d1d1d;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.5);
+}
+
+.template-popover .router-option small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+}
+
+/* Save-current-draft-as-template toolbar affordance (DRILL_PLAN Phase 8),
+   next to the attach-images button. Reuses .resource-backdrop for its
+   click-outside scrim and .router-add-form/.router-add-actions' input +
+   button styling rather than inventing a parallel form idiom. */
+.template-save-wrap {
+  position: relative;
+}
+
+.template-save-popover {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  z-index: 25;
+  display: grid;
+  gap: 6px;
+  width: 220px;
+  padding: 8px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  box-shadow: 0 18px 52px rgb(0 0 0 / 0.45);
+}
+
+.template-save-popover input {
+  min-height: 28px;
+  padding: 0 8px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
 .router-add-trigger {
   display: flex;
   gap: 7px;
@@ -8596,6 +8663,11 @@ html.density-compact .nav-row {
 .router-add-actions button.ghost {
   color: var(--muted);
   background: transparent;
+}
+
+.router-add-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .router-empty {
