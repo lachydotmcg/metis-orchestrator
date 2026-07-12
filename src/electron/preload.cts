@@ -21,6 +21,7 @@ import type {
   SessionRunInput,
   StyleCard,
   UpdateCheckResult,
+  UserProfile,
   UserQuestionAnswer
 } from "../shared/runtime-contracts";
 
@@ -89,6 +90,11 @@ contextBridge.exposeInMainWorld("metisKnowledge", {
 
 contextBridge.exposeInMainWorld("metisLab", {
   runExperiment: (prompt?: string) => ipcRenderer.invoke("metis-lab:run-experiment", prompt)
+});
+
+contextBridge.exposeInMainWorld("metisProfile", {
+  get: () => ipcRenderer.invoke("metis-profile:get") as Promise<UserProfile>,
+  set: (patch: Partial<UserProfile>) => ipcRenderer.invoke("metis-profile:set", patch) as Promise<UserProfile>
 });
 
 contextBridge.exposeInMainWorld("metisProject", {

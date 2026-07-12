@@ -131,6 +131,23 @@ export interface UserQuestionRequest {
  *  (docs/DRILL_PLAN.md B2.3a). Existing single-answer callers are unaffected. */
 export type UserQuestionAnswer = string | string[];
 
+/** Plan the local owner is on. "byo" (bring-your-own keys) is the only plan
+ *  today and is always the default — paid tiers are a future decision and
+ *  are not implemented yet (docs/DRILL_PLAN.md B3.2a). */
+export type MetisPlan = "byo"; // bring-your-own keys; future: paid tiers
+
+/** The local owner profile persisted under the `profile` store key
+ *  (docs/DRILL_PLAN.md B3.2a) — not a server account, just a per-install
+ *  identity for the app. `onboardedAt` absent means first-run onboarding
+ *  has not been completed yet. */
+export interface UserProfile {
+  name?: string;
+  plan: MetisPlan;
+  modelPreference?: "local" | "cloud";
+  createdAt: string;
+  onboardedAt?: string;
+}
+
 export interface ProjectWorkspace {
   path: string;
   name: string;

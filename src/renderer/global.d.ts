@@ -41,6 +41,7 @@ import type {
   SecretStatus,
   StyleCard,
   UpdateCheckResult,
+  UserProfile,
   UserQuestionAnswer
 } from "../shared/runtime-contracts";
 
@@ -88,6 +89,10 @@ declare global {
     };
     metisLab?: {
       runExperiment: (prompt?: string) => Promise<LabExperimentResult>;
+    };
+    metisProfile?: {
+      get: () => Promise<UserProfile>;
+      set: (patch: Partial<UserProfile>) => Promise<UserProfile>;
     };
     metisProject?: {
       getWorkspace: () => Promise<ProjectWorkspace | null>;

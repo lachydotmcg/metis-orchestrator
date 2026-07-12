@@ -77,7 +77,8 @@ import type {
   ManagerAction,
   ManagerActionKind,
   ManagerActionResult,
-  UpdateCheckResult
+  UpdateCheckResult,
+  UserProfile
 } from "../shared/runtime-contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1641,6 +1642,33 @@ async function revokePermission(id: string): Promise<void> {
   if (grant) {
     await appendAudit("info", "permission.revoke", `Revoked ${grant.scope} for ${grant.target}.`, { id });
   }
+}
+
+/** Local owner profile store (docs/DRILL_PLAN.md B3.2a) — not server auth,
+ *  just a per-install identity persisted under the `profile` store key
+ *  (metis-store/profile.json). Never throws: any read failure falls back to
+ *  a fresh default so the app never blocks on a corrupt/missing file. */
+async function readUserProfile(): Promise<UserProfile> {
+  try {
+    const stored = await readStoreValue<UserProfile | null>("profile", null);
+    if (stored) return stored;
+    const created: UserProfile = { plan: "byo", createdAt: new Date().toISOString() };
+    await writeStoreValue("profile", created);
+    return created;
+  } catch {
+    return { plan: "byo", createdAt: new Date().toISOString() };
+  }
+}
+
+/** Merges `patch` onto the current profile and persists it, so the renderer
+ *  can set name, modelPreference, or onboardedAt independently without
+ *  clobbering the rest. Audits only which fields changed, never their values. */
+async function writeUserProfile(patch: Partial<UserProfile>): Promise<UserProfile> {
+  const current = await readUserProfile();
+  const next: UserProfile = { ...current, ...patch };
+  await writeStoreValue("profile", next);
+  await appendAudit("info", "profile.update", "Profile updated.", { fields: Object.keys(patch) });
+  return next;
 }
 
 async function readProjectWorkspace(): Promise<ProjectWorkspace | null> {
@@ -8805,6 +8833,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-conversations:export", (_event, input?: { conversationId?: string }) => exportConversationsMarkdown(input?.conversationId));
   ipcMain.handle("metis-knowledge:searchConversations", (_event, query: string, topK?: number) => retrieveConversationContext(query, topK));
   ipcMain.handle("metis-lab:run-experiment", (_event, prompt?: string) => runLabExperiment(prompt));
+  ipcMain.handle("metis-profile:get", () => readUserProfile());
+  ipcMain.handle("metis-profile:set", (_e, patch: Partial<UserProfile>) => writeUserProfile(patch));
   ipcMain.handle("metis-project:get-workspace", () => readProjectWorkspace());
   ipcMain.handle("metis-project:snapshot", () => snapshotCurrentProject());
   ipcMain.handle("metis-project:select-folder", () => selectProjectWorkspace());

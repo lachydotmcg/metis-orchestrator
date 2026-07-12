@@ -78,6 +78,9 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   preload bridge. Default plan "byo", no onboardedAt. (b) RENDERER: a profile UI to set your name,
   and replace the hardcoded "Pro" label next to the name (grep it in App.tsx) with the plan label
   (BYO). Keep it honest, local-first (this is a LOCAL profile, not server auth).
+  STATUS: (a) BACKEND DONE — UserProfile/MetisPlan contracts, metis-store/profile.json store
+  (readUserProfile/writeUserProfile, never throws, BYO default), metis-profile:get/set ipc,
+  metisProfile preload + global.d.ts. (b) RENDERER (name UI + replace Pro badge) still to build.
 - [ ] **B3.3 — First-run onboarding experience.** RENDERER (reuses Benchmark). On first launch
   (profile.onboardedAt absent), run a wizard: (1) welcome + set your name, (2) preference Local
   Models or Cloud, (3) hardware check + model recommendations (reuse the Benchmark's hardware
