@@ -217,6 +217,20 @@ export interface ManagerChatResult {
   actions?: ManagerAction[];
 }
 
+/** Stream events for the streaming Manager chat turn (`metis-manager:chat-stream`
+ *  / `metis-manager:chat-stream-event`), mirroring the message_delta/thought_delta
+ *  shape of SessionStreamEvent (docs/DRILL_PLAN.md Phase 8) so the same
+ *  Ollama token-streaming path (invokeOllamaProviderStream) can feed both. Kept
+ *  as its own small union rather than reusing SessionStreamEvent directly since
+ *  a Manager chat turn has no SessionRun to carry — `complete` instead carries
+ *  the exact same ManagerChatResult the non-streaming `metis-manager:chat`
+ *  resolves with, so a streaming caller still gets actions/errors identically. */
+export type ManagerChatStreamEvent =
+  | { kind: "message_delta"; delta: string }
+  | { kind: "thought_delta"; delta: string }
+  | { kind: "complete"; result: ManagerChatResult }
+  | { kind: "error"; message: string };
+
 export interface ProjectSnapshotFile {
   path: string;
   kind: "file" | "directory";

@@ -75,6 +75,7 @@ import type {
   UserQuestionAnswer,
   ManagerChatMessage,
   ManagerChatResult,
+  ManagerChatStreamEvent,
   ManagerAction,
   ManagerActionKind,
   ManagerActionResult,
@@ -6936,6 +6937,130 @@ async function runManagerChat(history: ManagerChatMessage[]): Promise<ManagerCha
   }
 }
 
+/** Streaming Manager chat turn (docs/DRILL_PLAN.md Phase 8): builds the SAME
+ *  live context + system prompt + model chain as runManagerChat above, but
+ *  threads a stream adapter into invokeProvider for the final user-facing
+ *  reply so a chain entry that resolves to local Ollama streams
+ *  message_delta/thought_delta tokens live — the exact same
+ *  invokeOllamaProviderStream path metis-session:run-stream already uses,
+ *  just fed through a small adapter (below) instead of the session's own
+ *  SessionStreamEvent union, since a Manager chat turn has no SessionRun to
+ *  carry. Cloud entries (Claude, DeepSeek) resolve in one shot, exactly as
+ *  they do everywhere else in the app — invokeProvider only special-cases
+ *  streaming for the ollama branch, so this is purely additive, no new
+ *  per-provider streaming code.
+ *
+ *  Deliberately NOT a refactor of callStageWithFallback: that function is
+ *  shared by many callers (router/critic/repair/build-stage calls) that pass
+ *  a stream purely so callContext's stage_call side-chat cards can render —
+ *  its per-attempt invokeProvider call always passes `undefined` as the
+ *  stream on purpose, so an intermediate pipeline stage's raw output never
+ *  leaks into a user-facing delta stream (see the "Stage calls never stream"
+ *  comment above). A Manager chat turn has no intermediate stages — it is
+ *  always exactly one final reply — so it gets this own small fallback loop
+ *  instead of changing that shared function's behavior for every other
+ *  caller. It reuses expandChainByRoutes (the same route-expansion
+ *  callStageWithFallback itself uses) and the same provider-cooldown/quota
+ *  bookkeeping, so fallback fidelity matches the non-streaming path; it does
+ *  not replicate the pooled multi-account rotation callStageWithFallback also
+ *  does — a reasonable scope cut for a first streaming cut, not a regression
+ *  of the (untouched) non-streaming path.
+ *
+ *  Never throws — mirrors runManagerChat's try/catch-to-result contract, and
+ *  ALSO emits the terminal event ("complete" or "error") on `emit` before
+ *  resolving, so a caller only wired to the event stream still observes the
+ *  outcome even if it ignores the resolved promise. */
+async function runManagerChatStream(
+  history: ManagerChatMessage[],
+  emit: (event: ManagerChatStreamEvent) => void
+): Promise<ManagerChatResult> {
+  // Bridges invokeProvider/invokeOllamaProviderStream's SessionStreamController
+  // shape to the Manager's own event union. Those two functions only ever
+  // emit "message_delta"/"thought_delta" on the controller they're given
+  // (invokeOllamaProviderStream above is the sole emitter), so narrowing to
+  // just those two kinds is a complete, lossless forward — the `default`
+  // case below is unreached in practice but kept as a defensive no-op rather
+  // than an assumption.
+  const streamAdapter: SessionStreamController = {
+    emit: (event) => {
+      if (event.kind === "message_delta" || event.kind === "thought_delta") {
+        emit(event);
+      }
+    }
+  };
+  try {
+    const context = await buildManagerContext();
+    const system = managerSystemPrompt(context);
+    const transcript = (history ?? [])
+      .slice(-20)
+      .map((turn) => `${turn.role === "user" ? "Owner" : "Manager"}: ${turn.content}`)
+      .join("\n\n");
+    const prompt = [system, "", "Conversation so far:", transcript || "(no prior turns)", "", "Manager:"].join("\n");
+
+    const chain = await expandChainByRoutes(await managerChatChain());
+    const notes: string[] = [];
+    let settled: { ref: StageModelRef; output: string } | undefined;
+    for (let i = 0; i < chain.length; i++) {
+      const ref = chain[i];
+      const next = chain.slice(i + 1).find((candidate) => !isProviderCooling(candidate.provider));
+      if (isProviderCooling(ref.provider)) {
+        const until = providerCooldownUntil(ref.provider)!;
+        notes.push(
+          `${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${next ? ` — rotated to ${stageModelLabel(next)}.` : "."}`
+        );
+        continue;
+      }
+      try {
+        const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt }, streamAdapter);
+        if (result.source === "placeholder" || !result.output.trim()) {
+          notes.push(`${stageModelLabel(ref)} unavailable${next ? `, falling back to ${stageModelLabel(next)}` : ""}.`);
+          continue;
+        }
+        settled = { ref, output: result.output.trim() };
+        break;
+      } catch (error) {
+        // A Stop-button abort must surface as cancellation, never a provider
+        // failure — same guard callStageWithFallback uses. Manager chat has
+        // no cancel scope wired through yet (runManagerChat doesn't either),
+        // so this is unreached today but kept for parity/forward-compat.
+        if (isCancellationError(error)) throw error;
+        if (isQuotaError(error)) {
+          const until = markProviderCooldown(ref.provider, error);
+          notes.push(`${stageModelLabel(ref)} is rate-limited (cooling ${formatCooldownDuration(until)})${next ? ` — rotated to ${stageModelLabel(next)}.` : "."}`);
+        } else {
+          notes.push(`${stageModelLabel(ref)} failed${next ? `, falling back to ${stageModelLabel(next)}` : ""}: ${error instanceof Error ? error.message : String(error)}.`);
+        }
+      }
+    }
+
+    if (!settled) {
+      const detail = notes.join(" ") || "No model in the chain produced a reply.";
+      await appendAudit("warning", "manager.chat", "Manager chat turn failed.", { notes });
+      const result: ManagerChatResult = { reply: "", error: detail };
+      emit({ kind: "complete", result });
+      return result;
+    }
+
+    await appendAudit("info", "manager.chat", "Manager replied to a chat turn.", {
+      provider: settled.ref.provider,
+      model: settled.ref.model
+    });
+    const { reply, actions } = extractManagerActions(settled.output);
+    if (actions?.length) {
+      await appendAudit("info", "manager.action", "Manager proposed actions.", {
+        kinds: actions.map((action) => action.kind)
+      });
+    }
+    const result: ManagerChatResult = { reply, actions };
+    emit({ kind: "complete", result });
+    return result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    emit({ kind: "error", message });
+    return { reply: "", error: message };
+  }
+}
+
 /** Full shape written back to the `todoBoard` store key for add_todo — matches
  *  the renderer's TodoCard/TodoColumn/TodoBoard shape (src/renderer/ui/App.tsx)
  *  but kept local since main.ts must not depend on renderer types. */
@@ -9698,6 +9823,27 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));
   ipcMain.handle("metis-routines:run-now", (_event, id: string) => runRoutineNow(id));
   ipcMain.handle("metis-manager:chat", (_event, history: ManagerChatMessage[]) => runManagerChat(history));
+  // Streaming sibling of metis-manager:chat (docs/DRILL_PLAN.md Phase 8) —
+  // mirrors metis-session:run-stream's streamId + sender.send pattern exactly.
+  // The non-streaming handler above is completely untouched; this is a
+  // separate opt-in channel a caller only reaches by calling it explicitly.
+  ipcMain.handle("metis-manager:chat-stream", async (event, streamId: string, history: ManagerChatMessage[]) => {
+    const emit = (payload: ManagerChatStreamEvent) => {
+      if (!event.sender.isDestroyed()) {
+        event.sender.send("metis-manager:chat-stream-event", streamId, payload);
+      }
+    };
+    try {
+      return await runManagerChatStream(history, emit);
+    } catch (error) {
+      // runManagerChatStream already resolves (never rejects) on failure, but
+      // this mirrors metis-session:run-stream's belt-and-suspenders guard in
+      // case that contract is ever violated by a future edit.
+      const message = error instanceof Error ? error.message : String(error);
+      emit({ kind: "error", message });
+      return { reply: "", error: message };
+    }
+  });
   ipcMain.handle("metis-manager:action", (_event, action: ManagerAction) => executeManagerAction(action));
   ipcMain.handle("metis-gallery:analyze-board", (_event, boardId: string) => analyzeGalleryBoard(boardId));
   ipcMain.handle("metis-gallery:cards", () => listStyleCards());

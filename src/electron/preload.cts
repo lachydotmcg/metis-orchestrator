@@ -6,6 +6,7 @@ import type {
   ManagerActionResult,
   ManagerChatMessage,
   ManagerChatResult,
+  ManagerChatStreamEvent,
   MetisFileReadResult,
   MetisFileWriteResult,
   McpProbeResult,
@@ -186,6 +187,20 @@ contextBridge.exposeInMainWorld("metisPrewarm", {
 
 contextBridge.exposeInMainWorld("metisManager", {
   chat: (history: ManagerChatMessage[]) => ipcRenderer.invoke("metis-manager:chat", history) as Promise<ManagerChatResult>,
+  // Streaming sibling of `chat` above (docs/DRILL_PLAN.md Phase 8). Unlike
+  // metisSession.runStream (which generates its own streamId internally and
+  // takes a callback directly), this mirrors the metis-ollama:onPullProgress
+  // shape instead: the caller supplies its own streamId and subscribes
+  // separately via onChatStreamEvent, so a renderer can wire up the listener
+  // before the turn's history is even known. `chat` above is completely
+  // unchanged and keeps working for callers that don't opt into streaming.
+  chatStream: (streamId: string, history: ManagerChatMessage[]) =>
+    ipcRenderer.invoke("metis-manager:chat-stream", streamId, history) as Promise<ManagerChatResult>,
+  onChatStreamEvent: (cb: (streamId: string, event: ManagerChatStreamEvent) => void) => {
+    const listener = (_event: unknown, streamId: string, payload: ManagerChatStreamEvent) => cb(streamId, payload);
+    ipcRenderer.on("metis-manager:chat-stream-event", listener);
+    return () => ipcRenderer.removeListener("metis-manager:chat-stream-event", listener);
+  },
   runAction: (action: ManagerAction) => ipcRenderer.invoke("metis-manager:action", action) as Promise<ManagerActionResult>
 });
 

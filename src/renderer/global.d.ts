@@ -9,6 +9,7 @@ import type {
   ManagerActionResult,
   ManagerChatMessage,
   ManagerChatResult,
+  ManagerChatStreamEvent,
   MetisFileReadResult,
   MetisFileWriteResult,
   McpProbeResult,
@@ -172,6 +173,12 @@ declare global {
     };
     metisManager?: {
       chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;
+      // Streaming sibling of `chat` (docs/DRILL_PLAN.md Phase 8) — the
+      // renderer opts in by generating its own streamId, subscribing via
+      // onChatStreamEvent, then calling chatStream with that same id.
+      // `chat` above is unchanged for callers that don't opt in.
+      chatStream: (streamId: string, history: ManagerChatMessage[]) => Promise<ManagerChatResult>;
+      onChatStreamEvent: (cb: (streamId: string, event: ManagerChatStreamEvent) => void) => () => void;
       runAction: (action: ManagerAction) => Promise<ManagerActionResult>;
     };
     metisUpdates?: {
