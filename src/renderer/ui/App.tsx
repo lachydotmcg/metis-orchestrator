@@ -732,6 +732,17 @@ const LOCAL_MODELS: LocalModel[] = [
   { name: "Qwen3 Embedding 4B", params: "4B", vram: 3.5, quant: "Q4_K_M", tps: 90, role: "multilingual embeddings", roles: ["embeddings"], provider: "qwen", ollamaTag: "qwen3-embedding:4b" }
 ];
 
+/** Resolves a picker/composer ModelRef to its backing LOCAL_MODELS ollamaTag
+ *  (matched by display name), for install-state lookups (DRILL_PLAN B5.2) and
+ *  prewarm targeting. Returns null for cloud-tier refs and for local refs with
+ *  no matching LOCAL_MODELS entry (e.g. a hosted-only local-brand model) —
+ *  never guesses a tag. The single source of truth for that name<->tag
+ *  pairing; callers should reuse this rather than re-deriving it. */
+function localOllamaTagFor(ref: ModelRef): string | null {
+  if (PROVIDERS[ref.provider].tier !== "local") return null;
+  return LOCAL_MODELS.find((entry) => entry.name === ref.model)?.ollamaTag ?? null;
+}
+
 // Manager base-model picker (Manager tab, L12): null means the default
 // Manager chain; otherwise this pins the Manager to a specific model, mirroring
 // the shape SessionComposer's modelOverride builds from a picked ModelRef.
@@ -4211,6 +4222,29 @@ function SessionComposer({
   const [permOpen, setPermOpen] = useState(false);
   const [routerOpen, setRouterOpen] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  // Installed-Ollama-tags lookup for the picker's local-model install badges
+  // (DRILL_PLAN B5.2) — reuses the same window.metisOllama.list() bridge the
+  // Benchmark wizard already uses to show install state + drive its pull flow
+  // (see the BenchmarkWizard component's ollamaInfo state). null means
+  // "unknown" (bridge missing, e.g. browser preview, or not fetched yet) —
+  // the picker renders that the same as "not installed" rather than crashing
+  // or guessing. Refreshed on mount and again whenever the picker opens,
+  // since the installed set can change between opens (a pull finishing
+  // elsewhere, a manual `ollama rm`, etc.).
+  const [installedOllamaTags, setInstalledOllamaTags] = useState<Set<string> | null>(null);
+  const refreshInstalledOllamaTags = useCallback(() => {
+    if (!window.metisOllama) return;
+    void window.metisOllama
+      .list()
+      .then((info) => setInstalledOllamaTags(new Set(info.installed)))
+      .catch(() => undefined);
+  }, []);
+  useEffect(() => {
+    refreshInstalledOllamaTags();
+  }, [refreshInstalledOllamaTags]);
+  useEffect(() => {
+    if (routerOpen) refreshInstalledOllamaTags();
+  }, [routerOpen, refreshInstalledOllamaTags]);
   // Reference images for the NEXT submit — reset after every send. Capped at
   // MAX_ATTACHMENTS; an image-only submit (no typed text) is valid, so the
   // submit guard below checks this alongside `prompt`.
@@ -4236,10 +4270,7 @@ function SessionComposer({
   // router" may route to a cloud model), the pinned model's provider isn't
   // LOCAL_MODELS-tier "local", or the picker's display name has no matching
   // LOCAL_MODELS entry to pull a real tag from. Never guesses.
-  const localPrewarmTarget = useMemo(() => {
-    if (!selectedModel || PROVIDERS[selectedModel.provider].tier !== "local") return null;
-    return LOCAL_MODELS.find((entry) => entry.name === selectedModel.model)?.ollamaTag ?? null;
-  }, [selectedModel]);
+  const localPrewarmTarget = useMemo(() => (selectedModel ? localOllamaTagFor(selectedModel) : null), [selectedModel]);
 
   useEffect(() => {
     if (!prewarmEnabled || !window.metisPrewarm || !localPrewarmTarget || !prompt.trim()) return;
@@ -4296,6 +4327,24 @@ function SessionComposer({
 
   function removeAttachment(id: string | undefined): void {
     setAttachments((current) => current.filter((item) => item.id !== id));
+  }
+
+  // True only when the ref resolves to a real LOCAL_MODELS ollamaTag AND that
+  // tag is confirmed present in the installed set — anything unresolved or
+  // unconfirmed (including installedOllamaTags still null) reads as "not
+  // installed" rather than a guess.
+  function isLocalModelInstalled(ref: ModelRef): boolean {
+    const tag = localOllamaTagFor(ref);
+    return Boolean(tag && installedOllamaTags?.has(tag));
+  }
+
+  // Installed local models surface first within their brand group so the
+  // model Lachy already has on disk is the obvious pick (DRILL_PLAN B5.2);
+  // ties keep their existing catalog order (stable sort). Cloud brand groups
+  // are never passed through this — they have no install concept.
+  function sortLocalModelsFirst(models: ModelRef[]): ModelRef[] {
+    if (!installedOllamaTags) return models;
+    return [...models].sort((a, b) => Number(isLocalModelInstalled(b)) - Number(isLocalModelInstalled(a)));
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -4518,15 +4567,26 @@ function SessionComposer({
                               <img src={PROVIDERS[brand.provider].logo} alt="" />
                               {PROVIDERS[brand.provider].label}
                             </div>
-                            {brand.models.map((ref) => {
+                            {(tier.tier === "local" ? sortLocalModelsFirst(brand.models) : brand.models).map((ref) => {
                               const active = selectedModel?.provider === ref.provider && selectedModel?.model === ref.model;
                               const routeSuffix = resolveRouteSuffix(ref);
+                              // null for every cloud model (no install concept — they
+                              // depend on an API key, not a local pull) and for local
+                              // models with no resolvable LOCAL_MODELS tag.
+                              const localTag = localOllamaTagFor(ref);
+                              const localInstalled = localTag ? isLocalModelInstalled(ref) : false;
                               return (
                                 <button key={`${ref.provider}-${ref.model}`} type="button" role="option" aria-selected={active} className={`router-option ${active ? "active" : ""}`} onClick={() => { setSelectedModel(ref); setRouterOpen(false); }}>
                                   <span className="router-option-name">
                                     {ref.model}
                                     {routeSuffix ? <small className="router-route-suffix">via {routeSuffix}</small> : null}
                                   </span>
+                                  {localTag ? (
+                                    <span className={`router-local-status ${localInstalled ? "installed" : ""}`}>
+                                      <span className="router-local-dot" />
+                                      {localInstalled ? "Installed" : "Not installed"}
+                                    </span>
+                                  ) : null}
                                   {active ? <Check size={14} /> : null}
                                 </button>
                               );

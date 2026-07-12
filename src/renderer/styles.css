@@ -8260,6 +8260,39 @@ html.density-compact .nav-row {
   padding-left: 27px;
 }
 
+/* Local-model install state (DRILL_PLAN B5.2) — small dot + label next to a
+   local model's name in the picker, so a model that hasn't been pulled reads
+   as not-installed before it gets picked. Cloud models never carry this (no
+   local pull, no install concept). Reuses the same dot idiom and green tone
+   as .routine-status-dot.ok elsewhere in the app for "this is ready". */
+.router-option .router-local-status {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  align-items: center;
+  min-width: 0;
+  color: var(--faint);
+  font-weight: 500;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.router-option .router-local-status.installed {
+  color: var(--muted);
+}
+
+.router-option .router-local-dot {
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.router-option .router-local-status.installed .router-local-dot {
+  background: #6fae7d;
+}
+
 .router-add-trigger {
   display: flex;
   gap: 7px;

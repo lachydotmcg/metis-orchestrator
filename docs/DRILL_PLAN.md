@@ -41,7 +41,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ## ★ LACHY BATCH 5 (2026-07-12, model picker + router intelligence)
 
-- [ ] **B5.2 — Highlight INSTALLED models in the model picker.** RENDERER. The picker lists many
+- [x] **B5.2 — Highlight INSTALLED models in the model picker.** RENDERER. The picker lists many
   models (great for discovery) but does not show which the user actually has installed, so Lachy
   picked qwen3:4b he had not pulled. Cross-reference the Ollama /api/tags list (already fetched via
   metisOllama) and mark installed local models (badge / sort installed first / de-emphasize
