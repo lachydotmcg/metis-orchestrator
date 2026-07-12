@@ -65,6 +65,29 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ---
 
+## ★ LACHY BATCH 3 (2026-07-11, accounts + onboarding) — DO AFTER BATCH 2
+
+- [ ] **B3.1 — Rename Pulse to Community app-wide.** RENDERER. The Pulse nav item / page title /
+  any user-facing "Pulse" string becomes "Community". Grep App.tsx (and the sidebar order + any
+  labels) for Pulse and rename the user-facing copy; keep internal keys stable unless trivial.
+- [ ] **B3.2 — User profile + plan (replaces the hardcoded "Pro" badge).** Lachy wants real
+  accounts: set your name, and a plan concept where BYO (bring-your-own keys) is the default,
+  with paid subscription tiers as a FUTURE product decision (do NOT build payments now). (a)
+  BACKEND (main.ts + contracts + preload): a UserProfile { name?, plan: "byo", modelPreference?:
+  "local"|"cloud", createdAt, onboardedAt? } persisted in a profile store, with get/set ipc +
+  preload bridge. Default plan "byo", no onboardedAt. (b) RENDERER: a profile UI to set your name,
+  and replace the hardcoded "Pro" label next to the name (grep it in App.tsx) with the plan label
+  (BYO). Keep it honest, local-first (this is a LOCAL profile, not server auth).
+- [ ] **B3.3 — First-run onboarding experience.** RENDERER (reuses Benchmark). On first launch
+  (profile.onboardedAt absent), run a wizard: (1) welcome + set your name, (2) preference Local
+  Models or Cloud, (3) hardware check + model recommendations (reuse the Benchmark's hardware
+  detection + recommend flow), (4) install the picks (reuse the one-click / drag-drop Ollama
+  install), (5) you are BYO by default (explain bring-your-own keys; offer to add one or skip).
+  On finish set profile.onboardedAt + name + modelPreference, then land in the app. Do not seed
+  fake data; if hardware detection is unavailable, degrade honestly.
+
+---
+
 ## PHASE 0 — Bugs and quick wins (do these FIRST, they're what Lachy touches daily)
 
 - [x] **L4 — Chat latency + snapshot-dump replies.** Typing "Test" in a new conversation
