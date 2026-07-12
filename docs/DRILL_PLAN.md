@@ -7,6 +7,31 @@
 
 ---
 
+## ★ PRIORITY FIX (2026-07-12, Lachy #1) — attached folder must be the writable project
+
+Root cause: Metis has TWO folder concepts — project RESOURCES (filesystem.read, addWorkspaceResource,
+stored under projectResources, for context/memory/Graph View) and the project WORKSPACE
+(filesystem.write, selectProjectWorkspace, stored under projectWorkspace, the SINGLE folder builds
+write into). When the user attaches a folder as a resource, no writable workspace is set, so
+resolveWritableProjectWorkspace() (main.ts ~1799) returns null and writeProjectFiles() (~5322/5323)
+silently falls back to dataPath("generated-projects") = the app-data area Lachy calls "agent-memory".
+The B2.7 fix only patched the Manager-action path, not this (the real upstream cause).
+
+- [ ] **PF1 — Unify: the folder you attach IS the writable project (Lachy chose unify).** BACKEND
+  (main.ts): when the user attaches a project folder, establish it as the writable workspace (request
+  filesystem.write / project-tools + set the projectWorkspace store) so builds write THERE. Additional
+  read-only reference folders may still be added separately. Builds must NEVER silently write to
+  generated-projects when a folder is attached; only use the app-managed folder when truly nothing is
+  attached (and surface that clearly). RENDERER follow-up: UI clearly shows "your writable project"
+  vs read-only reference folders. NEEDS LIVE TEST: attach a folder, run a build, files land there.
+- [ ] **PF2 — Routing: thinking questions must be ANSWERED, not built.** BACKEND (router). A
+  "walk me through / explain / give me a skeleton" prompt was routed to Build/edit-existing and tried
+  to write files. The router should classify explanatory/Q&A prompts as CHAT answers (chat fast-lane),
+  not file-writing builds. Also unblocks Oracle (prewarm only speeds the chat path). Tune the route
+  decision so Q&A stays in chat; only genuine build/change requests go to the pipeline.
+
+---
+
 ## ★ LACHY BATCH 2 (2026-07-11, live feedback mid-drill) — DO THESE NEXT, prioritized
 
 Substrate already found (don't rebuild): `PermissionRequestCard` (App.tsx ~4563) already
@@ -93,7 +118,8 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 
 ## ★ EXPERIMENTS (Lachy-approved R&D, behind flags, off by default)
 
-- [ ] **E1 — Speculative prompt prewarm (faster responses).** Lachy's idea: as you type, feed the
+- [ ] **E1 — ORACLE (speculative prompt prewarm, faster responses).** Named by Lachy: Oracle, it
+  sees your answer coming. Lachy's idea: as you type, feed the
   in-progress prompt to the LOCAL model so its response is prepared/prefilled, dropping
   time-to-first-token on submit. v0.1 = invisible PREFILL PREWARM only (no speculative answer
   shown, no file effects), LOCAL (Ollama) ONLY, behind a flag default OFF (like fanoutEnabled).
