@@ -102,7 +102,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 - [ ] **B8.3 - Future: split Metis Oracle (and later Metis Gallery) into their own repos and
   open-source the specific technologies.** Oracle = the prewarm/draft/serve engine as a
   standalone lib; Gallery = the style-memory concept once matured. Not yet scheduled.
-- [ ] **B8.4 - Preset save copy confusion.** Lachy: why is Save Qwen3 8B as preset an option?
+- [x] **B8.4 - Removed model-preset SAVE from the picker (Lachy: just do it).** Lachy: why is Save Qwen3 8B as preset an option?
   Its literally just a model. The affordance is for NAMED shortcuts (Coding -> Opus, Default ->
   Auto) and future route-configs, but the inline copy reads redundant when it just mirrors the
   picked model. Polish: subdue the control (e.g. a small Save current selection... link at the

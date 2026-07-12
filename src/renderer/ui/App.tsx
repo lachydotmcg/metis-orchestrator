@@ -3685,21 +3685,6 @@ function NewSessionWorkspace({
   // name that already exists (case-insensitive) overwrites that preset in
   // place rather than creating a duplicate; otherwise capped at
   // MAX_MODEL_PRESETS so the group never grows unbounded.
-  function saveModelPreset(name: string, model: ModelRef | null): void {
-    const trimmed = name.trim();
-    if (!trimmed) return;
-    void setModelPresets((current) => {
-      const existingIndex = current.findIndex((preset) => preset.name.toLowerCase() === trimmed.toLowerCase());
-      if (existingIndex >= 0) {
-        const next = [...current];
-        next[existingIndex] = { ...next[existingIndex], name: trimmed, model };
-        return next;
-      }
-      if (current.length >= MAX_MODEL_PRESETS) return current;
-      return [...current, { id: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, name: trimmed, model }];
-    });
-  }
-
   function deleteModelPreset(id: string): void {
     void setModelPresets((current) => current.filter((preset) => preset.id !== id));
   }
@@ -4453,7 +4438,6 @@ function NewSessionWorkspace({
           addCustomModel={addCustomModel}
           resolveRouteSuffix={resolveRouteSuffix}
           modelPresets={modelPresets}
-          saveModelPreset={saveModelPreset}
           deleteModelPreset={deleteModelPreset}
         />
       </div>
@@ -4516,7 +4500,6 @@ function SessionComposer({
   addCustomModel,
   resolveRouteSuffix,
   modelPresets,
-  saveModelPreset,
   deleteModelPreset
 }: {
   sessionBusy: boolean;
@@ -4549,21 +4532,16 @@ function SessionComposer({
    *  21) — null when the model has one route or resolves through its own
    *  default provider (the non-interesting case). */
   resolveRouteSuffix: (ref: ModelRef) => string | null;
-  /** Saved named model/route presets (DRILL_PLAN B5.1) — persisted in the
-   *  parent so they survive SessionComposer's per-draft remount. */
+  /** Saved named model presets (DRILL_PLAN B5.1) — persisted in the parent so
+   *  they survive SessionComposer's per-draft remount. Applied + deleted from
+   *  the picker; saving lives in Orchestration now, not the model selector. */
   modelPresets: ModelPreset[];
-  saveModelPreset: (name: string, model: ModelRef | null) => void;
   deleteModelPreset: (id: string) => void;
 }): JSX.Element {
   const [prompt, setPrompt] = useState("");
   const [permOpen, setPermOpen] = useState(false);
   const [routerOpen, setRouterOpen] = useState(false);
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
-  // Inline "save as preset" form state (DRILL_PLAN B5.1) — mirrors the
-  // addModelOpen/draftModelName pattern used for custom models below, kept
-  // local since it's picker-session-only (no need to survive a close).
-  const [presetSaveOpen, setPresetSaveOpen] = useState(false);
-  const [presetNameDraft, setPresetNameDraft] = useState("");
   // Installed-Ollama-tags lookup for the picker's local-model install badges
   // (DRILL_PLAN B5.2) — reuses the same window.metisOllama.list() bridge the
   // Benchmark wizard already uses to show install state + drive its pull flow
@@ -4770,17 +4748,6 @@ function SessionComposer({
   function isPresetActive(preset: ModelPreset): boolean {
     if (!preset.model) return !selectedModel;
     return selectedModel?.provider === preset.model.provider && selectedModel?.model === preset.model.model;
-  }
-
-  const presetNameTrimmed = presetNameDraft.trim();
-  const collidingPreset = presetNameTrimmed ? modelPresets.find((preset) => preset.name.toLowerCase() === presetNameTrimmed.toLowerCase()) : undefined;
-  const presetsFull = !collidingPreset && modelPresets.length >= MAX_MODEL_PRESETS;
-
-  function handleSavePreset(): void {
-    if (!presetNameTrimmed || presetsFull) return;
-    saveModelPreset(presetNameTrimmed, selectedModel);
-    setPresetNameDraft("");
-    setPresetSaveOpen(false);
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -4994,10 +4961,9 @@ function SessionComposer({
                         {!selectedModel ? <Check size={14} /> : null}
                       </button>
                     ) : null}
-                    {!routerFilter.trim() ? (
+                    {!routerFilter.trim() && modelPresets.length > 0 ? (
                       <div className="router-tier router-presets">
                         <div className="router-tier-label">Presets</div>
-                        {modelPresets.length === 0 && !presetSaveOpen ? <p className="router-presets-hint">No saved presets yet</p> : null}
                         {modelPresets.map((preset) => {
                           const active = isPresetActive(preset);
                           return (
@@ -5027,34 +4993,6 @@ function SessionComposer({
                             </div>
                           );
                         })}
-                        {presetSaveOpen ? (
-                          <div className="router-add-form">
-                            <input
-                              value={presetNameDraft}
-                              placeholder="Preset name"
-                              autoFocus
-                              onChange={(event) => setPresetNameDraft(event.target.value)}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter") handleSavePreset();
-                                if (event.key === "Escape") {
-                                  setPresetSaveOpen(false);
-                                  setPresetNameDraft("");
-                                }
-                              }}
-                            />
-                            <div className="router-add-actions">
-                              <button type="button" disabled={!presetNameTrimmed || presetsFull} onClick={handleSavePreset}>
-                                {collidingPreset ? "Overwrite" : "Save"}
-                              </button>
-                              <button type="button" className="ghost" onClick={() => { setPresetSaveOpen(false); setPresetNameDraft(""); }}>Cancel</button>
-                            </div>
-                            {presetsFull ? <p className="router-presets-hint">Preset limit reached ({MAX_MODEL_PRESETS}). Delete one to save a new preset.</p> : null}
-                          </div>
-                        ) : (
-                          <button type="button" className="router-add-trigger" onClick={() => setPresetSaveOpen(true)}>
-                            <Plus size={13} /> Save {selectedModel ? selectedModel.model : "Auto router"} as preset
-                          </button>
-                        )}
                       </div>
                     ) : null}
                     {modelGroups.map((tier) => (
