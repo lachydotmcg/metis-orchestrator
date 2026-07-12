@@ -46,7 +46,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   picked qwen3:4b he had not pulled. Cross-reference the Ollama /api/tags list (already fetched via
   metisOllama) and mark installed local models (badge / sort installed first / de-emphasize
   not-installed with a one-click pull). Honest: only local models have an install state.
-- [ ] **B5.3 — Pinned model = direct call, no routing ceremony + clear Ollama-down error.** When a
+- [x] **B5.3 — Pinned model = direct call, no routing ceremony + clear Ollama-down error.** When a
   specific model is pinned, do NOT show "Routed via X" or run route ceremony — present it as a
   direct call to that model (main.ts ~7157-7166 already bypasses the router for the primary attempt;
   fix the LANGUAGE + skip unneeded ceremony). And replace the misleading "Ollama is not reachable

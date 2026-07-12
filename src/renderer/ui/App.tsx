@@ -5169,12 +5169,13 @@ function LiveRunTimeline({ turn }: { turn: ConversationTurn }): JSX.Element {
           return <AssistantResponse key={event.id} source={{ kind: "metis", label: "Metis synthesis" }}>{event.content}</AssistantResponse>;
         }
         if (event.kind === "route") {
+          const label = event.label ?? "Metis";
           return (
             <details className="route-line-details" key={event.id}>
               <summary className="route-line">
                 <ChevronRight className="stage-caret" size={14} />
                 <Waypoints size={13} />
-                <span>Routed via {event.label ?? "Metis"}</span>
+                <span>{turnHasPinnedModelSignal(turn) ? `Called ${label} directly` : `Routed via ${label}`}</span>
               </summary>
               <div className="route-trace-body">
                 {turn.streamSteps?.length ? <PipelineSteps steps={turn.streamSteps} /> : <p className="live-pending-note">Route selected. Waiting for the next pipeline event.</p>}
@@ -5430,6 +5431,42 @@ function routeDisplayName(run: SessionRun): string {
   return name || "Metis";
 }
 
+/** True when this run bypassed Metis Policy for a pinned model (main.ts's
+ *  initialPipelineSteps sets the "route" step's label to "Calling {label}
+ *  directly" only when SessionRunInput.modelOverride was set — "Route through
+ *  Metis Policy" otherwise). Runs recorded before that wording existed (or the
+ *  hardcoded build-pipeline stageSteps, which don't carry the override signal
+ *  even when a pinned model forced every stage via /orchestration) fall back
+ *  to false here and keep the old "Routed via" phrasing below — a deliberate
+ *  gap, not a bug: there is no reliable pinned signal on that older/hardcoded
+ *  shape, and guessing one risks calling a genuinely routed run "direct". */
+function isPinnedRun(run: SessionRun): boolean {
+  return Boolean(run.steps?.find((step) => step.id === "route")?.label?.startsWith("Calling "));
+}
+
+/** Route summary line text: "Called {label} directly" for a pinned model (no
+ *  routing framing, per Lachy's rule that a pinned model is a direct call),
+ *  "Routed via {label}" for a genuinely routed run. */
+function routeLineText(run: SessionRun): string {
+  const label = routeDisplayName(run);
+  return isPinnedRun(run) ? `Called ${label} directly` : `Routed via ${label}`;
+}
+
+/** Live-streaming counterpart of isPinnedRun, for turns still in flight
+ *  (turn.run is undefined so routeLineText/run.steps aren't available yet).
+ *  main.ts's plain-chat path (the common "pin a model, just chat" case)
+ *  always emits a "Calling {label} directly. Skipping the router." text
+ *  timeline event immediately before its "route" event when modelOverride is
+ *  set — never on a genuinely routed run, and never with that exact
+ *  "directly." sentence break on the build-pipeline path (which instead says
+ *  "directly for every stage…", deliberately excluded so a /orchestration run
+ *  with a pinned model doesn't flip wording between live and completed views,
+ *  since the persisted build-pipeline steps don't carry the signal either —
+ *  see isPinnedRun). */
+function turnHasPinnedModelSignal(turn: ConversationTurn): boolean {
+  return Boolean(turn.streamEvents?.some((event) => event.kind === "text" && /^Calling .+ directly\./.test(event.content)));
+}
+
 /** Slim time-to-first-token addition for a completed run's route line
  *  (docs/DRILL_PLAN.md B5.5) — undefined ttftMs (every provider call that
  *  wasn't a streaming Ollama call, today) renders nothing rather than a
@@ -5668,7 +5705,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
         <details className="route-line-details">
           <summary className="route-line">
             <Waypoints size={13} />
-            <span>Routed via {routeDisplayName(run)}</span>
+            <span>{routeLineText(run)}</span>
             {ttftSuffix(run)}
           </summary>
           <div className="route-trace-body">
@@ -5694,7 +5731,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
         <details className="route-line-details">
           <summary className="route-line">
             <Waypoints size={13} />
-            <span>Routed via {routeDisplayName(run)}</span>
+            <span>{routeLineText(run)}</span>
             {ttftSuffix(run)}
           </summary>
           <div className="route-trace-body">
@@ -5724,7 +5761,7 @@ function RunTimeline({ events, run, warnings }: { events: SessionTimelineEvent[]
               <summary className="route-line">
                 <ChevronRight className="stage-caret" size={14} />
                 <Waypoints size={13} />
-                <span>Routed via {routeDisplayName(run)}</span>
+                <span>{routeLineText(run)}</span>
                 {ttftSuffix(run)}
               </summary>
               <div className="route-trace-body">
