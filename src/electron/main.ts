@@ -7148,7 +7148,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const editableProject = writable ? await projectHasSourceFiles(writable.path) : false;
 
   // Real multi-model build pipeline (plan -> front end -> functional) for "build me X".
-  if (forceBuildPipeline || shouldRunBuildPipeline(prompt, effectiveDecision, decision.source, editableProject)) {
+  // A PINNED model (not Auto Router) means a direct chat with that model, so automatic
+  // orchestration never fires when one is pinned (Lachy: "if the model is not on Auto Router,
+  // there should be NO orchestration"). Only an explicit /orchestration command
+  // (forceBuildPipeline) still runs the pipeline with a pinned model leading the stages.
+  if (forceBuildPipeline || (!input.modelOverride && shouldRunBuildPipeline(prompt, effectiveDecision, decision.source, editableProject))) {
     const singleFile = wantsSingleFileFrontend(prompt);
     emitTimeline(stream, timelineText("I’ll run this through the build pipeline and turn the model output into real project files."));
     if (forceBuildPipeline) {
@@ -7460,7 +7464,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   }
 
   const pipelineName = pipelineNameFor(effectiveDecision);
-  const includeProjectTools = shouldCreateFrontendProject(prompt, effectiveDecision);
+  // A pinned model is a pure direct chat: no orchestration means no chat-path project
+  // file creation / design seed either, so this gates on Auto Router (no modelOverride).
+  const includeProjectTools = !input.modelOverride && shouldCreateFrontendProject(prompt, effectiveDecision);
   const steps = initialPipelineSteps(pipelineName, effectiveDecision, includeProjectTools, input.modelOverride);
   steps[0] = completeStep(steps[0]);
 

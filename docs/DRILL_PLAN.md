@@ -29,6 +29,13 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   to write files. The router should classify explanatory/Q&A prompts as CHAT answers (chat fast-lane),
   not file-writing builds. Also unblocks Oracle (prewarm only speeds the chat path). Tune the route
   decision so Q&A stays in chat; only genuine build/change requests go to the pipeline.
+- [x] **PF3 — Pinned model = NO orchestration (Lachy: "if the model is not on Auto Router, there
+  should be NO orchestration").** A pinned model still ran the full build pipeline on an advisory
+  prompt. FIXED (main.ts): the build-pipeline gate (~7151) and the chat-path project-tools gate
+  (includeProjectTools ~7463) now require `!input.modelOverride`, so a pinned model is a pure direct
+  chat with no orchestration and no file creation. Only an explicit /orchestration command
+  (forceBuildPipeline) still runs the pipeline with a pinned model. This makes PF2's regex routing
+  moot whenever a model is pinned (it only matters on Auto Router). NEEDS LIVE TEST.
 
 ---
 
