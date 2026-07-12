@@ -49,7 +49,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   model picker currently lives in Settings; move (or also surface) it in the Gallery where
   vision/images are actually used. Confirm the picker stays honest (Auto-detect + local
   Ollama vision models only, as restricted earlier). Lower priority ("tbh") — do after the above.
-- [ ] **B2.7 — Router/managed-agent wrote to agent-memory instead of the attached workspace
+- [x] **B2.7 — Router/managed-agent wrote to agent-memory instead of the attached workspace
   (2026-07-11 live bug, HIGH — correctness).** Lachy attached a workspace (metistest4) and ran
   a routed agent; it edited files under the app's conversation/agent-memory storage instead of
   the attached project folder. The run's file-write root resolved to the dataPath conversation

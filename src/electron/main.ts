@@ -6706,8 +6706,29 @@ async function executeManagerAction(rawAction: ManagerAction): Promise<ManagerAc
       // Reuses runSession as-is (same path metis-session:run drives) so this
       // gets the exact same permission gating, routing, and audit trail as a
       // run the owner started by hand — nothing here bypasses that.
+      //
+      // BUGFIX (DRILL_PLAN B2.7): this app only ever supports ONE attached +
+      // granted project workspace at a time (readProjectWorkspace reads a
+      // single global store key — see selectProjectWorkspace/clearProjectWorkspace).
+      // The Manager model proposes `action.projectPath` itself, and that value
+      // is not grounded in anything the user actually attached — it can be a
+      // slightly-off or hallucinated path (wrong casing/slashes, a subfolder,
+      // a stale guess). The old `action.projectPath ?? workspace?.path` let
+      // ANY non-empty model-proposed path win over the real, permission-
+      // granted workspace. Downstream, resolveWritableProjectWorkspace()
+      // rejects a projectPath that doesn't exactly match the attached
+      // workspace (returns null rather than falling back to it), so the
+      // build pipeline's writeProjectFiles() silently redirected every
+      // generated/edited file to the dataPath("generated-projects", ...)
+      // scratch folder under the app's data directory (same root that also
+      // holds conversations.json / the knowledge cache) instead of the
+      // attached workspace folder. Since there is no legitimate scenario
+      // where a model-guessed path should out-rank the one real attached
+      // workspace, always prefer the attached workspace when one exists;
+      // only fall back to the model's proposed path when nothing is
+      // attached at all (unchanged behavior for the "no workspace" case).
       const workspace = await readProjectWorkspace();
-      const projectPath = action.projectPath ?? workspace?.path;
+      const projectPath = workspace?.path ?? action.projectPath;
       const run = await runSession({
         prompt: action.prompt ?? "",
         projectPath,
