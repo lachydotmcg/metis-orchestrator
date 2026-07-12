@@ -58,7 +58,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
   writeConversations ~4105, the stage file-write/apply path, and the routing/managed-agent path);
   find where projectPath is empty/overridden so writes fall back to a data dir, and make the
   agent write to the attached workspace. NEEDS a clear root-cause report + live test.
-- [ ] **B2.6 — Gallery image viewer cut off when you click an image.** RENDERER/CSS. Clicking an
+- [x] **B2.6 — Gallery image viewer cut off when you click an image.** RENDERER/CSS. Clicking an
   image in the Gallery opens a viewer/lightbox whose image is clipped (same overflow family as
   the earlier doc-view cutoff). Find the gallery image click handler + its viewer CSS and fix the
   overflow so the full image fits (max-width/height:100%, object-fit:contain, no fixed clip).
