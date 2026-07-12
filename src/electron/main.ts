@@ -8163,6 +8163,86 @@ async function pullOllamaModel(
   }
 }
 
+// --- Speculative prompt prewarm (docs/DRILL_PLAN.md E1, v0.1) ---
+// While the owner is still typing a prompt, the renderer may (once opted in
+// via the `prewarmEnabled` store key, default OFF) fire a quiet warmup call
+// so the LOCAL Ollama model's prefill/KV-cache is primed before the prompt
+// is actually submitted, shaving time-to-first-token off the real run. v0.1
+// is INVISIBLE PREFILL ONLY: no speculative answer is generated, nothing is
+// shown to the user, and this does not touch conversations, session runs,
+// stage/stream events, or disk — it is purely a discarded `/api/generate`
+// warmup call against local Ollama. LOCAL ONLY, always: this never talks to
+// a cloud provider, even if a non-local model id is passed in — Ollama will
+// just 404 for an unknown model and the call fails soft like any other
+// failure here.
+
+const PREWARM_MIN_DRAFT_LENGTH = 8;
+const PREWARM_DEDUPE_WINDOW_MS = 3000;
+const PREWARM_FETCH_TIMEOUT_MS = 10000;
+
+let lastPrewarm: { model: string; hash: string; at: number } | null = null;
+// Guards against overlapping requests for the same model while a previous
+// warm for it is still in flight (e.g. the owner typed two keystrokes fast
+// enough that both requests would otherwise race to Ollama).
+const prewarmInFlightModels = new Set<string>();
+
+/** Speculatively warms a LOCAL Ollama model with the in-progress draft
+ *  prompt (docs/DRILL_PLAN.md E1 v0.1). OFF by default behind the
+ *  `prewarmEnabled` store key — a defense-in-depth check here even though
+ *  the renderer is expected to gate this itself before ever invoking the
+ *  IPC channel. Fails soft and silent in every case: never throws, never
+ *  surfaces an error to the renderer, never creates a conversation or
+ *  session-run record, never emits a stage/stream event, and never writes a
+ *  file — this must stay a pure fire-and-forget warmup fetch whose response
+ *  body is discarded, so toggling `prewarmEnabled` back off leaves zero
+ *  trace behind. */
+async function prewarmModel(model: string, draft: string): Promise<void> {
+  const trimmedModel = typeof model === "string" ? model.trim() : "";
+  const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
+  if (!trimmedModel || trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return;
+  try {
+    if (!(await readStoreValue<boolean>("prewarmEnabled", false))) return;
+
+    const hash = sha256(`${trimmedModel}\n${trimmedDraft}`);
+    const now = Date.now();
+    if (lastPrewarm && lastPrewarm.model === trimmedModel && lastPrewarm.hash === hash && now - lastPrewarm.at < PREWARM_DEDUPE_WINDOW_MS) {
+      return; // Same model+draft warmed too recently to be worth repeating.
+    }
+    if (prewarmInFlightModels.has(trimmedModel)) {
+      return; // A warm for this model is already in flight.
+    }
+
+    prewarmInFlightModels.add(trimmedModel);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), PREWARM_FETCH_TIMEOUT_MS);
+    try {
+      await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: trimmedModel,
+          prompt: trimmedDraft,
+          stream: false,
+          keep_alive: "5m",
+          options: { num_predict: 1 }
+        })
+      });
+      // Response body intentionally discarded — this call exists only for
+      // its side effect inside Ollama (loading the model and prefilling the
+      // prompt into its KV cache), never for anything it returns.
+      lastPrewarm = { model: trimmedModel, hash, at: Date.now() };
+    } finally {
+      clearTimeout(timeout);
+      prewarmInFlightModels.delete(trimmedModel);
+    }
+  } catch {
+    // Ollama unreachable, model missing, aborted, network error, or any
+    // other failure — warming is best-effort only, so stay quiet and never
+    // throw out of this function.
+  }
+}
+
 /** Rasterizes a `data:image/svg+xml,...` (URL-encoded, NOT base64) data URL to a PNG
  *  nativeImage via a hidden, off-screen BrowserWindow capture. Electron's `nativeImage`
  *  cannot decode SVG at all (createFromDataURL silently yields an empty image for it),
@@ -8903,6 +8983,11 @@ app.whenReady().then(async () => {
       }
     });
   });
+  // Speculative prompt prewarm (docs/DRILL_PLAN.md E1 v0.1) — fire-and-forget
+  // from the renderer's perspective; prewarmModel resolves to void/undefined
+  // in every case (including all its own no-op/fail-soft paths), so there is
+  // nothing meaningful to await here beyond letting IPC settle.
+  ipcMain.handle("metis-prewarm:warm", (_event, model: string, draft: string) => prewarmModel(model, draft));
   ipcMain.handle("metis-routines:list", () => listRoutines());
   ipcMain.handle("metis-routines:save", (_event, input: Routine) => saveRoutine(input));
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));

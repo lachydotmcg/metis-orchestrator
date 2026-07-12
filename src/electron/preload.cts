@@ -173,6 +173,10 @@ contextBridge.exposeInMainWorld("metisOllama", {
   }
 });
 
+contextBridge.exposeInMainWorld("metisPrewarm", {
+  warm: (model: string, draft: string) => ipcRenderer.invoke("metis-prewarm:warm", model, draft) as Promise<void>
+});
+
 contextBridge.exposeInMainWorld("metisManager", {
   chat: (history: ManagerChatMessage[]) => ipcRenderer.invoke("metis-manager:chat", history) as Promise<ManagerChatResult>,
   runAction: (action: ManagerAction) => ipcRenderer.invoke("metis-manager:action", action) as Promise<ManagerActionResult>

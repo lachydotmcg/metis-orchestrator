@@ -154,6 +154,9 @@ declare global {
       pull(model: string): Promise<{ ok: boolean; error?: string }>;
       onPullProgress(cb: (progress: OllamaPullProgress) => void): () => void;
     };
+    metisPrewarm?: {
+      warm: (model: string, draft: string) => Promise<void>;
+    };
     metisManager?: {
       chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;
       runAction: (action: ManagerAction) => Promise<ManagerActionResult>;
