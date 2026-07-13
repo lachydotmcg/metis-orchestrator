@@ -89,7 +89,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ## ★ PITCH BATCH 10 (2026-07-13, research round - AWAITING LACHY GREEN LIGHT, ranked by Fable)
 
-- [ ] **P10.1 - Metis Gateway (top pick).** Expose the router + Oracle as a localhost
+- [x] **P10.1 - Metis Gateway (top pick).** Expose the router + Oracle as a localhost
   OpenAI-compatible API. Any app that can talk to OpenAI (Cursor, scripts, other tools) points
   at Metis instead and silently gets quality/cost/quota routing + prewarming. Metis becomes
   infrastructure, not just an app. Trend-proof: LocalAI-style universal endpoints are the moat

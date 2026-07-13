@@ -4,6 +4,7 @@ import type {
   CatalogModel,
   ConversationExportResult,
   ConversationRecord,
+  GatewayStatus,
   LabExperimentResult,
   ManagerAction,
   ManagerActionResult,
@@ -189,6 +190,10 @@ declare global {
     };
     metisUpdates?: {
       check: () => Promise<UpdateCheckResult>;
+    };
+    metisGateway?: {
+      getStatus: () => Promise<GatewayStatus>;
+      setEnabled: (enabled: boolean) => Promise<GatewayStatus>;
     };
     metisGallery?: {
       analyzeBoard: (boardId: string) => Promise<StyleCard[]>;

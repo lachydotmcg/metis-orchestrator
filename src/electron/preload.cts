@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import type {
   ConversationExportResult,
   ConversationRecord,
+  GatewayStatus,
   ManagerAction,
   ManagerActionResult,
   ManagerChatMessage,
@@ -212,6 +213,11 @@ contextBridge.exposeInMainWorld("metisManager", {
 
 contextBridge.exposeInMainWorld("metisUpdates", {
   check: () => ipcRenderer.invoke("metis-updates:check") as Promise<UpdateCheckResult>
+});
+
+contextBridge.exposeInMainWorld("metisGateway", {
+  getStatus: () => ipcRenderer.invoke("metis-gateway:get-status") as Promise<GatewayStatus>,
+  setEnabled: (enabled: boolean) => ipcRenderer.invoke("metis-gateway:set-enabled", enabled) as Promise<GatewayStatus>
 });
 
 contextBridge.exposeInMainWorld("metisGallery", {

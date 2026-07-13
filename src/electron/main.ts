@@ -1,10 +1,10 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { access, appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { createServer, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { basename, dirname, extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -80,7 +80,8 @@ import type {
   ManagerActionKind,
   ManagerActionResult,
   UpdateCheckResult,
-  UserProfile
+  UserProfile,
+  GatewayStatus
 } from "../shared/runtime-contracts.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -9927,6 +9928,390 @@ function createTray(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Metis Gateway (DRILL_PLAN P10.1): a LOOPBACK-ONLY, OFF-by-default
+// OpenAI-compatible HTTP server so any OpenAI-client app can point its base
+// URL at Metis and get the same Auto Router (decidePolicy + applySessionRouteOverrides
+// + providerFromRoute) that the chat composer uses, or call a specific
+// provider/model directly. Deliberately does NOT touch runSession or the
+// build pipeline — this is the minimal "call one model and hand back the
+// text" surface, mirroring the chat path's final invokeProvider call, not
+// the whole orchestration/project-tools/knowledge-bank machinery around it.
+// Binds strictly to 127.0.0.1 (never 0.0.0.0) via the same
+// createServer/listen(port, "127.0.0.1") pattern ensureStaticPreview uses
+// above, and every handler is wrapped so a bad request or a downstream
+// provider failure returns an OpenAI-shaped error instead of ever throwing
+// out of the server or crashing the app.
+// ---------------------------------------------------------------------------
+
+const GATEWAY_DEFAULT_PORT = 11500;
+const GATEWAY_MAX_BODY_BYTES = 4 * 1024 * 1024; // 4MB — generous for a chat turn, hard cap against a runaway/abusive body.
+
+let gatewayServer: Server | null = null;
+let cachedGatewayToken: string | null = null;
+
+type GatewayChatMessage = { role?: string; content?: string };
+type GatewayChatRequest = { model?: string; messages?: GatewayChatMessage[]; stream?: boolean };
+
+/** Per-install bearer token (DRILL_PLAN P10.1 §3): auto-generated once and
+ *  persisted under the `gatewayToken` store key, exactly like every other
+ *  readStoreValue/writeStoreValue-backed setting in this file. Required on
+ *  every gateway request so a loopback-bound API can't be silently used as
+ *  an open prompt-proxy by other local software sharing this machine. */
+async function readOrCreateGatewayToken(): Promise<string> {
+  if (cachedGatewayToken) return cachedGatewayToken;
+  const existing = await readStoreValue<string>("gatewayToken", "");
+  if (existing) {
+    cachedGatewayToken = existing;
+    return existing;
+  }
+  const token = randomBytes(24).toString("hex");
+  await writeStoreValue("gatewayToken", token);
+  cachedGatewayToken = token;
+  return token;
+}
+
+/** Constant-time-ish bearer check: length mismatch short-circuits (no secret
+ *  material to compare in that case), otherwise timingSafeEqual guards
+ *  against a naive substring-timing attack on the token. */
+function gatewayTokenMatches(provided: string, expected: string): boolean {
+  const providedBuf = Buffer.from(provided, "utf8");
+  const expectedBuf = Buffer.from(expected, "utf8");
+  if (providedBuf.length === 0 || providedBuf.length !== expectedBuf.length) return false;
+  try {
+    return timingSafeEqual(providedBuf, expectedBuf);
+  } catch {
+    return false;
+  }
+}
+
+function gatewayRoleLabel(role?: string): string {
+  if (role === "system") return "System";
+  if (role === "assistant") return "Assistant";
+  return "User";
+}
+
+/** Flattens an OpenAI `messages` array into a single prompt the same way the
+ *  Manager chat path does it (runManagerChatStream above): a role-prefixed
+ *  "Role: content" join, one turn per line, with a trailing generation cue.
+ *  No dedicated flattener is exported elsewhere in this file for reuse, so
+ *  this mirrors that existing inline pattern rather than inventing a new shape. */
+function flattenGatewayMessages(messages: GatewayChatMessage[]): string {
+  const lines = messages
+    .filter((message): message is GatewayChatMessage & { content: string } => typeof message?.content === "string" && message.content.trim().length > 0)
+    .map((message) => `${gatewayRoleLabel(message.role)}: ${message.content}`);
+  return [...lines, "Assistant:"].join("\n\n");
+}
+
+function gatewayLastUserMessage(messages: GatewayChatMessage[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if ((messages[i].role ?? "user") === "user" && typeof messages[i].content === "string") return messages[i].content as string;
+  }
+  const last = messages[messages.length - 1];
+  return typeof last?.content === "string" ? last.content : "";
+}
+
+function writeGatewayJson(res: ServerResponse, status: number, payload: unknown): void {
+  try {
+    const body = JSON.stringify(payload);
+    if (!res.headersSent) {
+      res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+    }
+    res.end(body);
+  } catch {
+    // Response stream may already be closed/errored — nothing more to do.
+  }
+}
+
+function gatewayErrorPayload(message: string, type: string): { error: { message: string; type: string } } {
+  return { error: { message, type } };
+}
+
+/** Reads a request body up to `maxBytes`, rejecting (not throwing) past the
+ *  cap so a runaway/abusive client can't grow this in memory unbounded. */
+function readGatewayBody(req: IncomingMessage, maxBytes: number): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error("Request body too large."));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolvePromise(Buffer.concat(chunks).toString("utf8")));
+    req.on("error", reject);
+  });
+}
+
+/** Resolves { provider, model } for a chat completion request exactly like
+ *  the chat composer's Auto/pinned split (runSession, lines ~7841-7844):
+ *  metis-auto/empty/"unknown" runs decidePolicy + applySessionRouteOverrides
+ *  on the last user message and derives provider/model from the selected
+ *  route via providerFromRoute, same as an Auto Router turn; any other
+ *  string is treated as a pinned model id, resolved via providerFromRoute
+ *  (heuristic name-sniffing) + resolveOverrideModel (display-name/tag
+ *  normalization) exactly like a composer-pinned override. */
+async function resolveGatewayRoute(requestedModel: string, lastUserMessage: string, fallbackPrompt: string): Promise<{ provider: ProviderKey; model: string }> {
+  const trimmed = requestedModel.trim();
+  if (!trimmed || trimmed === "metis-auto" || trimmed === "unknown") {
+    const routingPrompt = lastUserMessage.trim() || fallbackPrompt;
+    const decision = await decidePolicy({ prompt: routingPrompt });
+    const effectiveDecision = applySessionRouteOverrides(routingPrompt, decision.decision);
+    const route = effectiveDecision.selected_route;
+    const provider = providerFromRoute(route.provider, route.runtime, route.kind);
+    const model = route.model ?? providerInfo[provider].defaultModel ?? "auto";
+    return { provider, model };
+  }
+  const provider = providerFromRoute(trimmed, undefined, trimmed);
+  const model = resolveOverrideModel({ provider, model: trimmed });
+  return { provider, model };
+}
+
+function buildGatewayNonStreamResponse(result: ProviderInvokeResult, requestedModelLabel: string): Record<string, unknown> {
+  return {
+    id: `chatcmpl-${randomUUID()}`,
+    object: "chat.completion",
+    created: Math.floor(Date.now() / 1000),
+    model: requestedModelLabel,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: result.output },
+        finish_reason: "stop"
+      }
+    ],
+    ...(result.usage
+      ? {
+          usage: {
+            prompt_tokens: result.usage.inputTokens,
+            completion_tokens: result.usage.outputTokens,
+            total_tokens: result.usage.inputTokens + result.usage.outputTokens
+          }
+        }
+      : {})
+  };
+}
+
+/** Streams an SSE `chat.completion.chunk` sequence. Reuses invokeProvider's
+ *  existing SessionStreamController hook (the same one invokeOllamaProviderStream
+ *  emits message_delta/thought_delta on) via a small adapter, exactly the way
+ *  runManagerChatStream bridges it to its own event union above — only
+ *  message_delta is forwarded (thought_delta has no standard OpenAI field, and
+ *  this gateway is scoped to the final answer only). invokeProvider only
+ *  streams for the ollama branch; a cloud provider call resolves in one shot
+ *  with no deltas emitted, so `streamedAny` stays false and the full text is
+ *  sent as a single delta chunk after it resolves — same fallback shape
+ *  runManagerChatStream relies on, just applied per-chunk here instead of
+ *  per-turn. Never throws: a downstream failure is folded into the stream as
+ *  a final error note, [DONE] always terminates it. */
+async function streamGatewayChatCompletion(res: ServerResponse, provider: ProviderKey, model: string, prompt: string, requestedModelLabel: string): Promise<void> {
+  const id = `chatcmpl-${randomUUID()}`;
+  const created = Math.floor(Date.now() / 1000);
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache",
+    connection: "keep-alive"
+  });
+  const sendChunk = (delta: Record<string, unknown>, finishReason: string | null = null): void => {
+    const chunk = {
+      id,
+      object: "chat.completion.chunk",
+      created,
+      model: requestedModelLabel,
+      choices: [{ index: 0, delta, finish_reason: finishReason }]
+    };
+    try {
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    } catch {
+      // Client may have disconnected mid-stream — nothing more to do.
+    }
+  };
+  sendChunk({ role: "assistant" });
+  let streamedAny = false;
+  const streamAdapter: SessionStreamController = {
+    emit: (event) => {
+      if (event.kind === "message_delta" && event.delta) {
+        streamedAny = true;
+        sendChunk({ content: event.delta });
+      }
+    }
+  };
+  try {
+    const result = await invokeProvider({ provider, model, prompt }, streamAdapter);
+    if (!streamedAny && result.output) sendChunk({ content: result.output });
+  } catch (error) {
+    sendChunk({ content: `\n\n[gateway error: ${error instanceof Error ? error.message : String(error)}]` });
+  } finally {
+    sendChunk({}, "stop");
+    try {
+      res.write("data: [DONE]\n\n");
+      res.end();
+    } catch {
+      // Client may have disconnected — the server-side stream is already done either way.
+    }
+  }
+}
+
+async function handleGatewayModelsList(res: ServerResponse): Promise<void> {
+  const ollama = await listOllamaModels();
+  const data = [{ id: "metis-auto", object: "model" }, ...ollama.installed.map((name) => ({ id: name, object: "model" }))];
+  writeGatewayJson(res, 200, { object: "list", data });
+}
+
+async function handleGatewayChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const requestStart = Date.now();
+  let modelForAudit = "unknown";
+  let ok = true;
+  let errorMessage: string | undefined;
+  try {
+    const raw = await readGatewayBody(req, GATEWAY_MAX_BODY_BYTES);
+    let body: GatewayChatRequest;
+    try {
+      body = raw ? (JSON.parse(raw) as GatewayChatRequest) : {};
+    } catch {
+      throw new Error("Request body must be valid JSON.");
+    }
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    if (messages.length === 0) {
+      writeGatewayJson(res, 400, gatewayErrorPayload("`messages` must be a non-empty array.", "invalid_request_error"));
+      ok = false;
+      errorMessage = "empty messages array";
+      return;
+    }
+    const flattenedPrompt = flattenGatewayMessages(messages);
+    const lastUserMessage = gatewayLastUserMessage(messages);
+    const requestedModelLabel = (body.model ?? "").trim() || "metis-auto";
+    const { provider, model } = await resolveGatewayRoute(requestedModelLabel, lastUserMessage, flattenedPrompt);
+    modelForAudit = model;
+
+    if (body.stream) {
+      await streamGatewayChatCompletion(res, provider, model, flattenedPrompt, requestedModelLabel);
+    } else {
+      const result = await invokeProvider({ provider, model, prompt: flattenedPrompt });
+      writeGatewayJson(res, 200, buildGatewayNonStreamResponse(result, requestedModelLabel));
+    }
+  } catch (error) {
+    ok = false;
+    errorMessage = error instanceof Error ? error.message : String(error);
+    writeGatewayJson(res, 500, gatewayErrorPayload(errorMessage, "internal_error"));
+  } finally {
+    const ms = Date.now() - requestStart;
+    // Audit deliberately carries only the model id + timing + ok/error — never
+    // the prompt/messages content (DRILL_PLAN P10.1 §4).
+    await appendAudit(ok ? "info" : "warning", "gateway.request", `Gateway ${ok ? "served" : "failed"} ${modelForAudit} in ${ms}ms.`, {
+      model: modelForAudit,
+      ms,
+      ...(errorMessage ? { error: errorMessage } : {})
+    });
+  }
+}
+
+/** Top-level request handler for the gateway HTTP server. Every path — auth
+ *  failure, unknown route, thrown error — resolves to an OpenAI-shaped JSON
+ *  error response; nothing here is allowed to propagate an exception back to
+ *  the http.Server (which would otherwise risk taking the whole process down). */
+async function handleGatewayRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  try {
+    const url = new URL(req.url ?? "/", "http://127.0.0.1");
+    const token = await readOrCreateGatewayToken();
+    const authHeader = req.headers.authorization ?? "";
+    const provided = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1] ?? "";
+    if (!gatewayTokenMatches(provided, token)) {
+      writeGatewayJson(res, 401, gatewayErrorPayload("Missing or invalid bearer token.", "invalid_api_key"));
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/v1/models") {
+      await handleGatewayModelsList(res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
+      await handleGatewayChatCompletions(req, res);
+      return;
+    }
+    writeGatewayJson(res, 404, gatewayErrorPayload(`Unknown endpoint: ${req.method} ${url.pathname}`, "not_found"));
+  } catch (error) {
+    writeGatewayJson(res, 500, gatewayErrorPayload(error instanceof Error ? error.message : String(error), "internal_error"));
+  }
+}
+
+/** Starts the gateway HTTP server bound STRICTLY to 127.0.0.1. Idempotent
+ *  (returns the already-running port if called twice) and fail-soft: a bind
+ *  failure (e.g. port already in use) is caught, audited, and returned as
+ *  `{ ok: false }` — it never throws out of this function or the caller
+ *  (app.whenReady / metis-gateway:set-enabled). */
+async function startGateway(): Promise<{ ok: boolean; port?: number; error?: string }> {
+  if (gatewayServer) {
+    const address = gatewayServer.address() as AddressInfo | null;
+    return { ok: true, port: address?.port };
+  }
+  const configuredPort = await readStoreValue<number>("gatewayPort", GATEWAY_DEFAULT_PORT);
+  await readOrCreateGatewayToken();
+
+  const server = createServer((req, res) => {
+    void handleGatewayRequest(req, res);
+  });
+
+  try {
+    const boundPort = await new Promise<number>((resolvePromise, reject) => {
+      server.once("error", reject);
+      server.listen(configuredPort, "127.0.0.1", () => {
+        server.off("error", reject);
+        const address = server.address() as AddressInfo;
+        resolvePromise(address.port);
+      });
+    });
+    gatewayServer = server;
+    await appendAudit("info", "gateway.start", `Metis Gateway listening on http://127.0.0.1:${boundPort}.`, { port: boundPort });
+    return { ok: true, port: boundPort };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await appendAudit("warning", "gateway.start.error", `Metis Gateway failed to start: ${message}`, { port: configuredPort, error: message });
+    return { ok: false, error: message };
+  }
+}
+
+/** Stops the gateway server if running. Idempotent and fail-soft — never
+ *  throws, safe to call even when the gateway was never started. */
+async function stopGateway(): Promise<void> {
+  const server = gatewayServer;
+  if (!server) return;
+  gatewayServer = null;
+  await new Promise<void>((resolvePromise) => {
+    server.close(() => resolvePromise());
+  });
+  await appendAudit("info", "gateway.stop", "Metis Gateway stopped.", {});
+}
+
+async function getGatewayStatus(): Promise<GatewayStatus> {
+  const enabled = await readStoreValue<boolean>("gatewayEnabled", false);
+  const configuredPort = await readStoreValue<number>("gatewayPort", GATEWAY_DEFAULT_PORT);
+  const address = gatewayServer ? (gatewayServer.address() as AddressInfo | null) : null;
+  const token = await readOrCreateGatewayToken();
+  return {
+    enabled,
+    running: Boolean(gatewayServer),
+    port: address?.port ?? configuredPort,
+    token
+  };
+}
+
+/** Live start/stop, wired to a future Settings toggle (DRILL_PLAN P10.1 §1):
+ *  persists the flag first (so it survives a restart) and then starts/stops
+ *  the server immediately, so the toggle takes effect without relaunching. */
+async function setGatewayEnabled(enabled: boolean): Promise<GatewayStatus> {
+  await writeStoreValue("gatewayEnabled", enabled);
+  if (enabled) {
+    await startGateway();
+  } else {
+    await stopGateway();
+  }
+  return getGatewayStatus();
+}
+
 app.whenReady().then(async () => {
   ipcMain.handle("metis-policy:get-sample-decision", () => sampleDecision);
   ipcMain.handle("metis-policy:get-status", (_event, profilePath?: string) => getPolicyStatus(profilePath));
@@ -10084,6 +10469,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-gallery:analyze-image", (_event, boardId: string, imageId: string) => analyzeGalleryImage(boardId, imageId));
   ipcMain.handle("metis-gallery:import-urls", (_event, urls: string[]) => importImagesFromUrls(Array.isArray(urls) ? urls : []));
   ipcMain.handle("metis-gallery:import-pinterest", (_event, boardUrl: string) => importFromPinterestBoard(typeof boardUrl === "string" ? boardUrl : ""));
+  ipcMain.handle("metis-gateway:get-status", () => getGatewayStatus());
+  ipcMain.handle("metis-gateway:set-enabled", (_event, enabled: boolean) => setGatewayEnabled(Boolean(enabled)));
   await createWindow();
   createTray();
 
@@ -10093,6 +10480,13 @@ app.whenReady().then(async () => {
   void refreshModelCatalog();
   void refreshPulseFeed();
   void startRoutineScheduler();
+  // Metis Gateway (DRILL_PLAN P10.1): OFF by default — only autostarts here
+  // when the owner previously flipped the `gatewayEnabled` store flag on
+  // (via metis-gateway:set-enabled). startGateway is fail-soft (bind failure
+  // just logs a warning audit event), so this can never block app startup.
+  if (await readStoreValue<boolean>("gatewayEnabled", false)) {
+    void startGateway();
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -10116,4 +10510,5 @@ app.on("before-quit", () => {
     tray.destroy();
     tray = null;
   }
+  void stopGateway();
 });

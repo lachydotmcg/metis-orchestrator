@@ -623,6 +623,19 @@ export interface SessionModelOverride {
   label?: string;
 }
 
+/** Metis Gateway (DRILL_PLAN P10.1) — status of the loopback OpenAI-compatible
+ *  local server a Settings toggle can wire up. `port` is the actually-bound
+ *  port when running (may differ from the configured `gatewayPort` store key
+ *  if that port was busy — startGateway reports the real bind), or the
+ *  configured port when stopped. `token` is the per-install bearer token,
+ *  included so the UI can show/copy it; never logged anywhere else. */
+export interface GatewayStatus {
+  enabled: boolean;
+  running: boolean;
+  port: number;
+  token: string;
+}
+
 /** A user-attached reference image for a session run. `dataBase64` is RAW
  *  base64 (no `data:<mime>;base64,` prefix) — the composer attach UI (a
  *  separate follow-up round) is responsible for stripping it before sending.
