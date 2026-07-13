@@ -155,7 +155,7 @@ Grounded in the existing substrate; each names what it builds on.
 
 ## ★ LACHY BATCH 7 (2026-07-12, parked notes - Lachy: note down and forget for now)
 
-- [ ] **B7.1 - Per-conversation model selection.** The pinned model / preset choice should be
+- [x] **B7.1 - Per-conversation model selection.** The pinned model / preset choice should be
   remembered PER CONVERSATION (switching conversations restores that conversation's model), not a
   single global composer state.
 - [ ] **B7.2 - Thoroughness meter.** A configurable refinement dial: how many times a response is

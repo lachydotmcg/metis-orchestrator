@@ -660,6 +660,25 @@ const MAX_MODEL_PRESETS = 12;
 const DEFAULT_PROMPT_TEMPLATES: PromptTemplate[] = [];
 const MAX_PROMPT_TEMPLATES = 20;
 
+// Persisted via useAppStoreState("conversationModels", ...) (DRILL_PLAN
+// B7.1) — remembers which pinned model (or null = Auto Router) each real
+// conversation was last using, so switching between conversations restores
+// its own model instead of leaking whatever was last picked elsewhere.
+// Capped at MAX_CONVERSATION_MODELS entries (oldest insertions dropped
+// first) so a long-lived app's map never grows unbounded.
+const DEFAULT_CONVERSATION_MODELS: Record<string, ModelRef | null> = {};
+const MAX_CONVERSATION_MODELS = 50;
+
+function pruneConversationModels(map: Record<string, ModelRef | null>): Record<string, ModelRef | null> {
+  const keys = Object.keys(map);
+  if (keys.length <= MAX_CONVERSATION_MODELS) return map;
+  const next: Record<string, ModelRef | null> = {};
+  keys.slice(keys.length - MAX_CONVERSATION_MODELS).forEach((key) => {
+    next[key] = map[key];
+  });
+  return next;
+}
+
 function providerConnectionStatus(provider: ProviderId, states: Partial<Record<ProviderKey, ProviderConnectionState>>): ProviderConnectionState {
   const key = PROVIDER_CONNECTIONS[provider];
   if (key === "ollama" || PROVIDERS[provider].tier === "local") return "local";
@@ -3591,6 +3610,14 @@ function NewSessionWorkspace({
   const [resourceMenuOpen, setResourceMenuOpen] = useState(false);
   const [routerOpen, setRouterOpen] = useState(false);
   const [selectedModel, setSelectedModel] = useState<ModelRef | null>(null);
+  // Per-conversation model memory (DRILL_PLAN B7.1). `lastSelectedModel` is
+  // the user's most recent explicit pick, independent of any conversation —
+  // it's what a brand-new draft session seeds `selectedModel` from (see the
+  // seed effect near activeConversationId below). `conversationModels` maps
+  // each REAL conversation id to the model it was last using, so switching
+  // back to it restores that choice instead of whatever's currently live.
+  const [lastSelectedModel, setLastSelectedModel, lastSelectedModelLoaded] = useAppStoreState<ModelRef | null>("lastSelectedModel", null);
+  const [conversationModels, setConversationModels] = useAppStoreState("conversationModels", DEFAULT_CONVERSATION_MODELS);
   const [routerFilter, setRouterFilter] = useState("");
   const [addModelOpen, setAddModelOpen] = useState(false);
   const [draftModelName, setDraftModelName] = useState("");
@@ -3692,10 +3719,33 @@ function NewSessionWorkspace({
     const name = draftModelName.trim();
     if (!name) return;
     void setCustomModels((current) => (current.some((ref) => ref.provider === draftModelProvider && ref.model === name) ? current : [...current, { provider: draftModelProvider, model: name }]));
-    setSelectedModel({ provider: draftModelProvider, model: name });
+    pickModel({ provider: draftModelProvider, model: name });
     setDraftModelName("");
     setAddModelOpen(false);
     setRouterOpen(false);
+  }
+
+  // Remembers `model` as the pinned model for real conversation `id` (DRILL_PLAN
+  // B7.1), pruning down to MAX_CONVERSATION_MODELS entries so the persisted map
+  // never grows unbounded across a long-lived app. Stale entries for since-
+  // deleted conversations are harmless — they're just never looked up again,
+  // and eventually age out via the same prune.
+  function rememberConversationModel(id: string, model: ModelRef | null): void {
+    void setConversationModels((current) => pruneConversationModels({ ...current, [id]: model }));
+  }
+
+  // Every explicit model pick (router menu, preset, or "add custom model")
+  // routes through here: it updates the live selection, remembers it as the
+  // user's last-used GLOBAL choice (what a brand-new draft session seeds
+  // from — see the seed effect below), and — only when a REAL conversation
+  // is open — remembers it as that conversation's own pinned model too. A
+  // fresh/draft session (no real id yet) skips the per-conversation write;
+  // its pick is copied over once the draft becomes real, in submitPrompt's
+  // draft->real migration.
+  function pickModel(model: ModelRef | null): void {
+    setSelectedModel(model);
+    void setLastSelectedModel(model);
+    if (activeConversationId) rememberConversationModel(activeConversationId, model);
   }
 
   // Named model/route presets (DRILL_PLAN B5.1) — a saved shortcut onto a
@@ -3774,6 +3824,41 @@ function NewSessionWorkspace({
   // whether the user is STILL looking at this conversation later on).
   const activeKeyRef = useRef(activeKey);
   activeKeyRef.current = activeKey;
+
+  // Per-conversation model memory, part 2 (DRILL_PLAN B7.1): restores the
+  // pinned model whenever activeConversationId actually CHANGES (switching
+  // to a stored conversation via the sidebar, or the draft->real transition
+  // in submitPrompt below) — including an explicit recorded `null` (Auto).
+  // Guarded on the id CHANGING (not on every conversationModels write) so
+  // picking a model in the CURRENT conversation — which also writes into
+  // conversationModels — never loops back through here and clobbers itself.
+  // No entry recorded yet for this id -> leave selectedModel exactly as-is
+  // (never force back to Auto).
+  const prevActiveConversationIdRef = useRef(activeConversationId);
+  useEffect(() => {
+    const previousId = prevActiveConversationIdRef.current;
+    prevActiveConversationIdRef.current = activeConversationId;
+    if (activeConversationId === previousId) return;
+    if (!activeConversationId) return;
+    if (Object.prototype.hasOwnProperty.call(conversationModels, activeConversationId)) {
+      setSelectedModel(conversationModels[activeConversationId] ?? null);
+    }
+  }, [activeConversationId, conversationModels]);
+
+  // Per-conversation model memory, part 3: a brand-new draft session (no
+  // real conversation open yet) starts from the user's last-used GLOBAL
+  // choice instead of hardcoded Auto. Seeded exactly once, only once
+  // lastSelectedModel has actually loaded from disk, and only when this
+  // mount ISN'T opening an existing stored conversation (that case is
+  // already handled by the restore effect above, which takes priority).
+  const seededGlobalModelRef = useRef(false);
+  useEffect(() => {
+    if (seededGlobalModelRef.current || !lastSelectedModelLoaded) return;
+    seededGlobalModelRef.current = true;
+    if (activeConversationId) return;
+    setSelectedModel(lastSelectedModel);
+  }, [lastSelectedModelLoaded, lastSelectedModel, activeConversationId]);
+
   const [history, setHistory] = useState<ConversationTurnRecord[]>([]);
   const hasConversation = conversation.length > 0 || history.length > 0;
   const homeScrollRef = useRef<HTMLDivElement>(null);
@@ -4154,6 +4239,15 @@ function NewSessionWorkspace({
       const realConversationId = run.conversationId;
       if (realConversationId && realConversationId !== runKey) {
         draftToRealRef.current.set(runKey, realConversationId);
+        // Per-conversation model memory, part 4 (DRILL_PLAN B7.1): the draft
+        // just became a real conversation, so copy whatever model it was
+        // actually run with (this closure's `selectedModel`, the same value
+        // sessionInput.modelOverride was built from above) into the map
+        // under its new id, regardless of whether the user is still looking
+        // at it. Restore effect above will then find this entry already
+        // matches selectedModel if it fires from the activeConversationId
+        // change below, so it's a harmless no-op there.
+        rememberConversationModel(realConversationId, selectedModel);
         setPendingByConversation((current) => {
           if (!(runKey in current)) return current;
           const { [runKey]: migratedTurns, ...rest } = current;
@@ -4468,7 +4562,7 @@ function NewSessionWorkspace({
           projectPickerBusy={projectPickerBusy}
           addWorkspaceResource={addWorkspaceResource}
           selectedModel={selectedModel}
-          setSelectedModel={setSelectedModel}
+          setSelectedModel={pickModel}
           modelGroups={modelGroups}
           routerFilter={routerFilter}
           setRouterFilter={setRouterFilter}
