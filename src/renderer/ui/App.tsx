@@ -1873,6 +1873,7 @@ export function App(): JSX.Element {
       {activeNav === "session" ? (
         <NewSessionWorkspace
           key={sessionKey}
+          profileName={profileDisplayName}
           openConversation={openConversation}
           onConversationsChanged={refreshConversations}
           onNewSession={startNewSession}
@@ -3298,6 +3299,7 @@ function suggestNextStep(lastRun: SessionRun | undefined, lastUserMessage: strin
 }
 
 function NewSessionWorkspace({
+  profileName,
   onConversationsChanged,
   onNewSession,
   onNavigate,
@@ -3309,6 +3311,9 @@ function NewSessionWorkspace({
   setBusyKeys,
   draftToRealRef
 }: {
+  /** Owner display name from the profile (falls back to the default when
+   *  unset) - the home greeting addresses the owner by name. */
+  profileName: string;
   onConversationsChanged?: () => void;
   onNewSession?: () => void;
   /** Lets an approved open_view action on a run's proposed-actions card (see
@@ -4317,7 +4322,7 @@ function NewSessionWorkspace({
         ) : (
           <header className="home-greeting">
             <Sparkles size={22} />
-            <h1>What&rsquo;s up next, bro?</h1>
+            <h1>What&rsquo;s up next, {profileName}?</h1>
           </header>
         )}
 
