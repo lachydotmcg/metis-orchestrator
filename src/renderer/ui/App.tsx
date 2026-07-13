@@ -12633,12 +12633,31 @@ function ManagerChat({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Live-streaming reply text for the turn currently in flight
+  // (docs/DRILL_PLAN.md Phase 8) — deliberately kept as local, unpersisted
+  // state, unlike `messages` (which useAppStoreState writes to disk on every
+  // change): accumulating token-by-token straight into `messages` would
+  // thrash the store on every delta. Only the finalized turn gets appended to
+  // `messages` once the stream completes. Stays null on the non-streaming
+  // fallback path below, so that path's rendering is untouched.
+  const [liveReply, setLiveReply] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const available = Boolean(window.metisManager);
+  // Active stream's unsubscribe fn, so unmounting mid-stream can't leak the
+  // onChatStreamEvent listener.
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages.length, sending]);
+  }, [messages.length, sending, liveReply]);
+
+  useEffect(
+    () => () => {
+      unsubscribeRef.current?.();
+      unsubscribeRef.current = null;
+    },
+    []
+  );
 
   async function send(): Promise<void> {
     const text = draft.trim();
@@ -12648,8 +12667,44 @@ function ManagerChat({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX
     setDraft("");
     setSending(true);
     setError(null);
+
+    const bridge = window.metisManager!;
+    const canStream = typeof bridge.chatStream === "function" && typeof bridge.onChatStreamEvent === "function";
+    if (!canStream) {
+      // Fallback (older preload / preview build without the streaming
+      // bridge): the original non-streaming path, unchanged.
+      try {
+        const result = await bridge.chat(next);
+        if (result.reply || result.actions?.length) {
+          setMessages((current) => [...current, { role: "assistant" as const, content: result.reply, actions: result.actions }]);
+        }
+        if (result.error) setError(result.error);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setSending(false);
+      }
+      return;
+    }
+
+    // Streaming path: subscribe before calling chatStream so no early deltas
+    // are missed, accumulate message_delta straight into the live bubble
+    // (thought_delta is ignored — this chat surface has no thoughts panel),
+    // then finalize from the awaited ManagerChatResult. main.ts's
+    // runManagerChatStream never throws and always resolves with the exact
+    // same result its "complete" event carries, so that resolved value alone
+    // is authoritative here — the event subscription exists purely to paint
+    // the reply as it streams in, mirroring the session feed's
+    // liveAssistantText accumulation pattern.
+    const streamId = `manager-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setLiveReply("");
+    const unsubscribe = bridge.onChatStreamEvent((eventStreamId, event) => {
+      if (eventStreamId !== streamId || event.kind !== "message_delta") return;
+      setLiveReply((current) => `${current ?? ""}${event.delta}`);
+    });
+    unsubscribeRef.current = unsubscribe;
     try {
-      const result = await window.metisManager!.chat(next);
+      const result = await bridge.chatStream(streamId, next);
       if (result.reply || result.actions?.length) {
         setMessages((current) => [...current, { role: "assistant" as const, content: result.reply, actions: result.actions }]);
       }
@@ -12657,6 +12712,9 @@ function ManagerChat({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
+      unsubscribe();
+      if (unsubscribeRef.current === unsubscribe) unsubscribeRef.current = null;
+      setLiveReply(null);
       setSending(false);
     }
   }
@@ -12710,7 +12768,21 @@ function ManagerChat({ onNavigate }: { onNavigate: (nav: NavKey) => void }): JSX
             </div>
           ))
         )}
-        {sending ? (
+        {liveReply !== null ? (
+          <div className="message-row assistant-message">
+            <div className="manager-chat-reply">
+              {liveReply.trim() ? (
+                <Markdown>{liveReply}</Markdown>
+              ) : (
+                <span className="thinking-dots" aria-label="Manager is thinking">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              )}
+            </div>
+          </div>
+        ) : sending ? (
           <div className="message-row assistant-message">
             <div className="manager-chat-reply">
               <span className="thinking-dots" aria-label="Manager is thinking">
