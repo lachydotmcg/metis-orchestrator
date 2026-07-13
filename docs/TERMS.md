@@ -44,11 +44,11 @@ These terms may change as the app evolves. Material changes will be noted with t
 
 ## 11. Governing law
 
-These terms are governed by the laws of [YOUR JURISDICTION], without regard to conflict-of-law rules.
+These terms are governed by the laws of Victoria, Australia, without regard to conflict-of-law rules.
 
 ## 12. Contact
 
-Questions about these terms: [CONTACT EMAIL].
+Questions about these terms: lachyswebdev@gmail.com.
 
 ---
 

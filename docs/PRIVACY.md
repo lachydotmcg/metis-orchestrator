@@ -27,4 +27,4 @@ Metis reports no usage data to anyone. The only usage statistics that exist are 
 
 ---
 
-Last updated: 2026-07-12. Questions: [CONTACT EMAIL].
+Last updated: 2026-07-12. Questions: lachyswebdev@gmail.com.

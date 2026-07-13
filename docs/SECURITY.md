@@ -222,7 +222,7 @@ for OS-level logging or a tamper-evident ledger.
 ## Reporting a vulnerability
 
 If you find a security issue in Metis Orchestrator, please report it
-privately rather than opening a public issue: **[SECURITY CONTACT EMAIL]**.
+privately rather than opening a public issue: **lachyswebdev@gmail.com**.
 Include what you found, the steps to reproduce it, and its impact if you
 can. We'll acknowledge reports and work with you on a fix before any
 public disclosure - please give us a reasonable window to respond before
