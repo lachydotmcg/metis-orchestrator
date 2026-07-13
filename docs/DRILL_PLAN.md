@@ -528,7 +528,7 @@ ManagerWidget (App.tsx ~11363) drags via its header when OPEN or MINIMIZED; the 
 - [x] Conversation export: copy-whole-chat as markdown + save-to-file (also fixes the
   Privacy>Export disabled state — build the real bridge). Bridge a417ad8, button 30be8f5.
   NEEDS LIVE TEST for the save dialog.
-- [ ] Streaming Manager chat (SSE-style token streaming into the widget).
+- [x] Streaming Manager chat (backend f70b33a + renderer fcce836) (SSE-style token streaming into the widget).
 - [x] Per-conversation token/cost line (reuse telemetry; show at conversation top).
 - [x] Prompt templates / snippets library in the composer (slash-command style).
 - [ ] First-run tour: a 5-step overlay pointing at Orchestration, Manager, Marketplace,
