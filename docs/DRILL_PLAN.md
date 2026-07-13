@@ -87,6 +87,29 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ PITCH BATCH 10 (2026-07-13, research round - AWAITING LACHY GREEN LIGHT, ranked by Fable)
+
+- [ ] **P10.1 - Metis Gateway (top pick).** Expose the router + Oracle as a localhost
+  OpenAI-compatible API. Any app that can talk to OpenAI (Cursor, scripts, other tools) points
+  at Metis instead and silently gets quality/cost/quota routing + prewarming. Metis becomes
+  infrastructure, not just an app. Trend-proof: LocalAI-style universal endpoints are the moat
+  move in the space.
+- [ ] **P10.2 - MCP tools used IN the pipeline.** We install and probe MCP servers but stages
+  never call their tools mid-run. Wiring tool calls into stages makes the marketplace real and
+  matches the ecosystem standard (everything speaks MCP now).
+- [ ] **P10.3 - Living-spec fan-out.** The coordinator writes a spec doc as a first-class
+  artifact; parallel agents update their sections live and you watch it evolve. We already have
+  the fan-out engine, file-claim ledger and agent bus - this is the missing visible artifact.
+- [ ] **P10.4 - Oracle for code.** Speculative edit-drafting inside the build pipeline (draft
+  the frontend stage while plan streams). Market-validated: codegen-tuned speculative decoding
+  is a headline feature elsewhere (Morph).
+- [ ] **P10.5 - Headless / service mode.** Start minimized to tray, no window, serving the
+  Gateway. Completes the tray + pairs with P10.1.
+- [ ] **P10.6 - Hybrid per-stage thoroughness.** Local drafts + cloud verify passes as a dial -
+  this IS the parked B7.2 thoroughness meter; the market converging on it argues for un-parking.
+
+---
+
 ## ★ IDEA BATCH 9 (2026-07-13, Fable research round - Lachy: free reign, come up with new ideas)
 
 Grounded in the existing substrate; each names what it builds on.
