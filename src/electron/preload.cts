@@ -182,7 +182,13 @@ contextBridge.exposeInMainWorld("metisPrewarm", {
     ipcRenderer.invoke("metis-prewarm:warm", model, draft, context) as Promise<void>,
   // DRILL_PLAN O2a v0.1 — sibling to warm, resolves the drafted text (or null).
   draft: (model: string, draft: string, context?: { conversationId?: string; projectPath?: string }) =>
-    ipcRenderer.invoke("metis-prewarm:draft", model, draft, context) as Promise<{ text: string; thoughts?: string } | null>
+    ipcRenderer.invoke("metis-prewarm:draft", model, draft, context) as Promise<{ text: string; thoughts?: string } | null>,
+  // DRILL_PLAN B8.2b v0.1 — sibling to warm/draft, but decides WHERE the
+  // Auto Router would send the draft instead of touching a model. Resolves
+  // to void like warm: the decision is consumed indirectly, by runSession's
+  // own cache lookup at send time, not by the renderer directly.
+  route: (draft: string, context?: { conversationId?: string; projectPath?: string }) =>
+    ipcRenderer.invoke("metis-prewarm:route", draft, context) as Promise<void>
 });
 
 contextBridge.exposeInMainWorld("metisManager", {

@@ -170,6 +170,12 @@ declare global {
         draft: string,
         context?: { conversationId?: string; projectPath?: string }
       ) => Promise<{ text: string; thoughts?: string } | null>;
+      // DRILL_PLAN B8.2b v0.1 — sibling to warm/draft, but decides WHERE the
+      // Auto Router would send the draft instead of touching a model at all.
+      // Resolves to void like warm: the decision is consumed indirectly, by
+      // the backend's own cache lookup when the real send happens, not by
+      // the renderer directly.
+      route: (draft: string, context?: { conversationId?: string; projectPath?: string }) => Promise<void>;
     };
     metisManager?: {
       chat: (history: ManagerChatMessage[]) => Promise<ManagerChatResult>;

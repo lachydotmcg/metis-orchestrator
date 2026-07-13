@@ -2862,17 +2862,29 @@ async function getPolicyStatus(profilePath?: string): Promise<PolicyStatus> {
   };
 }
 
-async function decidePolicy(input: PolicyDecisionInput): Promise<PolicyDecisionResult> {
+// B8.2b addendum: `options` is purely additive — every existing call site
+// passes none, so `options?.signal`/`options?.silent` are always undefined
+// there and this function's behavior for them is byte-identical to before
+// this parameter existed. Only the new speculative route-prewarm call site
+// (prewarmRoute, below) ever passes one: `signal` lets it abort the
+// underlying CLI child process the same way abortOracleSpeculativeWork
+// already cancels Oracle's warm/draft fetches, and `silent` skips the
+// appendAudit calls so a speculative decision that never becomes a real
+// send leaves no trace in audit-log.jsonl (matching prewarmModel/draftModel's
+// "toggling the flag off leaves zero trace" guarantee).
+async function decidePolicy(input: PolicyDecisionInput, options?: { signal?: AbortSignal; silent?: boolean }): Promise<PolicyDecisionResult> {
   const prompt = input.prompt.trim();
   if (!prompt) {
     throw new Error("Policy decision requires a prompt.");
   }
   const status = await getPolicyStatus(input.profilePath);
   if (!status.available || !status.cliPath || !status.profilePath) {
-    await appendAudit("warning", "policy.decide.sample", "Used sample policy decision because metis-policy is not ready.", {
-      detail: status.detail,
-      prompt_sha256: sha256(prompt)
-    });
+    if (!options?.silent) {
+      await appendAudit("warning", "policy.decide.sample", "Used sample policy decision because metis-policy is not ready.", {
+        detail: status.detail,
+        prompt_sha256: sha256(prompt)
+      });
+    }
     return {
       source: "sample",
       decision: sampleDecision,
@@ -2889,15 +2901,18 @@ async function decidePolicy(input: PolicyDecisionInput): Promise<PolicyDecisionR
   try {
     const { stdout } = await execFileAsync("node", args, {
       windowsHide: true,
-      maxBuffer: 1024 * 1024
+      maxBuffer: 1024 * 1024,
+      ...(options?.signal ? { signal: options.signal } : {})
     });
     const decision = JSON.parse(stdout) as RouteDecision;
-    await appendAudit("info", "policy.decide", `Policy selected ${decision.selected_route.kind} route.`, {
-      task_type: decision.task_type,
-      route: decision.selected_route,
-      profile: status.profilePath,
-      prompt_sha256: decision.prompt_profile.prompt_sha256
-    });
+    if (!options?.silent) {
+      await appendAudit("info", "policy.decide", `Policy selected ${decision.selected_route.kind} route.`, {
+        task_type: decision.task_type,
+        route: decision.selected_route,
+        profile: status.profilePath,
+        prompt_sha256: decision.prompt_profile.prompt_sha256
+      });
+    }
     return {
       source: "metis-policy-cli",
       decision,
@@ -2905,10 +2920,12 @@ async function decidePolicy(input: PolicyDecisionInput): Promise<PolicyDecisionR
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await appendAudit("error", "policy.decide.error", "metis-policy decision failed; used sample decision.", {
-      error: message,
-      prompt_sha256: sha256(prompt)
-    });
+    if (!options?.silent) {
+      await appendAudit("error", "policy.decide.error", "metis-policy decision failed; used sample decision.", {
+        error: message,
+        prompt_sha256: sha256(prompt)
+      });
+    }
     return {
       source: "sample",
       decision: sampleDecision,
@@ -7412,15 +7429,37 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const conversationId = input.conversationId ?? randomUUID();
   const promptHash = sha256(prompt);
   const policyStart = Date.now();
-  const decision = await decidePolicy({
-    prompt,
-    preset: input.preset
-  });
+  // B8.2b (LOCAL speculative pre-routing, docs/DRILL_PLAN.md): while the
+  // owner was still typing, prewarmRoute may already have decided WHERE the
+  // Auto Router would send this EXACT prompt and cached the result keyed by
+  // its exact hash — reusing it here skips the metis-policy CLI spawn
+  // entirely at send time. Only ever consulted for the Auto Router path: a
+  // pinned model never routes at all (PF3), so this is skipped outright when
+  // input.modelOverride is set. `prewarmEnabled` is re-checked directly here
+  // (not just inferred from an empty cache) so toggling it off is provably
+  // byte-identical to the unconditional decidePolicy call that ran here
+  // before this feature existed; a miss (flag off, no entry, key mismatch,
+  // or pinned) falls through to that exact same call.
+  const cachedRouteResult =
+    !input.modelOverride && (await readStoreValue<boolean>("prewarmEnabled", false))
+      ? takeCachedRouteDecision(routeDecisionCacheKey(prompt, input.preset))
+      : null;
+  if (cachedRouteResult) emitTimeline(stream, timelineText("Route decided ahead of time."));
+  const decision =
+    cachedRouteResult ??
+    (await decidePolicy({
+      prompt,
+      preset: input.preset
+    }));
   const policyMs = Date.now() - policyStart;
   const previousRun = isAttributionQuestion(prompt) ? await previousConversationRun(input.conversationId) : null;
   const routeContext = shouldReusePreviousPipeline(prompt) ? await previousConversationTaskType(input.conversationId) : null;
   const routeLabel = routeLabelFromPrompt(prompt) ?? (shouldReusePreviousPipeline(prompt) ? await previousConversationRouteLabel(input.conversationId) : undefined);
-  const effectiveDecision = applySessionRouteOverrides(prompt, decision.decision, routeContext);
+  // A cached result already carries prewarmRoute's own
+  // applySessionRouteOverrides output (it ran the identical Auto-path
+  // override logic speculatively) — re-applying it here would double-apply
+  // overrides, so the live override call only runs on a miss.
+  const effectiveDecision = cachedRouteResult ? cachedRouteResult.decision : applySessionRouteOverrides(prompt, decision.decision, routeContext);
   const effectiveDecisionResult: PolicyDecisionResult = { ...decision, decision: effectiveDecision };
 
   // "Set up a preview" is an OPERATION on the existing project, not a build —
@@ -8845,6 +8884,17 @@ function abortOracleSpeculativeWork(): void {
   draftAborts.clear();
   for (const [, controller] of prewarmAborts) controller.abort();
   prewarmAborts.clear();
+  // B8.2b: sweep the speculative route-prewarm sibling too, so a real send's
+  // own decidePolicy call never contends with a stale in-flight metis-policy
+  // CLI spawn for CPU. routePrewarmAbort is declared further below with the
+  // rest of the route-prewarm state (prewarmRoute and friends) — referencing
+  // it here is a plain forward reference to a module-level `let`, safe
+  // because this function only ever runs later, once the whole module (and
+  // therefore that declaration) has already finished loading.
+  if (routePrewarmAbort) {
+    routePrewarmAbort.controller.abort();
+    routePrewarmAbort = null;
+  }
 }
 
 /** Oracle v0.3 (DRILL_PLAN O4): the most recent COMPLETE speculative draft,
@@ -8955,6 +9005,133 @@ async function draftModel(model: string, draft: string, context?: PrewarmContext
     // other failure — drafting is best-effort only, so stay quiet and never
     // throw out of this function.
     return null;
+  }
+}
+
+// --- Speculative route pre-routing (docs/DRILL_PLAN.md B8.2b, v0.1) ---
+// A sibling to prewarmModel/draftModel above, but instead of touching Ollama
+// this speculatively runs the SAME Auto-Router routing decision
+// (decidePolicy + applySessionRouteOverrides) that runSession's non-pinned
+// path makes at send time, while the owner is still typing, so runSession
+// can skip the metis-policy CLI spawn entirely once the owner hits send
+// (zero routing latency). Same fail-soft, flag-gated, LOCAL-only posture as
+// prewarmModel: never throws, resolves void on any failure/guard, never
+// creates a conversation or session-run record, never emits a stage/stream
+// event, and never writes a project file. Only ever useful for the Auto
+// Router path — runSession's pinned path (PF3) never even looks at the
+// cache, since a pinned model has no routing decision to skip.
+
+const ROUTE_PREWARM_DEDUPE_WINDOW_MS = 3000;
+const ROUTE_PREWARM_TIMEOUT_MS = 10000;
+const ROUTE_CACHE_TTL_MS = 60 * 1000;
+
+/** The exact cache key both prewarmRoute and runSession compute: sha256 of
+ *  the prompt string decidePolicy will actually decide on, namespaced by
+ *  preset. prewarmRoute never receives a preset — PrewarmContext (mirrored
+ *  from the warm/draft channels) carries only conversationId/projectPath,
+ *  since a preset is a routines/advanced-option concept the ordinary
+ *  composer-typing flow doesn't set — so a speculative entry is always keyed
+ *  with an empty preset slot. A real send that DOES set a preset therefore
+ *  simply misses the cache (never wrongly reused) rather than needing extra
+ *  IPC surface just to track it speculatively. */
+function routeDecisionCacheKey(prompt: string, preset?: SessionRunInput["preset"]): string {
+  return sha256(`${preset ?? ""} ${prompt}`);
+}
+
+/** Mirrors runSession's own /orchestration-command stripping (~L7368-7371)
+ *  so the string this hashes and decides on is the SAME string runSession's
+ *  Auto-Router path will decide on for the same typed text. */
+function promptForRouteDecision(text: string): string {
+  const trimmed = text.trim();
+  const orchestrationCommand = parseOrchestrationCommand(trimmed);
+  return orchestrationCommand ? orchestrationCommand.remainder || trimmed : trimmed;
+}
+
+let lastRoutePrewarm: { key: string; at: number } | null = null;
+// Unlike prewarmAborts/draftAborts (Maps keyed by model), routing has no
+// model dimension — there is only ever one "current" speculative route
+// decision for the app, so a single slot is enough. A newer draft aborts and
+// replaces an older in-flight decision (latest wins), same as draftModel's
+// replace-on-change behavior. Swept by abortOracleSpeculativeWork above.
+let routePrewarmAbort: { controller: AbortController; key: string } | null = null;
+
+/** The most recent speculative route decision, keyed by the exact prompt
+ *  (+preset) hash it was decided for. Already carries
+ *  applySessionRouteOverrides' output (the Auto-path override step ran
+ *  speculatively too), so a cache hit in runSession is a straight substitute
+ *  for both decidePolicy AND the override call. */
+let cachedRouteDecision: { key: string; result: PolicyDecisionResult; at: number } | null = null;
+
+/** One-shot claim of a cached speculative route decision for an exact
+ *  key match. Clears on claim so a stale decision can never be reused
+ *  twice, and expires quietly after ROUTE_CACHE_TTL_MS. */
+function takeCachedRouteDecision(key: string): PolicyDecisionResult | null {
+  if (!cachedRouteDecision) return null;
+  if (Date.now() - cachedRouteDecision.at > ROUTE_CACHE_TTL_MS) {
+    cachedRouteDecision = null;
+    return null;
+  }
+  if (cachedRouteDecision.key !== key) return null;
+  const claimed = cachedRouteDecision.result;
+  cachedRouteDecision = null;
+  return claimed;
+}
+
+/** Speculatively decides WHERE the Auto Router would send the in-progress
+ *  draft (docs/DRILL_PLAN.md B8.2b), while the owner is still typing. OFF by
+ *  default behind `prewarmEnabled` — a defense-in-depth check here even
+ *  though the renderer is expected to gate this itself before ever invoking
+ *  the IPC channel. Fails soft and silent in every case: never throws, never
+ *  surfaces an error to the renderer, never creates a conversation or
+ *  session-run record, never emits a stage/stream event, and never writes a
+ *  project file. Calls decidePolicy with `silent: true` so a speculative
+ *  decision that never becomes a real send leaves no audit-log.jsonl trace
+ *  either — toggling `prewarmEnabled` back off leaves zero footprint. */
+async function prewarmRoute(draft: string, context?: PrewarmContext): Promise<void> {
+  const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
+  if (trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return;
+  try {
+    if (!(await readStoreValue<boolean>("prewarmEnabled", false))) return;
+
+    const promptForDecision = promptForRouteDecision(trimmedDraft);
+    if (!promptForDecision) return;
+    const key = routeDecisionCacheKey(promptForDecision);
+    const now = Date.now();
+    if (lastRoutePrewarm && lastRoutePrewarm.key === key && now - lastRoutePrewarm.at < ROUTE_PREWARM_DEDUPE_WINDOW_MS) {
+      return; // Same effective prompt route-decided too recently to be worth repeating.
+    }
+    if (routePrewarmAbort) {
+      if (routePrewarmAbort.key === key) {
+        return; // The exact same route decision is already in flight — let it finish.
+      }
+      // The draft changed while an older decision was still resolving: abort
+      // it and start fresh (latest wins), same as draftModel.
+      routePrewarmAbort.controller.abort();
+      routePrewarmAbort = null;
+    }
+
+    const controller = new AbortController();
+    routePrewarmAbort = { controller, key };
+    const timeout = setTimeout(() => controller.abort(), ROUTE_PREWARM_TIMEOUT_MS);
+    try {
+      const decision = await decidePolicy({ prompt: promptForDecision }, { signal: controller.signal, silent: true });
+      // Aborted mid-flight (abortOracleSpeculativeWork or a newer draft):
+      // decidePolicy's own catch turns a killed CLI process into an ordinary
+      // "sample" fallback result rather than rethrowing, so that fallback
+      // must be discarded here rather than cached as if it were real.
+      if (controller.signal.aborted) return;
+      const routeContext = shouldReusePreviousPipeline(promptForDecision) ? await previousConversationTaskType(context?.conversationId) : null;
+      const effectiveDecision = applySessionRouteOverrides(promptForDecision, decision.decision, routeContext);
+      cachedRouteDecision = { key, result: { ...decision, decision: effectiveDecision }, at: Date.now() };
+      lastRoutePrewarm = { key, at: Date.now() };
+    } finally {
+      clearTimeout(timeout);
+      if (routePrewarmAbort?.controller === controller) routePrewarmAbort = null;
+    }
+  } catch {
+    // metis-policy CLI missing, malformed output, aborted, or any other
+    // failure — route pre-decision is best-effort only, so stay quiet and
+    // never throw out of this function.
   }
 }
 
@@ -9867,6 +10044,12 @@ app.whenReady().then(async () => {
   // channel above, but resolves to the actual drafted text (or null on any
   // failure/guard) instead of void, so the renderer can choose to show it.
   ipcMain.handle("metis-prewarm:draft", (_event, model: string, draft: string, context?: PrewarmContext) => draftModel(model, draft, context));
+  // Speculative route pre-routing (docs/DRILL_PLAN.md B8.2b v0.1) — sibling
+  // to warm/draft above, but decides WHERE the Auto Router would send the
+  // draft instead of touching a model at all; resolves to void like warm,
+  // since the result is only ever consumed indirectly (runSession's own
+  // cache lookup at send time), never by the renderer directly.
+  ipcMain.handle("metis-prewarm:route", (_event, draft: string, context?: PrewarmContext) => prewarmRoute(draft, context));
   ipcMain.handle("metis-routines:list", () => listRoutines());
   ipcMain.handle("metis-routines:save", (_event, input: Routine) => saveRoutine(input));
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));
