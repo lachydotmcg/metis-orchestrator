@@ -87,6 +87,49 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ IDEA BATCH 9 (2026-07-13, Fable research round - Lachy: free reign, come up with new ideas)
+
+Grounded in the existing substrate; each names what it builds on.
+
+- [ ] **I9.1 - Oracle Everywhere: prewarm on conversation OPEN.** The moment you open a
+  conversation (before typing at all), prewarm the assembled prefix (system + context +
+  snapshot) for that conversation's remembered model (B7.1 map makes the target knowable).
+  First keystroke then starts from a warm prefix instead of a cold one. Builds on
+  assembleChatPrewarmPrompt + conversationModels.
+- [ ] **I9.2 - Oracle draft STREAMING into the popover.** The guess currently appears all at
+  once (draftModel is stream:false). Stream it so the popover shows the guess forming live -
+  the demo becomes hypnotic and Lachy sees thinking in real time. Small: reuse
+  invokeOllamaProviderStream shape inside draftModel behind the same guards.
+- [ ] **I9.3 - Warm-chain for the build pipeline.** While the PLAN stage streams, prewarm the
+  FRONTEND stage's model with its (partially known) prompt prefix; while frontend streams,
+  prewarm functional. Stage-to-stage TTFT drops across the whole pipeline. Builds on
+  prewarmModel + the stage chain in runOrchestratedStages.
+- [ ] **I9.4 - Routine dry-run + preview.** Before enabling a routine, run it once in plan-only
+  permission mode and show what it WOULD have done (files, calls). Reuses permissionMode plan +
+  the existing routine runner. Trust-builder for scheduled automation.
+- [ ] **I9.5 - Conversation forking.** Fork a conversation at any turn into a new conversation
+  (copy turns up to that point). Cheap in the store model (ConversationRecord.turns slice) and
+  pairs beautifully with per-conversation models: fork the same context onto a different model
+  and compare.
+- [ ] **I9.6 - A/B answer mode.** Ask once, two models answer side by side (local vs cloud, or
+  two locals), pick the winner; the pick is recorded as a preference signal (future: feeds the
+  router policy). Builds on the side-chat surface + invokeProvider.
+- [ ] **I9.7 - Knowledge Banks auto-context chip.** When retrieval grounds a chat turn, show a
+  slim expandable chip listing WHICH chunks (file + line-ish) grounded it - the §16 renderer
+  follow-up shaped as a trust feature (provenance, not just retrieval).
+- [ ] **I9.8 - Model health strip on the picker.** The picker already badges installed; add a
+  tiny latency dot from recent ttftMs telemetry per model (green under 500ms, amber under 2s)
+  so picking a model shows how it has actually been performing on THIS machine. Builds on
+  SessionRun.ttftMs history.
+- [ ] **I9.9 - /export and /summarize slash commands.** The template popover already owns the
+  slash surface; add built-ins: /export (existing conversation exportMarkdown) and /summarize
+  (local-model summary of the conversation appended as an assistant turn, clearly labeled).
+- [ ] **I9.10 - Session handoff card.** One click generates a compact continue-from-here brief
+  (project, decisions, open threads) as markdown - for moving a conversation to a fresh context
+  or another model. Local-model generated, uses recentConversationContext.
+
+---
+
 ## ★ LACHY BATCH 8 (2026-07-12, Oracle everywhere + branding)
 
 - [x] **B8.1 - Metis Oracle joins the stack in the README** (done directly). Metis Gallery is
