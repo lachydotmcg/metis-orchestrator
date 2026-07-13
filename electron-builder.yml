@@ -46,7 +46,9 @@ mac:
         - x64
         - arm64
   category: public.app-category.developer-tools
-  artifactName: ${productName}-${version}.${ext}
+  # ${arch} is required here: mac builds BOTH x64 and arm64, and without it
+  # both dmgs write to the same filename and hdiutil fails (v1.0.0 run #3).
+  artifactName: ${productName}-${version}-${arch}.${ext}
 
 linux:
   target:
