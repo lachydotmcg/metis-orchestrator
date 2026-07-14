@@ -8475,6 +8475,32 @@ html.density-compact .nav-row {
   background: #6fae7d;
 }
 
+/* Per-model latency dot (DRILL_PLAN I9.8) — small first-token-latency signal
+   next to a picker row, built only from real telemetry (see modelLatencyMs in
+   App.tsx); a row with no reading renders no dot at all. Tone bands: green
+   under 800ms, amber under 2500ms, grey at/above (still a real reading, just
+   slow — never a "bad" red, since honest slowness isn't an error state). */
+.router-option .router-latency-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-left: 4px;
+  background: var(--faint);
+}
+
+.router-option .router-latency-dot.fast {
+  background: #6fae7d;
+}
+
+.router-option .router-latency-dot.medium {
+  background: #d9a94c;
+}
+
+.router-option .router-latency-dot.slow {
+  background: var(--faint);
+}
+
 /* Named model/route presets group (DRILL_PLAN B5.1) — sits between the Auto
    router option and the tiered model groups, reusing .router-tier-label /
    .router-option / .router-add-trigger / .router-add-form so it reads as

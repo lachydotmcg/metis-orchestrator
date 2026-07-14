@@ -607,6 +607,25 @@ const PROVIDER_CONNECTIONS: Record<ProviderId, ProviderKey> = {
   groq: "groq"
 };
 
+/** Key for the per-model latency map (DRILL_PLAN I9.8) — built once from real
+ *  run.providerResult.provider + run.providerResult.model, and looked up the
+ *  same way from a picker row's PROVIDER_CONNECTIONS[ref.provider] + (its
+ *  localOllamaTagFor(ref) ollama tag, or ref.model for cloud rows). Keeping
+ *  both sides funneled through this one function is what keeps the two ends
+ *  of the lookup in sync. */
+function modelLatencyKey(provider: ProviderKey, model: string): string {
+  return `${provider}::${model}`;
+}
+
+/** Latency-dot tone for the model picker (DRILL_PLAN I9.8) — thresholds are in
+ *  ms of measured time-to-first-token. Deliberately coarse (3 buckets) since
+ *  this is a glance-level signal, not a precise benchmark. */
+function latencyDotTone(ttftMs: number): "fast" | "medium" | "slow" {
+  if (ttftMs < 800) return "fast";
+  if (ttftMs < 2500) return "medium";
+  return "slow";
+}
+
 /** Maps the live registry's `catalog/models.json` provider naming (ProviderKey,
  *  e.g. "anthropic") onto the renderer's brand-style ids (e.g. "claude") used
  *  by the model picker. Ollama-tier catalog entries all land on "qwen" since
@@ -881,6 +900,19 @@ const DEFAULT_BENCHMARK_LOCAL_FIRST = true;
 // "Experiments" toggle (to flip it). OFF by default; main.ts's prewarmModel() also
 // re-checks this same store key itself as defense-in-depth.
 const DEFAULT_PREWARM_ENABLED = false;
+
+// Stable module-level default for the model-driven routing experiment — read via
+// useAppStoreState("modelDrivenRoutingEnabled", ...) by the Settings > Chat >
+// Experiments toggle. The main process's router reads this same store key to
+// decide whether to classify prompts with a local model instead of keyword
+// rules, falling back to the rules on any failure. OFF by default.
+const DEFAULT_MODEL_DRIVEN_ROUTING_ENABLED = false;
+
+// Stable module-level default for "close to tray" — read via
+// useAppStoreState("closeToTray", ...) by the Settings > General toggle. The
+// main process reads this same store key to decide whether closing the window
+// hides Metis in the tray instead of quitting. OFF by default.
+const DEFAULT_CLOSE_TO_TRAY = false;
 
 /** A single Oracle warm call the composer chip's expandable log remembers
  *  (docs/DRILL_PLAN.md B5.5) — in-memory only, capped to ORACLE_LOG_CAP
@@ -3415,6 +3447,37 @@ function NewSessionWorkspace({
     return { usageEvents, userMessages, messageCount };
   }, [storedConversations, runtimeTelemetryRuns]);
 
+  // Per-model latest first-token latency (DRILL_PLAN I9.8) — read from real
+  // telemetry only (run.providerResult.model + the top-level run.ttftMs
+  // promoted from it), never simulated. Walks the same stored-conversation
+  // turns + runtime session runs the usage telemetry above already holds;
+  // keeps the most recent createdAt reading per model so a stale run never
+  // outranks a fresh one. Passed down to the model picker as a plain
+  // string -> ms map so a row with no reading renders no dot at all.
+  const modelLatencyMs = useMemo(() => {
+    const latest = new Map<string, { ttftMs: number; at: number }>();
+    const consider = (run: SessionRun | undefined, at: number): void => {
+      const model = run?.providerResult?.model;
+      const provider = run?.providerResult?.provider;
+      const ttftMs = run?.ttftMs;
+      if (!model || !provider || typeof ttftMs !== "number") return;
+      const key = modelLatencyKey(provider, model);
+      const existing = latest.get(key);
+      if (!existing || at > existing.at) latest.set(key, { ttftMs, at });
+    };
+    storedConversations.forEach((conversation) => {
+      conversation.turns.forEach((turn) => {
+        if (turn.role === "user") return;
+        const created = new Date(turn.createdAt);
+        consider(turn.run, Number.isNaN(created.getTime()) ? Date.now() : created.getTime());
+      });
+    });
+    runtimeTelemetryRuns.forEach((run) => consider(run, new Date(run.createdAt).getTime()));
+    const result = new Map<string, number>();
+    latest.forEach((value, key) => result.set(key, value.ttftMs));
+    return result;
+  }, [storedConversations, runtimeTelemetryRuns]);
+
   const rangeCutoff = useMemo(() => {
     const days = RANGE_DAYS[range];
     if (days === null) return 0;
@@ -4564,6 +4627,7 @@ function NewSessionWorkspace({
           selectedModel={selectedModel}
           setSelectedModel={pickModel}
           modelGroups={modelGroups}
+          modelLatencyMs={modelLatencyMs}
           routerFilter={routerFilter}
           setRouterFilter={setRouterFilter}
           addModelOpen={addModelOpen}
@@ -4629,6 +4693,7 @@ function SessionComposer({
   selectedModel,
   setSelectedModel,
   modelGroups,
+  modelLatencyMs,
   routerFilter,
   setRouterFilter,
   addModelOpen,
@@ -4662,6 +4727,11 @@ function SessionComposer({
   selectedModel: ModelRef | null;
   setSelectedModel: (ref: ModelRef | null) => void;
   modelGroups: SessionComposerModelGroups;
+  /** Real-telemetry first-token latency per model (DRILL_PLAN I9.8), keyed via
+   *  modelLatencyKey(providerResult.provider, providerResult.model). Built once
+   *  in the parent workspace from stored conversations + runtime session runs;
+   *  a model with no reading simply has no entry, so the picker shows no dot. */
+  modelLatencyMs: Map<string, number>;
   routerFilter: string;
   setRouterFilter: (value: string) => void;
   addModelOpen: boolean;
@@ -5339,12 +5409,23 @@ function SessionComposer({
                               // models with no resolvable LOCAL_MODELS tag.
                               const localTag = localOllamaTagFor(ref);
                               const localInstalled = localTag ? isLocalModelInstalled(ref) : false;
+                              // Real-telemetry reading only (DRILL_PLAN I9.8) — local rows
+                              // key off the resolved ollama tag (what providerResult.model
+                              // actually holds for those runs), cloud rows off ref.model
+                              // directly. No entry means no dot; never a simulated value.
+                              const latencyMs = modelLatencyMs.get(modelLatencyKey(PROVIDER_CONNECTIONS[ref.provider], localTag ?? ref.model));
                               return (
                                 <button key={`${ref.provider}-${ref.model}`} type="button" role="option" aria-selected={active} className={`router-option ${active ? "active" : ""}`} onClick={() => { setSelectedModel(ref); setRouterOpen(false); }}>
                                   <span className="router-option-name">
                                     {ref.model}
                                     {routeSuffix ? <small className="router-route-suffix">via {routeSuffix}</small> : null}
                                   </span>
+                                  {typeof latencyMs === "number" ? (
+                                    <span
+                                      className={`router-latency-dot ${latencyDotTone(latencyMs)}`}
+                                      title={`first token ${latencyMs}ms`}
+                                    />
+                                  ) : null}
                                   {localTag ? (
                                     <span className={`router-local-status ${localInstalled ? "installed" : ""}`}>
                                       <span className="router-local-dot" />
@@ -13564,6 +13645,16 @@ function SettingsWorkspace({
   // the chat composer's debounced warm effect reads; see the Experiments panel
   // in the "chat" settings section below. OFF by default.
   const [prewarmEnabled, setPrewarmEnabled] = useAppStoreState("prewarmEnabled", DEFAULT_PREWARM_ENABLED);
+  // Model-driven routing experiment — same store key the main-process router
+  // reads to decide chat-vs-build classification; see the Experiments panel
+  // in the "chat" settings section below. OFF by default.
+  const [modelDrivenRoutingEnabled, setModelDrivenRoutingEnabled] = useAppStoreState(
+    "modelDrivenRoutingEnabled",
+    DEFAULT_MODEL_DRIVEN_ROUTING_ENABLED
+  );
+  // Close-to-tray — same store key main.ts reads to decide whether closing the
+  // window hides Metis in the tray instead of quitting. OFF by default.
+  const [closeToTray, setCloseToTray] = useAppStoreState("closeToTray", DEFAULT_CLOSE_TO_TRAY);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
@@ -13851,6 +13942,28 @@ function SettingsWorkspace({
             />
           </label>
           {!window.metisProfile ? <p className="settings-warning">Profile editing needs the desktop app; this preview has no profile bridge.</p> : null}
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Window</small>
+              <h2>Close to tray</h2>
+            </span>
+          </header>
+          <label className="settings-field toggle-field">
+            <span>Close to tray</span>
+            <button
+              type="button"
+              className={`toggle-switch ${closeToTray ? "on" : ""}`}
+              role="switch"
+              aria-checked={closeToTray}
+              onClick={() => setCloseToTray(!closeToTray)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">Closing the window hides Metis in the tray instead of quitting.</p>
         </article>
 
         <article className="settings-panel policy-panel">
@@ -14220,6 +14333,19 @@ function SettingsWorkspace({
             </button>
           </label>
           <p className="settings-hint">Warms the local model with your draft for a faster first response. Local models only, and off by default.</p>
+          <label className="settings-field toggle-field">
+            <span>Model-driven routing (experimental)</span>
+            <button
+              type="button"
+              className={`toggle-switch ${modelDrivenRoutingEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={modelDrivenRoutingEnabled}
+              onClick={() => setModelDrivenRoutingEnabled(!modelDrivenRoutingEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">A fast local model classifies each prompt as chat or build instead of keyword rules. Falls back to the rules on any failure.</p>
         </article>
       </section>
       ) : null}
