@@ -6004,6 +6004,143 @@ function claimFilePath(ledger: Map<string, string>, path: string, agentName: str
   return true;
 }
 
+// --- Living-spec fan-out (docs/DRILL_PLAN.md P10.3) ---
+// The fan-out engine above only ever narrated its plan into the timeline; nothing was ever
+// written to disk as a real artifact. This section adds METIS-SPEC.md: a genuine markdown file
+// written into the workspace root at fan-out start and updated as each named sub-agent works,
+// so the plan/status/summary is something the user can actually open and watch evolve, not just
+// scrollback text. Everything below is only ever reached from inside runFanoutPipeline, which
+// only runs when fanoutEnabled is on — flag-off behavior is untouched.
+
+/** One sub-agent's row in the living-spec doc's in-memory mirror. Kept as plain data (not raw
+ *  markdown) so every rewrite renders the WHOLE document fresh from this state instead of
+ *  string-patching a previous version of the file — simpler and safer than trying to locate and
+ *  replace one agent's section inside already-written markdown. */
+type FanoutSpecAgentState = {
+  name: string;
+  task: string;
+  territory: string[];
+  status: "pending" | "working" | "done" | "failed";
+  summary: string[];
+};
+
+/** First non-blank line of some model output, trimmed and capped — used as a cheap one-line
+ *  summary when there's nothing more structured (like a claimed file list) to show. Never dumps
+ *  full output into the spec doc. */
+function firstNonEmptyLine(text: string, maxLength = 140): string | null {
+  const line = text
+    .split("\n")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0);
+  if (!line) return null;
+  return line.length > maxLength ? `${line.slice(0, maxLength - 1)}...` : line;
+}
+
+/** Builds the 2-3 bullet summary for one agent's spec section from its actual stage result:
+ *  the files it won the claim ledger for when it succeeded, or a one-line reason when it didn't
+ *  produce anything usable. Never includes the full model output. */
+function summarizeFanoutAgentResult(args: { claimedPaths: string[]; failed: boolean; output: string; notes: string[] }): string[] {
+  const { claimedPaths, failed, output, notes } = args;
+  if (failed) {
+    const reason = notes[0] ?? firstNonEmptyLine(output) ?? "No output produced.";
+    return [reason];
+  }
+  if (claimedPaths.length > 0) {
+    const shown = claimedPaths.slice(0, 3).map((path) => `Wrote ${path}`);
+    const remaining = claimedPaths.length - 3;
+    if (remaining > 0) shown.push(`Plus ${remaining} more file${remaining === 1 ? "" : "s"}.`);
+    return shown;
+  }
+  const summaryLine = firstNonEmptyLine(output);
+  return [summaryLine ?? "Completed, but no files were claimed (paths may have already been claimed by a teammate)."];
+}
+
+/** Renders the FULL METIS-SPEC.md body from current in-memory state (docs/DRILL_PLAN.md
+ *  P10.3): a header with the task, start time and agent roster, then one section per agent with
+ *  a `Status:` line and its summary bullets, and finally an optional Outcome section once the
+ *  build's final write + verify result is known. Always a complete re-render — see
+ *  writeFanoutSpecFile's comment for why a full rewrite is safe here without a lock. */
+function renderFanoutSpecDocument(
+  header: { prompt: string; startedAt: string },
+  agents: FanoutSpecAgentState[],
+  outcome?: { fileCount: number; verified: boolean; verificationDetail?: string }
+): string {
+  const lines: string[] = [
+    "# METIS-SPEC.md",
+    "",
+    "Living build spec, written and kept up to date by Metis's fan-out agents as they work.",
+    "",
+    `Task: ${header.prompt.replace(/\s+/g, " ").trim().slice(0, 400)}`,
+    `Started: ${header.startedAt}`,
+    "",
+    "## Agent roster",
+    ...agents.map((agent) => `- ${agent.name} - ${agent.task} (owns: ${agent.territory.join(", ")})`),
+    ""
+  ];
+  for (const agent of agents) {
+    lines.push(`## ${agent.name} - ${agent.task}`);
+    lines.push(`Status: ${agent.status}`);
+    for (const bullet of agent.summary) lines.push(`- ${bullet}`);
+    lines.push("");
+  }
+  if (outcome) lines.push(...renderFanoutOutcomeLines(outcome));
+  return lines.join("\n");
+}
+
+/** The "## Outcome" section's lines, factored out of renderFanoutSpecDocument so
+ *  appendFanoutSpecOutcome can produce the exact same block later (once the OUTER pipeline
+ *  knows the real result) without re-deriving the format by hand. */
+function renderFanoutOutcomeLines(outcome: { fileCount: number; verified: boolean; verificationDetail?: string }): string[] {
+  return [
+    "## Outcome",
+    `Files written: ${outcome.fileCount}`,
+    `Verify: ${outcome.verified ? "passed" : "failed"}${outcome.verificationDetail ? ` - ${outcome.verificationDetail.slice(0, 200)}` : ""}`,
+    ""
+  ];
+}
+
+/** Writes/overwrites METIS-SPEC.md into the writable workspace root (docs/DRILL_PLAN.md
+ *  P10.3). Takes the SAME `ProjectWorkspace | null` object writeProjectFiles is handed for the
+ *  real build files — i.e. only ever a workspace resolveActiveProjectWorkspace already found an
+ *  existing filesystem.write grant for (see resolveWritableProjectWorkspace) — so this can never
+ *  write anywhere the build itself isn't already permitted to write, and it reuses that exact
+ *  permission gate rather than inventing a second one. Deliberately does NOT fall back to
+ *  dataPath("generated-projects") the way writeProjectFiles does for an app-managed run: an
+ *  app-data spec file would never be visible to the user, which defeats the point of this
+ *  feature, so no writable workspace just means "skip the spec silently."
+ *  Read-modify-write between agents needs no lock because runFanoutPipeline's per-agent loop is
+ *  strictly sequential today — one stage call in flight at a time, so there is never a second
+ *  writer racing this one. That assumption breaks the day sub-agents run concurrently; whoever
+ *  parallelizes the loop needs to add real locking (or a single-writer queue) here.
+ *  Best-effort: any fs error is swallowed to null — a spec-file write failure must never fail
+ *  the build itself. */
+async function writeFanoutSpecFile(workspace: ProjectWorkspace | null, content: string): Promise<string | null> {
+  if (!workspace) return null;
+  try {
+    const target = join(workspace.path, "METIS-SPEC.md");
+    await writeFile(target, content, "utf8");
+    return target;
+  } catch {
+    return null;
+  }
+}
+
+/** Appends the closing "## Outcome" section once the OUTER build pipeline knows the final
+ *  write + verify result (docs/DRILL_PLAN.md P10.3) — this runs well after runFanoutPipeline
+ *  itself has already returned, since verification only happens once writeProjectFiles and any
+ *  repair passes complete back in runSession. Reads the file back rather than reusing captured
+ *  in-memory state, so it appends onto whatever is actually on disk. Best-effort like
+ *  writeFanoutSpecFile: any failure here is swallowed and never surfaces to the build result. */
+async function appendFanoutSpecOutcome(specPath: string, fileCount: number, verified: boolean, verificationDetail?: string): Promise<void> {
+  try {
+    const existing = await readFile(specPath, "utf8").catch(() => "");
+    const outcomeBlock = renderFanoutOutcomeLines({ fileCount, verified, verificationDetail }).join("\n");
+    await writeFile(specPath, `${existing.replace(/\s+$/, "")}\n\n${outcomeBlock}`, "utf8");
+  } catch {
+    // Best-effort artifact update — never let this affect the build result.
+  }
+}
+
 /** Runs the N-agent fan-out build (docs/DRILL_PLAN.md Phase 5, sub-round 5a —
  *  the engine; the visualisation is a later sub-round). Mirrors
  *  runOrchestratedStages' inputs/outputs closely enough that runSession can
@@ -6019,10 +6156,11 @@ async function runFanoutPipeline(
   stream: SessionStreamController | undefined,
   override: SessionModelOverride | undefined,
   projectPath: string | undefined,
+  writable: ProjectWorkspace | null,
   metisFile: { content: string; chars: number } | null | undefined,
   conversationContext: string | null | undefined,
   images: ProviderImageInput[] | undefined
-): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed; fanout: NonNullable<SessionRun["fanout"]>; files: GeneratedFile[] } | null> {
+): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed; fanout: NonNullable<SessionRun["fanout"]>; files: GeneratedFile[]; operations: AgentOperation[] } | null> {
   const scope = directiveScopeKey(projectPath);
   try {
     throwIfCancelled(projectPath);
@@ -6035,6 +6173,30 @@ async function runFanoutPipeline(
     const explicitStyle = promptHasExplicitStyle(prompt);
     const planSummary = tasks.map((task) => `- ${task.name}: ${task.task} (owns: ${task.territory.join(", ")})`).join("\n");
     emitTimeline(stream, timelineText(`Plan: ${tasks.length} agents — ${tasks.map((task) => task.name).join(", ")}.`));
+
+    // Living-spec fan-out (docs/DRILL_PLAN.md P10.3): write METIS-SPEC.md into the workspace
+    // root right away, before any sub-agent runs, as the first-class visible artifact the plan
+    // above only used to narrate into the timeline. specPath stays null (and every write below
+    // becomes a no-op) whenever there's no writable workspace to place it in — see
+    // writeFanoutSpecFile's own comment for why that's a deliberate silent skip, not a fallback.
+    const specAgents: FanoutSpecAgentState[] = tasks.map((task) => ({ name: task.name, task: task.task, territory: task.territory, status: "pending", summary: [] }));
+    const specStartedAt = new Date().toISOString();
+    const specOperations: AgentOperation[] = [];
+    const specPath = await writeFanoutSpecFile(writable, renderFanoutSpecDocument({ prompt, startedAt: specStartedAt }, specAgents));
+    if (specPath) {
+      const specOp: AgentOperation = {
+        id: randomUUID(),
+        kind: "file_create",
+        label: "Wrote METIS-SPEC.md",
+        target: specPath,
+        status: "complete",
+        permission: "filesystem.write",
+        detail: `Living build spec for ${tasks.length} agent${tasks.length === 1 ? "" : "s"}.`
+      };
+      specOperations.push(specOp);
+      emitStream(stream, { kind: "operation", operation: specOp });
+      emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Wrote METIS-SPEC.md", operationIds: [specOp.id] });
+    }
 
     // Reuse the SAME chain resolution the single pipeline uses (graph pipeline
     // if configured, else the hardcoded default) — sub-agents share the
@@ -6054,6 +6216,11 @@ async function runFanoutPipeline(
       throwIfCancelled(projectPath);
       const subtask = tasks[index];
       emitTimeline(stream, timelineText(`${subtask.name} is starting: ${subtask.task}`));
+      // Living-spec update (docs/DRILL_PLAN.md P10.3): flip this agent's section to "working"
+      // before its call goes out. Read-modify-write is safe without a lock here because this
+      // loop is strictly sequential — see writeFanoutSpecFile's comment.
+      specAgents[index].status = "working";
+      if (specPath) await writeFanoutSpecFile(writable, renderFanoutSpecDocument({ prompt, startedAt: specStartedAt }, specAgents));
       let subPrompt = `You are ${subtask.name}, one sub-agent in a multi-agent build team working on the SAME project. A fan-out planner split this build into ${tasks.length} parallel workstreams; you own exactly one of them.
 
 Overall build request:
@@ -6134,6 +6301,13 @@ Return COMPLETE files, not snippets, only for paths inside your territory. Befor
         }
       }
       agentSummaries.push({ name: subtask.name, task: subtask.task, claimedPaths });
+
+      // Living-spec update (docs/DRILL_PLAN.md P10.3): close out this agent's section with its
+      // final status and a short (2-3 bullet) summary derived from what it actually produced,
+      // never the full model output.
+      specAgents[index].status = attempt.failed ? "failed" : "done";
+      specAgents[index].summary = summarizeFanoutAgentResult({ claimedPaths, failed: attempt.failed, output: cleanOutput, notes: attempt.notes });
+      if (specPath) await writeFanoutSpecFile(writable, renderFanoutSpecDocument({ prompt, startedAt: specStartedAt }, specAgents));
     }
 
     // Never leave the ledger dirty: it's local to this call and about to go
@@ -6152,8 +6326,9 @@ Return COMPLETE files, not snippets, only for paths inside your territory. Befor
     return {
       stages: resultStages,
       designSeed: seed,
-      fanout: { agents: agentSummaries },
-      files: claimedFiles
+      fanout: { agents: agentSummaries, specPath: specPath ?? undefined },
+      files: claimedFiles,
+      operations: specOperations
     };
   } catch (error) {
     // A Stop-button abort must propagate exactly like it does everywhere else
@@ -7655,13 +7830,17 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       // stops after its own "plan" stage in permissionMode "plan" (see
       // runOrchestratedStages) rather than spending calls on a full build.
       const fanoutResult = permissionMode !== "plan" && (await shouldAttemptFanout(singleFile))
-        ? await runFanoutPipeline(prompt, stream, input.modelOverride, input.projectPath, metisFile, conversationContext, images.length > 0 ? images : undefined)
+        ? await runFanoutPipeline(prompt, stream, input.modelOverride, input.projectPath, writable, metisFile, conversationContext, images.length > 0 ? images : undefined)
         : null;
       if (fanoutResult) {
         stages = fanoutResult.stages;
         designSeed = fanoutResult.designSeed;
         fanoutMeta = fanoutResult.fanout;
         fanoutFiles = fanoutResult.files;
+        // Living-spec fan-out (docs/DRILL_PLAN.md P10.3): fold the "Wrote METIS-SPEC.md"
+        // operation (present only when a writable workspace let it actually be written) into
+        // the same operations list every other context_load/file operation flows through.
+        metisOperations.push(...fanoutResult.operations);
       } else {
         ({ stages, designSeed } = await runOrchestratedStages(prompt, stream, input.modelOverride, input.projectPath, metisFile, permissionMode, conversationContext, images.length > 0 ? images : undefined));
       }
@@ -7722,6 +7901,15 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     }
     }
     const fileCount = projectResult ? projectResult.artifacts.filter((artifact) => artifact.kind === "file" || artifact.kind === "file_create").length : 0;
+    // Living-spec fan-out (docs/DRILL_PLAN.md P10.3): now that the final write + any repair
+    // passes are done, close out METIS-SPEC.md with the Outcome section. fanoutMeta.specPath is
+    // only ever set when this run actually went through fan-out AND a spec file was written
+    // (never in plan mode, which never attempts fan-out, and never on a normal single-pipeline
+    // build) — every other run leaves this a no-op, byte-identical to before this feature
+    // existed. Best-effort: appendFanoutSpecOutcome swallows its own errors.
+    if (fanoutMeta?.specPath) {
+      await appendFanoutSpecOutcome(fanoutMeta.specPath, fileCount, projectResult?.verified ?? false, projectResult?.verificationDetail);
+    }
     const targetName = projectResult?.writeMode === "selected-project" ? writable?.name : "the app workspace";
     const operations = [...metisOperations, ...(projectResult ? operationsForProject(projectResult) : [])];
     if (projectResult) emitStream(stream, { kind: "project", project: projectResult });

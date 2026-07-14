@@ -97,7 +97,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 - [ ] **P10.2 - MCP tools used IN the pipeline.** We install and probe MCP servers but stages
   never call their tools mid-run. Wiring tool calls into stages makes the marketplace real and
   matches the ecosystem standard (everything speaks MCP now).
-- [ ] **P10.3 - Living-spec fan-out.** The coordinator writes a spec doc as a first-class
+- [x] **P10.3 - Living-spec fan-out.** The coordinator writes a spec doc as a first-class
   artifact; parallel agents update their sections live and you watch it evolve. We already have
   the fan-out engine, file-claim ledger and agent bus - this is the missing visible artifact.
 - [ ] **P10.4 - Oracle for code.** Speculative edit-drafting inside the build pipeline (draft

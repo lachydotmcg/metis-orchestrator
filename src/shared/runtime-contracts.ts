@@ -883,6 +883,11 @@ export interface SessionRun {
    *  claimed first is silently absent here (and logged in the run timeline). */
   fanout?: {
     agents: { name: string; task: string; claimedPaths: string[] }[];
+    /** Absolute path to the METIS-SPEC.md living-spec doc this fan-out run wrote into the
+     *  workspace root (docs/DRILL_PLAN.md P10.3), when one was written. Undefined whenever
+     *  there was no writable workspace to place it in (fan-out still runs; the spec is just
+     *  skipped) — never a fallback app-data path. */
+    specPath?: string;
   };
 }
 
