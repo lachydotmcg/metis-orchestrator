@@ -145,6 +145,34 @@ generated project's local preview URL headlessly to check for console
 errors - does explicitly set `sandbox: true` (`main.ts:4187-4190`) and has
 no preload script at all.
 
+## The Metis Gateway
+
+Metis can optionally expose an OpenAI-compatible HTTP API so other local
+software (scripts, editors, third-party tools) can send it prompts. It's
+**off by default** (the `gatewayEnabled` store flag, default `false`) and
+only starts listening once you turn it on.
+
+- **Loopback-only.** The server binds strictly to `127.0.0.1`, never
+  `0.0.0.0` (`startGateway()`, `main.ts:10246`) - nothing outside your
+  machine can reach it, regardless of your firewall configuration.
+- **Bearer-token gated.** Every request needs
+  `Authorization: Bearer <gatewayToken>`, an auto-generated per-install
+  token persisted locally (`readOrCreateGatewayToken()`) and checked with a
+  constant-time `timingSafeEqual` comparison
+  (`gatewayTokenMatches()`, `main.ts:9977`). Being bound to loopback does not
+  by itself stop other processes on the same machine from reaching a
+  listening port - the token is what stops other local software from
+  silently using the Gateway as an open prompt-proxy.
+- **No prompt content in the audit trail.** The Gateway's audit line
+  (`gateway.request`, `main.ts:10205`) records only the resolved model id,
+  request timing, and ok/error status - never the prompt or message
+  content, consistent with the rest of the audit log.
+- **No new capability beyond a model call.** A Gateway request either runs
+  the same Auto Router decision (`decidePolicy` +
+  `applySessionRouteOverrides`) a chat composer turn would, or calls a
+  pinned model directly - it does not reach the build pipeline, filesystem
+  writes, or MCP tool calls.
+
 ## Secrets
 
 Provider API keys are stored locally, one "classic" key per provider (plus
@@ -230,4 +258,4 @@ sharing details elsewhere.
 
 ---
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-14.

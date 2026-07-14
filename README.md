@@ -117,6 +117,9 @@ A last-errors view fed straight from the audit log, so a crash or failure surfac
 ### System tray
 Metis lives in the tray too: a native icon shows routing status, lets you pause or resume routines, surfaces recent runs, and closes to tray instead of quitting outright.
 
+### Metis Gateway
+Point any OpenAI-compatible app, script, or tool at `http://127.0.0.1:11500/v1` with your Metis bearer token, and it gets routed through Metis exactly like a chat composer turn: leave the model as `metis-auto` for the same Auto Router decision, or pin a specific model directly. Loopback-only and off by default, so nothing outside your machine can reach it, and no other local software can call it without your token.
+
 ## Getting started
 
 Prerequisites:

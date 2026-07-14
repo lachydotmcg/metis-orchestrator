@@ -166,6 +166,44 @@ Streaming to the renderer happens via `SessionStreamEvent` (union in
 helpers and delivered over the `metis-session:stream-event` IPC channel that
 `metisSession.runStream` wires up per-call in `preload.cts:52-61`.
 
+## The Metis Gateway
+
+A loopback-only, off-by-default HTTP server (`startGateway()`, `main.ts:10246`)
+that exposes an OpenAI-compatible API on `127.0.0.1:<gatewayPort>` (default
+`11500`, `GATEWAY_DEFAULT_PORT`) so any OpenAI-client app, script, or tool can
+point its base URL at Metis instead of a cloud provider. It's deliberately
+narrow: it reuses `invokeProvider()` for the final "call one model, hand back
+the text" step, mirroring the chat path's own final call, rather than
+touching `runSession` or the build pipeline.
+
+- `GET /v1/models` (`handleGatewayModelsList`) returns `metis-auto` plus
+  every installed Ollama tag (`listOllamaModels().installed`).
+- `POST /v1/chat/completions` (`handleGatewayChatCompletions`) accepts a
+  standard OpenAI chat-completions body. `resolveGatewayRoute()`
+  (`main.ts:10058`) decides how to handle `model`: when it's empty,
+  `metis-auto`, or `unknown`, it runs the exact same `decidePolicy()` +
+  `applySessionRouteOverrides()` + `providerFromRoute()` chain the Auto
+  Router chat path uses, on the request's last user message; any other
+  string is treated as a pinned model id and resolved via
+  `providerFromRoute()` + `resolveOverrideModel()`, the same way a
+  composer-pinned override resolves. `stream: true` returns Server-Sent
+  Events (`chat.completion.chunk` deltas, via `streamGatewayChatCompletion()`);
+  otherwise a single JSON `chat.completion` object is returned.
+- Every request must carry `Authorization: Bearer <gatewayToken>`. The token
+  is auto-generated on first use and persisted under the `gatewayToken`
+  store key (`readOrCreateGatewayToken()`), checked with a constant-time
+  `timingSafeEqual` comparison (`gatewayTokenMatches()`) - a missing or
+  invalid token gets a `401` before any handler runs.
+- Every handler is wrapped to fail soft: a bad request, a downstream
+  provider error, or a bind failure resolves to an OpenAI-shaped JSON error
+  instead of throwing out of the server. One audit line per request
+  (`gateway.request`) records the resolved model id, timing, and
+  ok/error - never the prompt or messages content.
+- Controlled by the `gatewayEnabled` store flag (default `false`) via
+  `setGatewayEnabled()`, wired to the `metis-gateway:get-status` /
+  `metis-gateway:set-enabled` IPC handlers and the `metisGateway` bridge;
+  toggling it live starts or stops the server without a relaunch.
+
 ## Persistence + stores
 
 Everything persisted lives under `app.getPath("userData")/metis-store/`.
@@ -272,6 +310,7 @@ registrations all live inline inside `app.whenReady().then(...)` in
 | `metisPrewarm` | `warm`, `draft` | Oracle's two speculative calls (`prewarmModel`/`draftModel`) - see `docs/ORACLE.md`. |
 | `metisManager` | `chat`, `runAction` | The Manager chat assistant and its action executor (`run_in_project`/`add_todo`/`open_view`). |
 | `metisUpdates` | `check` | GitHub-releases update check. |
+| `metisGateway` | `getStatus`, `setEnabled` | The Metis Gateway's on/off state (`enabled`, `running`, `port`, `token`) and the live start/stop toggle (`getGatewayStatus`/`setGatewayEnabled`). |
 | `metisGallery` | `analyzeBoard`, `analyzeImage`, `cards`, `updateCard`, `deleteCard`, `importUrls`, `importPinterest` | The style Gallery - vision-tagged mood boards. |
 
 ## The registry

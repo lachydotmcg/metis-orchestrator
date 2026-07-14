@@ -10,6 +10,39 @@ See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the app is put
 together and [`docs/ORACLE.md`](docs/ORACLE.md) for the speculative-inference
 engine referenced below.
 
+## [Unreleased]
+
+### Added
+
+- **Metis Gateway.** A loopback-only (`127.0.0.1`), off-by-default
+  OpenAI-compatible HTTP API (default port `11500`) so any OpenAI-client
+  app, script, or tool can point its base URL at Metis instead of a cloud
+  provider. `GET /v1/models` lists `metis-auto` plus installed Ollama
+  models; `POST /v1/chat/completions` routes `metis-auto` through the exact
+  same Auto Router decision the chat composer uses, or calls a pinned model
+  directly, with streaming (SSE) support. Every request requires a
+  per-install bearer token; one audit line per request records only the
+  model id, timing, and ok/error, never the prompt content.
+- **Per-conversation model memory.** Switching conversations now restores
+  the model (pinned or preset) that conversation was last using, instead of
+  sharing one global composer selection.
+- **Prompt templates and a slash-command popover in the composer.** Save
+  prompts you type over and over as named snippets and pick them from a `/`
+  popover instead of retyping.
+- **Streaming Manager chat.** The Manager assistant's replies now stream
+  token-by-token into the widget instead of arriving all at once.
+- **Speculative pre-routing.** While typing on Auto Router, Oracle now runs
+  the route decision ahead of send so the chosen model can be prewarmed
+  before you hit send, taking routing latency out of the critical path.
+- **New Settings toggles.** Close-to-tray is now an explicit, off-by-default
+  toggle in Settings > General, instead of implicit tray behavior on window
+  close.
+- **Model picker latency dots.** Each model in the picker now shows a
+  fast/medium/slow dot from its recent measured time-to-first-token on this
+  machine.
+- **Owner-name greeting.** The home screen now greets you by the name set
+  in your profile instead of generic copy.
+
 ## [1.0.0] - 2026-07-12
 
 ### Added
