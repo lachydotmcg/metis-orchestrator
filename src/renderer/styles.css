@@ -6790,6 +6790,22 @@ details.artifact-row[open] summary {
   cursor: default;
 }
 
+/* /export built-in slash command result (DRILL_PLAN I9.9) — a slim status
+   line above the composer, reusing .settings-warning for the error/no-cancel
+   text color rather than inventing a new palette entry. */
+.composer-slash-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 6px 2px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.composer-slash-note svg {
+  flex: 0 0 auto;
+}
+
 /* Oracle prewarm activity chip (docs/DRILL_PLAN.md B5.5) — sits between the
    composer's model picker and its send button, reusing the same slim chip
    look as .composer-suggestion-chip above. Only ever rendered by App.tsx
@@ -8186,6 +8202,20 @@ button.pulse-tile:hover {
   left: 18px;
 }
 
+/* ---- Settings > General > Metis Gateway (DRILL_PLAN P10.1) ---- */
+
+.gateway-token-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.gateway-token-row code {
+  flex: 1;
+  min-width: 0;
+  font-family: "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+}
+
 /* ---- Settings > Appearance "Compact" density ----
    Scoped to the panes that are guaranteed on-screen (Settings itself, the
    main sidebar) rather than a full app-wide CSS pass. Real and reversible,
@@ -8792,6 +8822,16 @@ a:focus-visible,
 .router-option.active {
   color: var(--text);
   background: var(--active);
+}
+
+.router-option:disabled {
+  color: var(--faint);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.router-option:disabled:hover {
+  background: transparent;
 }
 
 .router-option img {

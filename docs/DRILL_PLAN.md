@@ -144,7 +144,7 @@ Grounded in the existing substrate; each names what it builds on.
   tiny latency dot from recent ttftMs telemetry per model (green under 500ms, amber under 2s)
   so picking a model shows how it has actually been performing on THIS machine. Builds on
   SessionRun.ttftMs history.
-- [ ] **I9.9 - /export and /summarize slash commands.** The template popover already owns the
+- [x] **I9.9 - /export and /summarize slash commands.** The template popover already owns the
   slash surface; add built-ins: /export (existing conversation exportMarkdown) and /summarize
   (local-model summary of the conversation appended as an assistant turn, clearly labeled).
 - [ ] **I9.10 - Session handoff card.** One click generates a compact continue-from-here brief

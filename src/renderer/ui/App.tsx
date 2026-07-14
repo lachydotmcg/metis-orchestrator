@@ -44,6 +44,8 @@ import {
   Cpu,
   Download,
   ExternalLink,
+  Eye,
+  EyeOff,
   FilePlus,
   FileText,
   Folder,
@@ -109,6 +111,7 @@ import type {
   ConversationExportResult,
   ConversationRecord,
   ConversationTurnRecord,
+  GatewayStatus,
   GraphPipelineConfig,
   GraphPipelineStage,
   ManagerAction,
@@ -194,6 +197,16 @@ type ModelPreset = { id: string; name: string; model: ModelRef | null };
 // A saved reusable prompt snippet (DRILL_PLAN Phase 8) — inserted into the
 // composer via the "/" popover, mirroring the ModelPreset pattern above.
 type PromptTemplate = { id: string; name: string; text: string };
+// The "/" popover's row union (DRILL_PLAN I9.9) — "builtin" is the pre-existing
+// /orchestration row; "export" and "summarize" are the two new built-in slash
+// commands added alongside it. Unlike "template", these three never carry
+// deletable user data, they're fixed rows the popover always offers (subject
+// to their own bridge/availability checks at render time).
+type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "template"; template: PromptTemplate };
+// Canned prompt /summarize submits verbatim through the normal onSubmit path
+// (DRILL_PLAN I9.9) — no new backend, it just reuses the same pipeline a
+// hand-typed message would use, so the reply lands as an ordinary assistant turn.
+const SLASH_SUMMARIZE_PROMPT = "Summarize this conversation so far: key decisions, open questions, next steps. Be concise.";
 type ProjectFolder = { name: string; latest: string; age: string; path?: string };
 
 type GraphNode = {
@@ -4771,6 +4784,13 @@ function SessionComposer({
   const [templateActiveIndex, setTemplateActiveIndex] = useState(0);
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [draftTemplateName, setDraftTemplateName] = useState("");
+  // /export built-in slash command result (DRILL_PLAN I9.9) — mirrors the
+  // Settings > Privacy "Export all conversations" busy/result shape
+  // (exportBusy/exportResult there) so the composer's inline note reads the
+  // same way. Local to this component: it naturally clears on the next
+  // conversation switch since SessionComposer remounts per draft.
+  const [slashExportBusy, setSlashExportBusy] = useState(false);
+  const [slashExportResult, setSlashExportResult] = useState<ConversationExportResult | null>(null);
   // Installed-Ollama-tags lookup for the picker's local-model install badges
   // (DRILL_PLAN B5.2) — reuses the same window.metisOllama.list() bridge the
   // Benchmark wizard already uses to show install state + drive its pull flow
@@ -4935,13 +4955,56 @@ function SessionComposer({
   // selecting it inserts the canonical command text, it never becomes a
   // saved/deletable PromptTemplate.
   const orchestrationRowMatches = !templateFilter || "orchestration".includes(templateFilter) || "orch".includes(templateFilter);
-  const templateRows: ({ kind: "builtin" } | { kind: "template"; template: PromptTemplate })[] = [
+  // Built-in /export and /summarize rows (DRILL_PLAN I9.9) — listed alongside
+  // /orchestration and saved templates for discoverability, same filter idiom.
+  const exportRowMatches = !templateFilter || "export".includes(templateFilter);
+  const summarizeRowMatches = !templateFilter || "summarize".includes(templateFilter) || "summary".includes(templateFilter);
+  const templateRows: TemplateRow[] = [
     ...(orchestrationRowMatches ? [{ kind: "builtin" as const }] : []),
+    ...(exportRowMatches ? [{ kind: "export" as const }] : []),
+    ...(summarizeRowMatches ? [{ kind: "summarize" as const }] : []),
     ...filteredTemplates.map((template) => ({ kind: "template" as const, template }))
   ];
   const templateActiveRow = templateRows.length ? templateRows[Math.min(templateActiveIndex, templateRows.length - 1)] : undefined;
 
-  function insertTemplateRow(row: { kind: "builtin" } | { kind: "template"; template: PromptTemplate }): void {
+  // /export: exports the OPEN conversation to Markdown, falling back to every
+  // conversation when none is open — same bridge + result shape as Settings >
+  // Privacy's "Export all conversations" (window.metisConversations.exportMarkdown).
+  async function runSlashExport(): Promise<void> {
+    if (!window.metisConversations) return;
+    setSlashExportBusy(true);
+    setSlashExportResult(null);
+    try {
+      const result = await window.metisConversations.exportMarkdown(
+        activeConversationId ? { conversationId: activeConversationId } : {}
+      );
+      setSlashExportResult(result);
+    } finally {
+      setSlashExportBusy(false);
+    }
+  }
+
+  // Selecting a "/" popover row (DRILL_PLAN I9.9). /orchestration and saved
+  // templates INSERT their text into the composer (the user still reviews/edits
+  // before sending); /export and /summarize instead ACT immediately and close
+  // the popover — clearing prompt to "" both closes it (templateSlashMode goes
+  // false) and leaves nothing typed behind. /export has no honest fallback
+  // without window.metisConversations, so it's a no-op without that bridge
+  // (the row itself renders disabled in that case, see below). /summarize has
+  // no bridge of its own — it just calls the same onSubmit a hand-typed
+  // message would use, which already degrades gracefully to a preview run.
+  function selectTemplateRow(row: TemplateRow): void {
+    if (row.kind === "export") {
+      if (!window.metisConversations) return;
+      setPrompt("");
+      void runSlashExport();
+      return;
+    }
+    if (row.kind === "summarize") {
+      setPrompt("");
+      void onSubmit(SLASH_SUMMARIZE_PROMPT);
+      return;
+    }
     setPrompt(row.kind === "builtin" ? "/orchestration " : row.template.text);
   }
 
@@ -5037,6 +5100,20 @@ function SessionComposer({
       {showOrchestrationChip ? (
         <span className="composer-suggestion-chip composer-orchestration-chip">Build pipeline will run</span>
       ) : null}
+      {slashExportBusy || (slashExportResult && !slashExportResult.cancelled) ? (
+        <div className="composer-slash-note" role="status">
+          {slashExportBusy ? (
+            <>
+              <Loader2 size={12} className="spin" />
+              Exporting…
+            </>
+          ) : slashExportResult?.ok ? (
+            <span>Exported to {slashExportResult.path}</span>
+          ) : (
+            <span className="settings-warning">{slashExportResult?.error ?? "Export failed"}</span>
+          )}
+        </div>
+      ) : null}
       {attachments.length > 0 ? (
         <div className="composer-attachment-strip" aria-label="Attached images">
           {attachments.map((item) => (
@@ -5073,7 +5150,7 @@ function SessionComposer({
               }
               if (event.key === "Enter" && !event.shiftKey && templateActiveRow) {
                 event.preventDefault();
-                insertTemplateRow(templateActiveRow);
+                selectTemplateRow(templateActiveRow);
                 return;
               }
               if (event.key === "Escape") {
@@ -5113,11 +5190,58 @@ function SessionComposer({
                           className={`router-option ${active ? "active" : ""}`}
                           onMouseDown={(event) => event.preventDefault()}
                           onMouseEnter={() => setTemplateActiveIndex(index)}
-                          onClick={() => insertTemplateRow(row)}
+                          onClick={() => selectTemplateRow(row)}
                         >
                           <span>
                             <strong>/orchestration</strong>
                             <small>Forces the build pipeline for this prompt · alias /orch</small>
+                          </span>
+                        </button>
+                      );
+                    }
+                    if (row.kind === "export") {
+                      const exportAvailable = Boolean(window.metisConversations);
+                      return (
+                        <button
+                          key="builtin-export"
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          disabled={!exportAvailable}
+                          title={exportAvailable ? undefined : "Requires the desktop app — unavailable in this preview"}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => selectTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>/export</strong>
+                            <small>
+                              {exportAvailable
+                                ? activeConversationId
+                                  ? "Export this conversation to Markdown"
+                                  : "No conversation open — exports every conversation"
+                                : "Needs the desktop app"}
+                            </small>
+                          </span>
+                        </button>
+                      );
+                    }
+                    if (row.kind === "summarize") {
+                      return (
+                        <button
+                          key="builtin-summarize"
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => selectTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>/summarize</strong>
+                            <small>Submits a recap prompt — key decisions, open questions, next steps</small>
                           </span>
                         </button>
                       );
@@ -5132,7 +5256,7 @@ function SessionComposer({
                           className={`router-option ${active ? "active" : ""}`}
                           onMouseDown={(event) => event.preventDefault()}
                           onMouseEnter={() => setTemplateActiveIndex(index)}
-                          onClick={() => insertTemplateRow(row)}
+                          onClick={() => selectTemplateRow(row)}
                         >
                           <span>
                             <strong>{template.name}</strong>
@@ -13582,6 +13706,17 @@ const SETTINGS_SECTION_META: Record<SettingsSection, { subtitle: string; title: 
   about: { title: "About", subtitle: "App version, update check, and project links." }
 };
 
+// Masks a Gateway bearer token for display (DRILL_PLAN P10.1) — keeps the
+// first/last 4 characters as a recognizability anchor (so a user can confirm
+// "yes, that's the token I copied earlier" without the full secret sitting in
+// plain view) and replaces the middle with bullets. Short tokens (<=8 chars)
+// mask entirely rather than risk exposing most of the string.
+function maskGatewayToken(token: string): string {
+  if (!token) return "";
+  if (token.length <= 8) return "•".repeat(token.length);
+  return `${token.slice(0, 4)}${"•".repeat(Math.max(token.length - 8, 4))}${token.slice(-4)}`;
+}
+
 function SettingsWorkspace({
   onBack,
   onOpenMcpMarketplace,
@@ -13659,6 +13794,13 @@ function SettingsWorkspace({
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [exportResult, setExportResult] = useState<ConversationExportResult | null>(null);
+  // Metis Gateway (DRILL_PLAN P10.1) — null means "not fetched yet" or "no
+  // bridge" (this preview harness has no window.metisGateway); never a
+  // fabricated status. gatewayTokenRevealed/gatewayTokenCopied are purely
+  // local display state, not persisted anywhere.
+  const [gatewayStatus, setGatewayStatus] = useState<GatewayStatus | null>(null);
+  const [gatewayTokenRevealed, setGatewayTokenRevealed] = useState(false);
+  const [gatewayTokenCopied, setGatewayTokenCopied] = useState(false);
   const [policyStatus, setPolicyStatus] = useState<PolicyStatus>(FALLBACK_POLICY_STATUS);
   const [providers, setProviders] = useState<ProviderStatus[]>([]);
   const [secrets, setSecrets] = useState<SecretStatus[]>([]);
@@ -13688,14 +13830,15 @@ function SettingsWorkspace({
   const navGroups = useMemo(() => Array.from(new Set(filteredNav.map((item) => item.group))), [filteredNav]);
 
   const refreshRuntime = useCallback(async () => {
-    const [nextPolicy, nextProviders, nextSecrets, nextPermissions, nextAudit, nextRegistry, nextInstalled] = await Promise.all([
+    const [nextPolicy, nextProviders, nextSecrets, nextPermissions, nextAudit, nextRegistry, nextInstalled, nextGateway] = await Promise.all([
       window.metisPolicy?.getStatus() ?? Promise.resolve(FALLBACK_POLICY_STATUS),
       window.metisProviders?.list() ?? Promise.resolve<ProviderStatus[]>([]),
       window.metisSecrets?.list() ?? Promise.resolve<SecretStatus[]>([]),
       window.metisPermissions?.list() ?? Promise.resolve<PermissionGrant[]>([]),
       window.metisAudit?.list(30) ?? Promise.resolve<AuditEvent[]>([]),
       window.metisRegistry?.list() ?? Promise.resolve(FALLBACK_REGISTRY),
-      window.metisRegistry?.listInstalled() ?? Promise.resolve<RegistryPackage[]>([])
+      window.metisRegistry?.listInstalled() ?? Promise.resolve<RegistryPackage[]>([]),
+      window.metisGateway?.getStatus() ?? Promise.resolve<GatewayStatus | null>(null)
     ]);
     setPolicyStatus(nextPolicy);
     setProviders(nextProviders);
@@ -13705,6 +13848,7 @@ function SettingsWorkspace({
     setRegistry(nextRegistry);
     setInstalledPackages(nextInstalled);
     setRegistryUrl(nextRegistry.sourceUrl.startsWith("http") ? nextRegistry.sourceUrl : "");
+    setGatewayStatus(nextGateway);
   }, []);
 
   useEffect(() => {
@@ -13875,6 +14019,26 @@ function SettingsWorkspace({
     }
   }
 
+  // Gateway on/off toggle (DRILL_PLAN P10.1) — setEnabled starts/stops the
+  // loopback server live, then getStatus refetches so the panel reflects the
+  // actually-bound port/running state (setEnabled's own return would do, but
+  // an explicit follow-up getStatus matches how every other toggle here
+  // re-syncs via runBusy -> refreshRuntime rather than trusting a mutation's
+  // own response as gospel).
+  async function toggleGateway(enabled: boolean): Promise<void> {
+    if (!window.metisGateway) return;
+    await runBusy("gateway-toggle", async () => {
+      await window.metisGateway?.setEnabled(enabled);
+    });
+  }
+
+  function copyGatewayToken(): void {
+    if (!gatewayStatus?.token) return;
+    void navigator.clipboard?.writeText(gatewayStatus.token);
+    setGatewayTokenCopied(true);
+    window.setTimeout(() => setGatewayTokenCopied(false), 1400);
+  }
+
   async function runPolicyTest(): Promise<void> {
     if (!window.metisPolicy || !testPrompt.trim()) return;
     await runBusy("policy-test", async () => {
@@ -13964,6 +14128,61 @@ function SettingsWorkspace({
             </button>
           </label>
           <p className="settings-hint">Closing the window hides Metis in the tray instead of quitting.</p>
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Local API</small>
+              <h2>Metis Gateway</h2>
+            </span>
+            {window.metisGateway && gatewayStatus ? (
+              <span className={`status-pill ${gatewayStatus.running ? "ok" : "warn"}`}>{gatewayStatus.running ? "running" : "stopped"}</span>
+            ) : null}
+          </header>
+          <p>Point any OpenAI-compatible app at this URL with the token to route through Metis.</p>
+          {window.metisGateway && gatewayStatus ? (
+            <>
+              <label className="settings-field toggle-field">
+                <span>Enable gateway</span>
+                <button
+                  type="button"
+                  className={`toggle-switch ${gatewayStatus.enabled ? "on" : ""}`}
+                  role="switch"
+                  aria-checked={gatewayStatus.enabled}
+                  disabled={busy === "gateway-toggle"}
+                  onClick={() => void toggleGateway(!gatewayStatus.enabled)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              <div className="settings-field">
+                <span>Base URL</span>
+                <code>{`http://127.0.0.1:${gatewayStatus.port}/v1`}</code>
+              </div>
+              <div className="settings-field">
+                <span>Bearer token</span>
+                <div className="gateway-token-row">
+                  <code>{gatewayTokenRevealed ? gatewayStatus.token : maskGatewayToken(gatewayStatus.token)}</code>
+                  <div className="settings-actions inline">
+                    <button type="button" onClick={() => setGatewayTokenRevealed((revealed) => !revealed)}>
+                      {gatewayTokenRevealed ? <EyeOff size={14} /> : <Eye size={14} />}
+                      {gatewayTokenRevealed ? "Hide" : "Reveal"}
+                    </button>
+                    <button type="button" onClick={copyGatewayToken}>
+                      {gatewayTokenCopied ? <Check size={14} /> : <Copy size={14} />}
+                      {gatewayTokenCopied ? "Copied" : "Copy"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              {gatewayStatus.enabled && !gatewayStatus.running ? (
+                <p className="settings-warning">Enabled but not running yet — try toggling it off and back on.</p>
+              ) : null}
+            </>
+          ) : (
+            <p className="settings-warning">Gateway control needs the desktop app; this preview has no gateway bridge.</p>
+          )}
         </article>
 
         <article className="settings-panel policy-panel">
