@@ -5583,8 +5583,10 @@ function classifyRouteDepth(prompt: string): RouteDepth {
  *  when no cloud key exists so the policy route stands rather than pointing
  *  at a provider that cannot answer. */
 async function depthRouteFor(depth: RouteDepth): Promise<StageModelRef | null> {
-  if (depth === 2) return null;
-  const config = await readStoreValue<{ deep?: StageModelRef; shallow?: StageModelRef }>("depthRoutes", {});
+  const config = await readStoreValue<{ deep?: StageModelRef; standard?: StageModelRef; shallow?: StageModelRef }>("depthRoutes", {});
+  // Depth 2 keeps the policy route unless the node stack pinned an explicit
+  // standard-tier model (B11.2 L2 row).
+  if (depth === 2) return config.standard ?? null;
   if (depth === 1) return config.shallow ?? localStageRef();
   if (config.deep) return config.deep;
   const secrets = await listSecrets();

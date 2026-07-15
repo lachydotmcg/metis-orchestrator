@@ -238,6 +238,14 @@ type GraphNode = {
    *  falling through to the model's remaining routes by health. Mirrors the
    *  per-node model fallback chain's interaction pattern (add/remove/promote). */
   gatewayFallbacks?: ProviderId[];
+  /** Depths (DRILL_PLAN B11.2): when enabled, this node routes by the
+   *  router's judged depth. Each level can pin its own model; unset levels
+   *  fall back to depth defaults (L1 local, L2 policy route, L3 strongest
+   *  configured cloud). Edits also mirror into the global depthRoutes store
+   *  so the shipped backend engine consumes them today; true per-node
+   *  consumption in the pipeline is the noted follow-up. */
+  depthsEnabled?: boolean;
+  depthModels?: { l1?: ModelRef; l2?: ModelRef; l3?: ModelRef };
 };
 
 type DragPayload =
@@ -15016,6 +15024,62 @@ function NodeInspector({
     onUpdate(node.id, { gateway: brand, gatewayFallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks });
   }
 
+  // --- Depths (DRILL_PLAN B11.2) ---
+  // Maps a picker ModelRef (renderer brand ids) to the backend StageModelRef
+  // shape the depthRoutes store expects. Local-tier brands resolve to ollama
+  // + their real tag; cloud brands whose id IS a backend ProviderKey pass
+  // through; anything unmappable returns null and is simply not mirrored
+  // (the node keeps the setting, the engine keeps its level default).
+  function depthStageRefFor(ref: ModelRef): { provider: string; model: string } | null {
+    if (PROVIDERS[ref.provider]?.tier === "local") {
+      const tag = localOllamaTagFor(ref);
+      return tag ? { provider: "ollama", model: tag } : null;
+    }
+    const direct = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
+    return direct.includes(ref.provider) ? { provider: ref.provider, model: ref.model } : null;
+  }
+
+  // Mirrors the node's depth stack into the global depthRoutes store so the
+  // shipped backend engine (depthRouteFor) consumes it today. Read-modify-
+  // write, fire-and-forget, guarded for the preview. True per-node pipeline
+  // consumption is the noted follow-up (B11.2).
+  function mirrorDepthRoutes(models: { l1?: ModelRef; l2?: ModelRef; l3?: ModelRef }): void {
+    const store = window.metisStore;
+    if (!store) return;
+    void store
+      .get<Record<string, unknown>>("depthRoutes", {})
+      .then((current) => {
+        const next = { ...current };
+        const deep = models.l3 ? depthStageRefFor(models.l3) : null;
+        const standard = models.l2 ? depthStageRefFor(models.l2) : null;
+        const shallow = models.l1 ? depthStageRefFor(models.l1) : null;
+        if (deep) next.deep = deep; else delete next.deep;
+        if (standard) next.standard = standard; else delete next.standard;
+        if (shallow) next.shallow = shallow; else delete next.shallow;
+        return store.set("depthRoutes", next);
+      })
+      .catch(() => {
+        /* preview or transient store failure - the node state still holds the choice */
+      });
+  }
+
+  function setDepthsEnabled(enabled: boolean): void {
+    onUpdate(node.id, { depthsEnabled: enabled });
+    void window.metisStore?.set("depthRoutingEnabled", enabled).catch(() => {});
+  }
+
+  function setDepthModel(level: "l1" | "l2" | "l3", value: string): void {
+    const models = { ...(node.depthModels ?? {}) };
+    if (!value) {
+      delete models[level];
+    } else {
+      const [providerId, ...rest] = value.split("|");
+      models[level] = { provider: providerId as ProviderId, model: rest.join("|") };
+    }
+    onUpdate(node.id, { depthModels: models });
+    mirrorDepthRoutes(models);
+  }
+
   return (
     <aside className="palette inspector" aria-label={`${node.label} settings`}>
       <header className="inspector-head">
@@ -15058,6 +15122,46 @@ function NodeInspector({
                 ))}
               </select>
             </label>
+
+            <div className="field">
+              <span>Depths</span>
+              <label className="depths-enable">
+                <input type="checkbox" checked={Boolean(node.depthsEnabled)} onChange={(event) => setDepthsEnabled(event.target.checked)} />
+                Enable depth routing
+              </label>
+              <small className="depths-hint">
+                The router judges how heavy each turn is and sends it to the matching level: trivial work stays cheap, deep work goes straight to your strongest model.
+              </small>
+              {node.depthsEnabled ? (
+                <ol className="fallback-list depth-stack">
+                  {([
+                    { level: "l3" as const, badge: "L3", fallback: "Strongest configured cloud (default)" },
+                    { level: "l2" as const, badge: "L2", fallback: "Auto (policy route)" },
+                    { level: "l1" as const, badge: "L1", fallback: "Local model (default)" }
+                  ]).map(({ level, badge, fallback }) => {
+                    const chosen = node.depthModels?.[level];
+                    return (
+                      <li className="fallback-row" key={level}>
+                        <span className="fallback-rank">{badge}</span>
+                        <select
+                          aria-label={`Depth ${badge} model`}
+                          value={chosen ? `${chosen.provider}|${chosen.model}` : ""}
+                          onChange={(event) => setDepthModel(level, event.target.value)}
+                        >
+                          <option value="">{fallback}</option>
+                          {MODEL_LIBRARY.map((ref) => (
+                            <option key={`${ref.provider}|${ref.model}`} value={`${ref.provider}|${ref.model}`}>
+                              {PROVIDERS[ref.provider].label} · {ref.model}
+                              {PROVIDERS[ref.provider].tier === "local" ? " (local)" : ""}
+                            </option>
+                          ))}
+                        </select>
+                      </li>
+                    );
+                  })}
+                </ol>
+              ) : null}
+            </div>
 
             {node.provider ? (
               <>
