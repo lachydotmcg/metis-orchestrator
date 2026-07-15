@@ -859,6 +859,12 @@ export interface SessionRun {
    *  (same pinned local model, same default sampling) instead of a fresh
    *  generation. The renderer labels these honestly. */
   oracleServed?: boolean;
+  /** Depth routing (DRILL_PLAN B11): how heavy this chat turn was judged.
+   *  1 = trivial (routed straight to the cheapest local tier, minimal
+   *  ceremony), 2 = standard (normal policy routing), 3 = deep (routed
+   *  straight to the configured frontier tier). Only set when the
+   *  depthRoutingEnabled flag was on and the run was Auto (not pinned). */
+  depth?: 1 | 2 | 3;
   projectResult?: ProjectToolResult;
   operations?: AgentOperation[];
   timeline?: SessionTimelineEvent[];

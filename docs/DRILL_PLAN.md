@@ -87,6 +87,18 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ LACHY BATCH 11 (2026-07-15, depths + gateway fix)
+
+- [ ] **B11.1 - Correct gateways per model/provider in the Orchestration UI.** Lachy: DeepSeek
+  still only shows DeepSeek as its api/gateway option in the node Gateway control. The registry
+  catalog's access[] routes already model multi-gateway (e.g. DeepSeek via deepseek native,
+  OpenRouter, NVIDIA NIM) - the Orchestration UI's gateway picker must list every route the
+  catalog declares for that model's provider, not just the home provider. RENDERER (gateway
+  dropdown population from catalog access routes) + verify expandStageRef honors them.
+- [ ] **B11.2 - DEPTHS renderer follow-ups** (backend engine ships this commit, Fable-direct):
+  a Settings toggle for depthRoutingEnabled; per-path/per-node depth overrides inside
+  Orchestration (configure which depth a given node/path handles); a slim depth chip on runs.
+
 ## ★ PITCH BATCH 10 (2026-07-13, research round - AWAITING LACHY GREEN LIGHT, ranked by Fable)
 
 - [x] **P10.1 - Metis Gateway (top pick).** Expose the router + Oracle as a localhost

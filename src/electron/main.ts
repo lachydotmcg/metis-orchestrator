@@ -5537,6 +5537,57 @@ async function classifyRouteWithModel(prompt: string, editableProject: boolean):
   }
 }
 
+// --- Depth routing (DRILL_PLAN B11, Lachy's "depths") ---
+// Match the routing ceremony to the stakes: a one-line tweak should not pay
+// for (or reach) a frontier model, and genuinely deep engineering work should
+// skip the mid tier and go straight to the strongest configured model. Depth
+// only adjusts WHICH model an Auto chat turn lands on; pinned models (PF3)
+// and explicit /orchestration are never touched, and with the
+// depthRoutingEnabled flag off (default) nothing here runs at all.
+type RouteDepth = 1 | 2 | 3;
+
+/** Cheap, deterministic depth classifier. Deliberately keyword-anchored the
+ *  same way the build guards are: depth 3 needs explicit high-stakes
+ *  engineering language (or a very long brief), depth 1 needs explicit
+ *  trivial-change language, and everything else stays depth 2 (normal policy
+ *  routing) — so an ambiguous prompt is never dumbed down or up-tiered. */
+function classifyRouteDepth(prompt: string): RouteDepth {
+  const trimmed = prompt.trim();
+  const lower = trimmed.toLowerCase();
+  if (
+    /(architect|architecture|refactor (the |this |my )?(whole|entire|system|codebase)|security (audit|review)|race condition|concurrenc|distributed system|design (a|the) system|migration plan|rewrite (the|this|my))/.test(lower) ||
+    trimmed.length > 1200
+  ) {
+    return 3;
+  }
+  if (
+    trimmed.length < 200 &&
+    /(typo|rename|one[- ]?lin(e|er)|single line|small (change|tweak|fix)|quick (change|tweak|fix)|comment|bump (the )?version|indent|spacing|capitali[sz]e|punctuation|whitespace)/.test(lower)
+  ) {
+    return 1;
+  }
+  return 2;
+}
+
+/** Resolves where a depth-1 or depth-3 turn should land. Depth 2 returns
+ *  null (keep the policy route). Config lives under the depthRoutes store key
+ *  ({ deep?, shallow? } as StageModelRefs) so Orchestration can own per-path
+ *  overrides later (B11.2); defaults: shallow = the local stage model (free),
+ *  deep = the strongest configured cloud (Anthropic, then OpenAI), or null
+ *  when no cloud key exists so the policy route stands rather than pointing
+ *  at a provider that cannot answer. */
+async function depthRouteFor(depth: RouteDepth): Promise<StageModelRef | null> {
+  if (depth === 2) return null;
+  const config = await readStoreValue<{ deep?: StageModelRef; shallow?: StageModelRef }>("depthRoutes", {});
+  if (depth === 1) return config.shallow ?? localStageRef();
+  if (config.deep) return config.deep;
+  const secrets = await listSecrets();
+  const hasKey = (provider: ProviderKey): boolean => secrets.some((entry) => entry.provider === provider && entry.hasSecret);
+  if (hasKey("anthropic")) return { provider: "anthropic", model: providerInfo.anthropic.defaultModel ?? "claude-sonnet-4-6" };
+  if (hasKey("openai")) return { provider: "openai", model: providerInfo.openai.defaultModel ?? "gpt-5.6-sol" };
+  return null;
+}
+
 // Bug L4b: a trivial "Test"/"hi" turn was paying for a full project-snapshot
 // walk + knowledge-bank retrieval before the model ever saw the prompt — real
 // latency for a message that needed neither. This gate is deliberately
@@ -8027,11 +8078,24 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const orchestrationIndex = steps.findIndex((step) => step.id === "orchestration");
   if (orchestrationIndex >= 0) steps[orchestrationIndex] = completeStep(steps[orchestrationIndex], orchestrationAudit.id);
 
+  // Depth routing (B11): only for Auto turns with the flag on. Depth 1 lands
+  // on the shallow (local) tier, depth 3 on the configured deep/frontier
+  // tier, depth 2 keeps the policy route untouched — and with the flag off
+  // this whole block is a no-op so behavior is byte-identical to before.
+  let routeDepth: RouteDepth | undefined;
+  let depthRoute: StageModelRef | null = null;
+  if (!input.modelOverride && !forceBuildPipeline && (await readStoreValue<boolean>("depthRoutingEnabled", false))) {
+    routeDepth = classifyRouteDepth(prompt);
+    depthRoute = await depthRouteFor(routeDepth);
+    if (depthRoute) {
+      emitTimeline(stream, timelineText(`Depth ${routeDepth} routing: ${providerInfo[depthRoute.provider].label} (${depthRoute.model}).`));
+    }
+  }
   const route = effectiveDecision.selected_route;
   const override = input.modelOverride;
-  const provider = override ? override.provider : providerFromRoute(route.provider, route.runtime, route.kind);
-  const model = override ? resolveOverrideModel(override) : route.model ?? providerInfo[provider].defaultModel ?? "auto";
-  const effectiveRouteLabel = override ? overrideDisplayLabel(override) : routeLabel;
+  const provider = override ? override.provider : depthRoute ? depthRoute.provider : providerFromRoute(route.provider, route.runtime, route.kind);
+  const model = override ? resolveOverrideModel(override) : depthRoute ? depthRoute.model : route.model ?? providerInfo[provider].defaultModel ?? "auto";
+  const effectiveRouteLabel = override ? overrideDisplayLabel(override) : depthRoute ? `${providerInfo[depthRoute.provider].label} ${depthRoute.model}` : routeLabel;
   const writableWorkspace = await resolveActiveProjectWorkspace(input.projectPath);
   // Fast lane (bug L4b): a short, plain general_chat turn ("Test", "hi") skips
   // the project-snapshot walk and knowledge-bank retrieval below — both add
@@ -8274,6 +8338,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     modelThoughts: providerResult.thoughts,
     ttftMs: providerResult.ttftMs,
     oracleServed: oracleServed || undefined,
+    depth: routeDepth,
     projectResult,
     operations: [...metisOperations, ...projectCommandOperations, ...(projectResult ? operationsForProject(projectResult) : [])],
     steps,
