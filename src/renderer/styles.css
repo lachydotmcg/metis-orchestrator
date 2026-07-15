@@ -13549,3 +13549,130 @@ a:focus-visible,
   flex: 1;
   min-width: 0;
 }
+
+/* ---- Depths v2: tile stack + mini picker (B11.2 rework, Lachy's sketch) ---- */
+.depths-enable {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  width: 100%;
+}
+.depths-enable input[type="checkbox"] {
+  width: auto;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.depth-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+}
+.depth-level-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.depth-level-row:hover {
+  border-color: var(--line);
+  background: var(--node);
+}
+.depth-level-badge {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  width: 34px;
+  flex: 0 0 auto;
+}
+.depth-level-tile {
+  width: 38px;
+  height: 30px;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--node);
+  color: var(--muted);
+}
+.depth-level-tile img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+.depth-level-tile.empty {
+  border-style: dashed;
+  background: transparent;
+}
+.depth-level-name {
+  font-size: 12.5px;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.depth-level-name.muted {
+  color: var(--muted);
+}
+.depth-mini-picker {
+  margin-top: 10px;
+}
+.depth-mini-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+}
+.depth-mini-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.depth-mini-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+.depth-mini-row:hover {
+  border-color: var(--line);
+  background: var(--node);
+}
+.depth-mini-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.depth-mini-text strong {
+  font-size: 12.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.depth-mini-text small {
+  font-size: 11px;
+  color: var(--muted);
+}

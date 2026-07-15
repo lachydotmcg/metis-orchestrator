@@ -245,7 +245,10 @@ type GraphNode = {
    *  so the shipped backend engine consumes them today; true per-node
    *  consumption in the pipeline is the noted follow-up. */
   depthsEnabled?: boolean;
-  depthModels?: { l1?: ModelRef; l2?: ModelRef; l3?: ModelRef };
+  /** Per-level choice: a pinned model, or the literal "router" meaning the
+   *  router model handles that level itself (no re-route at all - Lachy's
+   *  "just the option of the router, not routing"). Unset = level default. */
+  depthModels?: { l1?: ModelRef | "router"; l2?: ModelRef | "router"; l3?: ModelRef | "router" };
 };
 
 type DragPayload =
@@ -15025,12 +15028,17 @@ function NodeInspector({
   }
 
   // --- Depths (DRILL_PLAN B11.2) ---
+  // Which level's mini model picker is open (Lachy's sketch: click a level's
+  // tile and a mini copy of the model library appears in this panel).
+  const [depthPicking, setDepthPicking] = useState<"l1" | "l2" | "l3" | null>(null);
+
   // Maps a picker ModelRef (renderer brand ids) to the backend StageModelRef
   // shape the depthRoutes store expects. Local-tier brands resolve to ollama
   // + their real tag; cloud brands whose id IS a backend ProviderKey pass
   // through; anything unmappable returns null and is simply not mirrored
   // (the node keeps the setting, the engine keeps its level default).
-  function depthStageRefFor(ref: ModelRef): { provider: string; model: string } | null {
+  function depthStageRefFor(ref: ModelRef | "router"): { provider: string; model: string } | "router" | null {
+    if (ref === "router") return "router";
     if (PROVIDERS[ref.provider]?.tier === "local") {
       const tag = localOllamaTagFor(ref);
       return tag ? { provider: "ollama", model: tag } : null;
@@ -15043,7 +15051,7 @@ function NodeInspector({
   // shipped backend engine (depthRouteFor) consumes it today. Read-modify-
   // write, fire-and-forget, guarded for the preview. True per-node pipeline
   // consumption is the noted follow-up (B11.2).
-  function mirrorDepthRoutes(models: { l1?: ModelRef; l2?: ModelRef; l3?: ModelRef }): void {
+  function mirrorDepthRoutes(models: { l1?: ModelRef | "router"; l2?: ModelRef | "router"; l3?: ModelRef | "router" }): void {
     const store = window.metisStore;
     if (!store) return;
     void store
@@ -15068,16 +15076,16 @@ function NodeInspector({
     void window.metisStore?.set("depthRoutingEnabled", enabled).catch(() => {});
   }
 
-  function setDepthModel(level: "l1" | "l2" | "l3", value: string): void {
+  function setDepthModel(level: "l1" | "l2" | "l3", value: ModelRef | "router" | null): void {
     const models = { ...(node.depthModels ?? {}) };
     if (!value) {
       delete models[level];
     } else {
-      const [providerId, ...rest] = value.split("|");
-      models[level] = { provider: providerId as ProviderId, model: rest.join("|") };
+      models[level] = value;
     }
     onUpdate(node.id, { depthModels: models });
     mirrorDepthRoutes(models);
+    setDepthPicking(null);
   }
 
   return (
@@ -15133,33 +15141,69 @@ function NodeInspector({
                 The router judges how heavy each turn is and sends it to the matching level: trivial work stays cheap, deep work goes straight to your strongest model.
               </small>
               {node.depthsEnabled ? (
-                <ol className="fallback-list depth-stack">
-                  {([
-                    { level: "l3" as const, badge: "L3", fallback: "Strongest configured cloud (default)" },
-                    { level: "l2" as const, badge: "L2", fallback: "Auto (policy route)" },
-                    { level: "l1" as const, badge: "L1", fallback: "Local model (default)" }
-                  ]).map(({ level, badge, fallback }) => {
-                    const chosen = node.depthModels?.[level];
-                    return (
-                      <li className="fallback-row" key={level}>
-                        <span className="fallback-rank">{badge}</span>
-                        <select
-                          aria-label={`Depth ${badge} model`}
-                          value={chosen ? `${chosen.provider}|${chosen.model}` : ""}
-                          onChange={(event) => setDepthModel(level, event.target.value)}
-                        >
-                          <option value="">{fallback}</option>
-                          {MODEL_LIBRARY.map((ref) => (
-                            <option key={`${ref.provider}|${ref.model}`} value={`${ref.provider}|${ref.model}`}>
-                              {PROVIDERS[ref.provider].label} · {ref.model}
-                              {PROVIDERS[ref.provider].tier === "local" ? " (local)" : ""}
-                            </option>
-                          ))}
-                        </select>
-                      </li>
-                    );
-                  })}
-                </ol>
+                depthPicking ? (
+                  <div className="depth-mini-picker">
+                    <div className="depth-mini-head">
+                      <button type="button" className="inspector-back" onClick={() => setDepthPicking(null)}>
+                        <ChevronLeft size={14} /> Levels
+                      </button>
+                      <strong>{depthPicking.toUpperCase()} model</strong>
+                    </div>
+                    <div className="depth-mini-list">
+                      <button type="button" className="depth-mini-row" onClick={() => setDepthModel(depthPicking, "router")}>
+                        <span className="depth-level-tile">
+                          <Waypoints size={18} />
+                        </span>
+                        <span className="depth-mini-text">
+                          <strong>Router</strong>
+                          <small>The router handles this level itself, no re-route</small>
+                        </span>
+                      </button>
+                      <button type="button" className="depth-mini-row" onClick={() => setDepthModel(depthPicking, null)}>
+                        <span className="depth-level-tile empty" />
+                        <span className="depth-mini-text">
+                          <strong>Default</strong>
+                          <small>Use this level's built-in default</small>
+                        </span>
+                      </button>
+                      {MODEL_LIBRARY.map((ref) => (
+                        <button type="button" className="depth-mini-row" key={`${ref.provider}|${ref.model}`} onClick={() => setDepthModel(depthPicking, ref)}>
+                          <span className="depth-level-tile">
+                            <img alt="" src={PROVIDERS[ref.provider].logo} />
+                          </span>
+                          <span className="depth-mini-text">
+                            <strong>{ref.model}</strong>
+                            <small>
+                              {PROVIDERS[ref.provider].label}
+                              {PROVIDERS[ref.provider].tier === "local" ? " · local" : ""}
+                            </small>
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="depth-stack">
+                    {([
+                      { level: "l3" as const, badge: "L3", fallback: "Strongest cloud (default)" },
+                      { level: "l2" as const, badge: "L2", fallback: "Auto (policy route)" },
+                      { level: "l1" as const, badge: "L1", fallback: "Local model (default)" }
+                    ]).map(({ level, badge, fallback }) => {
+                      const chosen = node.depthModels?.[level];
+                      return (
+                        <button type="button" className="depth-level-row" key={level} onClick={() => setDepthPicking(level)} aria-label={`Choose ${badge} model`}>
+                          <span className="depth-level-badge">{badge}</span>
+                          <span className={chosen ? "depth-level-tile" : "depth-level-tile empty"}>
+                            {chosen === "router" ? <Waypoints size={18} /> : chosen ? <img alt="" src={PROVIDERS[chosen.provider].logo} /> : null}
+                          </span>
+                          <span className={chosen ? "depth-level-name" : "depth-level-name muted"}>
+                            {chosen === "router" ? "Router" : chosen ? chosen.model : fallback}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )
               ) : null}
             </div>
 

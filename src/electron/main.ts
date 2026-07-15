@@ -5583,12 +5583,18 @@ function classifyRouteDepth(prompt: string): RouteDepth {
  *  when no cloud key exists so the policy route stands rather than pointing
  *  at a provider that cannot answer. */
 async function depthRouteFor(depth: RouteDepth): Promise<StageModelRef | null> {
-  const config = await readStoreValue<{ deep?: StageModelRef; standard?: StageModelRef; shallow?: StageModelRef }>("depthRoutes", {});
+  type DepthChoice = StageModelRef | "router";
+  const config = await readStoreValue<{ deep?: DepthChoice; standard?: DepthChoice; shallow?: DepthChoice }>("depthRoutes", {});
+  // "router" (B11.2): the router model handles this level itself - it already
+  // read and judged the prompt, so no re-route at all; it IS the target.
+  const resolve = (choice: DepthChoice | undefined): StageModelRef | null | undefined =>
+    choice === "router" ? localStageRef() : choice ?? undefined;
   // Depth 2 keeps the policy route unless the node stack pinned an explicit
-  // standard-tier model (B11.2 L2 row).
-  if (depth === 2) return config.standard ?? null;
-  if (depth === 1) return config.shallow ?? localStageRef();
-  if (config.deep) return config.deep;
+  // standard-tier choice (B11.2 L2 row).
+  if (depth === 2) return resolve(config.standard) ?? null;
+  if (depth === 1) return resolve(config.shallow) ?? localStageRef();
+  const deep = resolve(config.deep);
+  if (deep) return deep;
   const secrets = await listSecrets();
   const hasKey = (provider: ProviderKey): boolean => secrets.some((entry) => entry.provider === provider && entry.hasSecret);
   if (hasKey("anthropic")) return { provider: "anthropic", model: providerInfo.anthropic.defaultModel ?? "claude-sonnet-4-6" };
