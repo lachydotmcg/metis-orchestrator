@@ -5474,17 +5474,18 @@ const MODEL_ROUTER_MIN_CONFIDENCE = 0.55;
 
 type ModelRouteMode = "chat" | "build" | "edit";
 
-async function classifyRouteWithModel(prompt: string, editableProject: boolean): Promise<{ mode: ModelRouteMode; confidence?: number } | null> {
+async function classifyRouteWithModel(prompt: string, editableProject: boolean): Promise<{ mode: ModelRouteMode; confidence?: number; depth?: RouteDepth } | null> {
   const trimmed = prompt.trim();
   if (!trimmed) return null;
   const model = localStageRef().model;
   const classifyPrompt = [
     `You are a routing classifier inside a coding assistant. Read the user's message and decide how it should be handled.`,
     `Reply with STRICT JSON only, no prose, no markdown, no code fences, in exactly this shape:`,
-    `{"mode":"chat"|"build"|"edit","confidence":0.0-1.0}`,
+    `{"mode":"chat"|"build"|"edit","depth":1|2|3,"confidence":0.0-1.0}`,
     `"chat" = the user is asking a question, wants an explanation, or explicitly does not want files created or changed.`,
     `"build" = the user wants a brand-new project, page, app, or file created from scratch.`,
     `"edit" = the user wants to change, fix, or add to an EXISTING project's files.`,
+    `"depth" is YOUR judgement of how heavy the work is: 1 = trivial (a one-line change, a typo, a rename, a quick answer a small model handles fine), 2 = standard everyday work, 3 = deep (real architecture, security, concurrency, or system-level engineering that deserves the strongest model). Judge the substance, not the wording.`,
     editableProject
       ? `A project with existing files is currently attached to this conversation, so "edit" is a real option.`
       : `No project with files is currently attached, so "edit" cannot be correct right now.`,
@@ -5527,7 +5528,12 @@ async function classifyRouteWithModel(prompt: string, editableProject: boolean):
     const confidenceRaw = (parsed as { confidence?: unknown }).confidence;
     const confidence = typeof confidenceRaw === "number" && Number.isFinite(confidenceRaw) ? confidenceRaw : undefined;
     if (confidence !== undefined && confidence < MODEL_ROUTER_MIN_CONFIDENCE) return null;
-    return { mode, confidence };
+    // Depth is the model's own judgement of how heavy the work is (Lachy's
+    // depths, B11): parsed defensively and simply omitted when absent or
+    // malformed, so mode classification keeps working with older outputs.
+    const depthRaw = (parsed as { depth?: unknown }).depth;
+    const depth: RouteDepth | undefined = depthRaw === 1 || depthRaw === 2 || depthRaw === 3 ? depthRaw : undefined;
+    return { mode, confidence, depth };
   } catch {
     // Ollama unreachable, aborted (timeout), malformed response, or any other
     // failure — the caller falls back to the regex gate unconditionally.
@@ -7715,11 +7721,16 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // in the condition below falls through to shouldRunBuildPipeline exactly as
   // it did before this feature existed.
   let modelBuildPipelineDecision: boolean | null = null;
+  // The router model's own depth judgement (Lachy: depth should be the
+  // router's call, not keywords) — consumed by the depth hook further down,
+  // which prefers this over the keyword classifier when present.
+  let modelJudgedDepth: RouteDepth | null = null;
   if (!forceBuildPipeline && !input.modelOverride && (await readStoreValue<boolean>("modelDrivenRoutingEnabled", false))) {
     const modelRouteDecision = await classifyRouteWithModel(prompt, editableProject);
     if (modelRouteDecision) {
       modelBuildPipelineDecision = modelRouteDecision.mode !== "chat" && !isBuildOptOut(prompt);
-      emitTimeline(stream, timelineText(`Router model chose: ${modelRouteDecision.mode}.`));
+      modelJudgedDepth = modelRouteDecision.depth ?? null;
+      emitTimeline(stream, timelineText(`Router model chose: ${modelRouteDecision.mode}${modelRouteDecision.depth ? `, depth ${modelRouteDecision.depth}` : ""}.`));
     }
   }
 
@@ -8085,7 +8096,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   let routeDepth: RouteDepth | undefined;
   let depthRoute: StageModelRef | null = null;
   if (!input.modelOverride && !forceBuildPipeline && (await readStoreValue<boolean>("depthRoutingEnabled", false))) {
-    routeDepth = classifyRouteDepth(prompt);
+    // The router model's own judgement wins when it gave one (Lachy: depth
+    // should be the router's call); the keyword classifier is the fallback.
+    routeDepth = modelJudgedDepth ?? classifyRouteDepth(prompt);
     depthRoute = await depthRouteFor(routeDepth);
     if (depthRoute) {
       emitTimeline(stream, timelineText(`Depth ${routeDepth} routing: ${providerInfo[depthRoute.provider].label} (${depthRoute.model}).`));

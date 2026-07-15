@@ -95,9 +95,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   OpenRouter, NVIDIA NIM) - the Orchestration UI's gateway picker must list every route the
   catalog declares for that model's provider, not just the home provider. RENDERER (gateway
   dropdown population from catalog access routes) + verify expandStageRef honors them.
-- [ ] **B11.2 - DEPTHS renderer follow-ups** (backend engine ships this commit, Fable-direct):
-  a Settings toggle for depthRoutingEnabled; per-path/per-node depth overrides inside
-  Orchestration (configure which depth a given node/path handles); a slim depth chip on runs.
+- [ ] **B11.2 - DEPTHS node UI (Lachy speced).** Inside each orchestration model NODE: a checkbox to ENABLE depths + one brief sentence explaining it, then a STACK of the three levels rendered top-to-bottom L3 -> L2 -> L1 in the library UI when the node is clicked, each level row clickable to choose a different model for that depth (writes depthRoutes / per-node overrides). Plus a Settings toggle for depthRoutingEnabled and a slim depth chip on runs. NOTE the judgement direction shipped: depth is now the ROUTER MODEL S own call (classifyRouteWithModel returns depth 1-3, preferred over the keyword fallback); the future ideal per Lachy is the small model handling depth-1 turns itself.
 
 ## ★ PITCH BATCH 10 (2026-07-13, research round - AWAITING LACHY GREEN LIGHT, ranked by Fable)
 
