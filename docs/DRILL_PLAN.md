@@ -145,6 +145,15 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   access routes - Grok 4.5/4.3 + GLM 5.2 via openrouter, and a missing Gemini 2.5 Flash entry
   (gemini + openrouter). NEEDS-LIVE-TEST: Claude models should list Claude + OpenRouter only.
 
+- [x] **B11.5 - Gateway audit for DeepSeek/OpenAI/Claude models (Lachy).** Went through where
+  each family's models are genuinely hosted and fixed the catalog accordingly. Claude closed
+  models: anthropic + openrouter already complete (Bedrock/Vertex are real hosts but not Metis
+  providers). OpenAI closed models: openai + openrouter complete. The real gaps were the OPEN
+  WEIGHTS: gpt-oss 20B/120B now carry groq + nvidia + openrouter routes; DeepSeek R1 distills
+  14B/32B (openrouter) and 70B (groq + openrouter); R1 671B and V3.2 671B (nvidia + openrouter).
+  Local entries list their ollama route FIRST so expandStageRef keeps local-first ordering and
+  cloud routes only serve as fallback/pin options. Registry commits 612dd09 + d0b16d7.
+
 ## ★ PITCH BATCH 10 (2026-07-13, research round - AWAITING LACHY GREEN LIGHT, ranked by Fable)
 
 - [x] **P10.1 - Metis Gateway (top pick).** Expose the router + Oracle as a localhost
