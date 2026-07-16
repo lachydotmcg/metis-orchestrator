@@ -270,9 +270,18 @@ Grounded in the existing substrate; each names what it builds on.
 - [x] **I9.9 - /export and /summarize slash commands.** The template popover already owns the
   slash surface; add built-ins: /export (existing conversation exportMarkdown) and /summarize
   (local-model summary of the conversation appended as an assistant turn, clearly labeled).
-- [ ] **I9.10 - Session handoff card.** One click generates a compact continue-from-here brief
+- [x] **I9.10 - Session handoff card.** One click generates a compact continue-from-here brief
   (project, decisions, open threads) as markdown - for moving a conversation to a fresh context
   or another model. Local-model generated, uses recentConversationContext.
+  SHIPPED (Fable direct): /handoff built-in row in the slash popover (same submit-through-
+  pipeline shape as /summarize) with a canned continue-from-here prompt (what/decisions/state/
+  open threads, markdown, zero-context reader); the chat path already injects recent
+  conversation context and the per-turn copy button lifts the brief out. Pairs with I9.5: fork
+  then /handoff. NEEDS-LIVE-TEST: type /han in the composer, pick the row.
+- [ ] **I9.6 DEFERRED NOTE (2026-07-16):** not half-built on purpose - a real A/B needs a
+  second-model picker surface in the composer plus a winner-pick control that records the
+  preference signal; doing it honestly is a design pass with Lachy, not a drive-by. Backend
+  seam exists (invokeProvider + side-chat stage_call cards).
 
 ---
 

@@ -203,11 +203,19 @@ type PromptTemplate = { id: string; name: string; text: string };
 // commands added alongside it. Unlike "template", these three never carry
 // deletable user data, they're fixed rows the popover always offers (subject
 // to their own bridge/availability checks at render time).
-type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "template"; template: PromptTemplate };
+type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "handoff" } | { kind: "template"; template: PromptTemplate };
 // Canned prompt /summarize submits verbatim through the normal onSubmit path
 // (DRILL_PLAN I9.9) — no new backend, it just reuses the same pipeline a
 // hand-typed message would use, so the reply lands as an ordinary assistant turn.
 const SLASH_SUMMARIZE_PROMPT = "Summarize this conversation so far: key decisions, open questions, next steps. Be concise.";
+// Canned prompt for /handoff (DRILL_PLAN I9.10) — same submit-through-the-
+// normal-pipeline shape as /summarize, but produces a CONTINUE-FROM-HERE
+// brief written for a fresh context (new session, different model, or
+// another person). The chat path already injects recent conversation
+// context, so the model has the material; the answer is ordinary markdown
+// the existing per-turn copy button lifts out.
+const SLASH_HANDOFF_PROMPT =
+  "Write a compact handoff brief for continuing this work in a completely fresh session, in markdown: 1) What this is (project and goal, one line). 2) Key decisions made and why. 3) Current state - what is done, what is in flight. 4) Open threads and concrete next steps. Terse and specific, no fluff, no praise - written so someone with zero context can pick this up and continue.";
 type ProjectFolder = { name: string; latest: string; age: string; path?: string };
 
 /** One model slot inside a graph node's fallback chain (docs/DRILL_PLAN.md
@@ -5142,10 +5150,13 @@ function SessionComposer({
   // /orchestration and saved templates for discoverability, same filter idiom.
   const exportRowMatches = !templateFilter || "export".includes(templateFilter);
   const summarizeRowMatches = !templateFilter || "summarize".includes(templateFilter) || "summary".includes(templateFilter);
+  // Built-in /handoff row (DRILL_PLAN I9.10) — same discoverability idiom.
+  const handoffRowMatches = !templateFilter || "handoff".includes(templateFilter) || "continue".includes(templateFilter);
   const templateRows: TemplateRow[] = [
     ...(orchestrationRowMatches ? [{ kind: "builtin" as const }] : []),
     ...(exportRowMatches ? [{ kind: "export" as const }] : []),
     ...(summarizeRowMatches ? [{ kind: "summarize" as const }] : []),
+    ...(handoffRowMatches ? [{ kind: "handoff" as const }] : []),
     ...filteredTemplates.map((template) => ({ kind: "template" as const, template }))
   ];
   const templateActiveRow = templateRows.length ? templateRows[Math.min(templateActiveIndex, templateRows.length - 1)] : undefined;
@@ -5186,6 +5197,11 @@ function SessionComposer({
     if (row.kind === "summarize") {
       setPrompt("");
       void onSubmit(SLASH_SUMMARIZE_PROMPT);
+      return;
+    }
+    if (row.kind === "handoff") {
+      setPrompt("");
+      void onSubmit(SLASH_HANDOFF_PROMPT);
       return;
     }
     setPrompt(row.kind === "builtin" ? "/orchestration " : row.template.text);
@@ -5425,6 +5441,25 @@ function SessionComposer({
                           <span>
                             <strong>/summarize</strong>
                             <small>Submits a recap prompt — key decisions, open questions, next steps</small>
+                          </span>
+                        </button>
+                      );
+                    }
+                    if (row.kind === "handoff") {
+                      return (
+                        <button
+                          key="builtin-handoff"
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => selectTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>/handoff</strong>
+                            <small>Generates a continue-from-here brief for a fresh session or another model</small>
                           </span>
                         </button>
                       );
