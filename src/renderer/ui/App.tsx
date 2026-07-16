@@ -14066,6 +14066,13 @@ function SettingsWorkspace({
   // Close-to-tray — same store key main.ts reads to decide whether closing the
   // window hides Metis in the tray instead of quitting. OFF by default.
   const [closeToTray, setCloseToTray] = useAppStoreState("closeToTray", DEFAULT_CLOSE_TO_TRAY);
+  // Headless/service start (docs/DRILL_PLAN.md P10.5) — same store key main.ts
+  // reads at app-ready to start minimized to tray. OFF by default.
+  const [headlessStart, setHeadlessStart] = useAppStoreState("headlessStart", false);
+  // MCP tools in the chat pipeline (docs/DRILL_PLAN.md P10.2) — main.ts reads
+  // this to decide whether installed MCP servers' tools are exposed to runs.
+  // OFF by default.
+  const [mcpToolsEnabled, setMcpToolsEnabled] = useAppStoreState("mcpToolsEnabled", false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
@@ -14404,6 +14411,19 @@ function SettingsWorkspace({
             </button>
           </label>
           <p className="settings-hint">Closing the window hides Metis in the tray instead of quitting.</p>
+          <label className="settings-field toggle-field">
+            <span>Start minimized to tray</span>
+            <button
+              type="button"
+              className={`toggle-switch ${headlessStart ? "on" : ""}`}
+              role="switch"
+              aria-checked={headlessStart}
+              onClick={() => setHeadlessStart(!headlessStart)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">Metis launches hidden in the tray, with the Gateway serving if enabled. Click the tray icon to open the window. Also available as a --headless launch flag.</p>
         </article>
 
         <article className="settings-panel">
@@ -14855,6 +14875,19 @@ function SettingsWorkspace({
             </span>
             <span className="status-pill">{mcpPackages.length} installed</span>
           </header>
+          <label className="settings-field toggle-field">
+            <span>Let runs use MCP tools (experimental)</span>
+            <button
+              type="button"
+              className={`toggle-switch ${mcpToolsEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={mcpToolsEnabled}
+              onClick={() => setMcpToolsEnabled(!mcpToolsEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">Exposes installed servers' tools to chat runs; every tool call shows in the run timeline. Off by default.</p>
           {mcpPackages.length === 0 ? (
             <p>No MCP servers installed — add one from the Marketplace.</p>
           ) : (
