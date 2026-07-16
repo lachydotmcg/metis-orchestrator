@@ -181,8 +181,11 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 - [ ] **P10.4 - Oracle for code.** Speculative edit-drafting inside the build pipeline (draft
   the frontend stage while plan streams). Market-validated: codegen-tuned speculative decoding
   is a headline feature elsewhere (Morph).
-- [ ] **P10.5 - Headless / service mode.** Start minimized to tray, no window, serving the
-  Gateway. Completes the tray + pairs with P10.1.
+- [x] **P10.5 - Headless / service mode.** Start minimized to tray, no window, serving the
+  Gateway. Completes the tray + pairs with P10.1. SHIPPED: `headlessStart` store key or
+  `--headless` CLI flag starts the app hidden in the tray (tray "Open Metis" reveals it) with
+  the Gateway autostart untouched; the renderer Settings toggle for `headlessStart` is still
+  pending.
 - [ ] **P10.6 - Hybrid per-stage thoroughness.** Local drafts + cloud verify passes as a dial -
   this IS the parked B7.2 thoroughness meter; the market converging on it argues for un-parking.
 
@@ -192,11 +195,16 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 Grounded in the existing substrate; each names what it builds on.
 
-- [ ] **I9.1 - Oracle Everywhere: prewarm on conversation OPEN.** The moment you open a
+- [x] **I9.1 - Oracle Everywhere: prewarm on conversation OPEN.** The moment you open a
   conversation (before typing at all), prewarm the assembled prefix (system + context +
   snapshot) for that conversation's remembered model (B7.1 map makes the target knowable).
   First keystroke then starts from a warm prefix instead of a cold one. Builds on
   assembleChatPrewarmPrompt + conversationModels.
+  SHIPPED (Fable direct): renderer effect fires one warm per conversation+model pair on open
+  (300ms switch debounce, empty draft, honest chip/log); prewarmModel now accepts an EMPTY
+  draft when a conversationId is present (open-warm) and assembles the conversation prefix, or
+  falls back to pure residency load. NEEDS-LIVE-TEST: open a conversation with a pinned local
+  model, chip should flash warming before you type.
 - [ ] **I9.2 - Oracle draft STREAMING into the popover.** The guess currently appears all at
   once (draftModel is stream:false). Stream it so the popover shows the guess forming live -
   the demo becomes hypnotic and Lachy sees thinking in real time. Small: reuse

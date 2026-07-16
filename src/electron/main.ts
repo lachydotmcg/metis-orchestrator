@@ -9095,7 +9095,13 @@ const prewarmAborts = new Map<string, AbortController>();
 async function prewarmModel(model: string, draft: string, context?: PrewarmContext): Promise<void> {
   const trimmedModel = typeof model === "string" ? model.trim() : "";
   const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
-  if (!trimmedModel || trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return;
+  // Open-warm (docs/DRILL_PLAN.md I9.1): an EMPTY draft with a conversation
+  // context is the renderer's conversation-open warm - load the model (and
+  // the conversation's assembled prefix) before the first keystroke. Only a
+  // non-empty draft still has to clear the min-length bar; empty-without-
+  // context stays rejected as before.
+  const openWarm = trimmedDraft.length === 0 && Boolean(context?.conversationId);
+  if (!trimmedModel || (!openWarm && trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH)) return;
   try {
     if (!(await readStoreValue<boolean>("prewarmEnabled", false))) return;
 
@@ -10044,7 +10050,11 @@ function resolveAppIcon(): string | undefined {
 // and the tray's open handler both fall back to createWindow() when null.
 let mainWindow: BrowserWindow | null = null;
 
-async function createWindow(): Promise<void> {
+/** Creates the main window. `startHidden` (docs/DRILL_PLAN.md P10.5) builds it
+ *  with `show: false` so a headless start lives in the tray until the tray's
+ *  "Open Metis" item (openOrFocusMainWindow's show()/focus()) reveals it —
+ *  everything else (renderer load, IPC, close-to-tray) is identical. */
+async function createWindow(options?: { startHidden?: boolean }): Promise<void> {
   const appIcon = resolveAppIcon();
   const win = new BrowserWindow({
     width: 1360,
@@ -10054,6 +10064,7 @@ async function createWindow(): Promise<void> {
     title: "Metis Orchestrator",
     backgroundColor: "#1b1b1b",
     frame: false,
+    show: options?.startHidden !== true,
     ...(appIcon ? { icon: appIcon } : {}),
     webPreferences: {
       preload: join(__dirname, "preload.cjs"),
@@ -10767,8 +10778,19 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-gallery:import-pinterest", (_event, boardUrl: string) => importFromPinterestBoard(typeof boardUrl === "string" ? boardUrl : ""));
   ipcMain.handle("metis-gateway:get-status", () => getGatewayStatus());
   ipcMain.handle("metis-gateway:set-enabled", (_event, enabled: boolean) => setGatewayEnabled(Boolean(enabled)));
-  await createWindow();
+  // Headless / service mode (docs/DRILL_PLAN.md P10.5): opt-in via the
+  // `headlessStart` store key or a `--headless` CLI flag; OFF by default so
+  // nothing changes unless the owner asks for it. The tray is created FIRST
+  // (it never needed the window) so the hidden window is always reachable via
+  // "Open Metis"; if the tray failed to come up (no icon / CI environment),
+  // start visible as always — same no-trap rule as the close-to-tray
+  // intercept in createWindow(). The window is still fully created and the
+  // gateway autostart below is window-independent, so a headless start
+  // serves the Metis Gateway exactly as a visible one does.
   createTray();
+  const headlessStart =
+    process.argv.includes("--headless") || (await readStoreValue<boolean>("headlessStart", false));
+  await createWindow({ startHidden: headlessStart && tray !== null });
 
   // Warm the live registry, model catalog, and Pulse feed on launch so the
   // cache is fresh; each call caches last-good state for offline use.
