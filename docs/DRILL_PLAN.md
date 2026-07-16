@@ -237,9 +237,15 @@ Grounded in the existing substrate; each names what it builds on.
   (already resident; the extra request would only queue). Prefix warming deliberately not
   attempted - the next prompt depends on the current stage's output. NEEDS-LIVE-TEST: run a
   graph build with two different local models, stage 2 should start noticeably faster.
-- [ ] **I9.4 - Routine dry-run + preview.** Before enabling a routine, run it once in plan-only
+- [x] **I9.4 - Routine dry-run + preview.** Before enabling a routine, run it once in plan-only
   permission mode and show what it WOULD have done (files, calls). Reuses permissionMode plan +
   the existing routine runner. Trust-builder for scheduled automation.
+  SHIPPED (Fable direct): dryRunRoutine fires the exact prompt under permissionMode plan into a
+  FRESH conversation (routine record untouched - no lastRunAt/nextRunAt/conversationId writes),
+  audit lines routine.dryrun; metis-routines:dry-run IPC + metisRoutines.dryRun bridge; Eye
+  button on each routine card, spinner while running, auto-opens the preview conversation on
+  success. NEEDS-LIVE-TEST: dry-run a build-ish routine, it should stop after the plan stage
+  with nothing written.
 - [ ] **I9.5 - Conversation forking.** Fork a conversation at any turn into a new conversation
   (copy turns up to that point). Cheap in the store model (ConversationRecord.turns slice) and
   pairs beautifully with per-conversation models: fork the same context onto a different model

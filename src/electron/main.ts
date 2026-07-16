@@ -9067,6 +9067,38 @@ async function runRoutineNow(id: string): Promise<Routine | undefined> {
   return result;
 }
 
+/** Routine DRY RUN (docs/DRILL_PLAN.md I9.4): fires the routine's exact
+ *  prompt once under permissionMode "plan" - the build pipeline stops after
+ *  its plan stage and nothing is written, so the resulting conversation shows
+ *  what the routine WOULD have done. Deliberately leaves the routine record
+ *  completely untouched (no lastRunAt/nextRunAt/conversationId updates) and
+ *  lands in a FRESH conversation rather than the routine's own thread, so a
+ *  preview can never be mistaken for a real scheduled run. The prompt is
+ *  passed verbatim so routing/classification matches the real firing. */
+async function dryRunRoutine(id: string): Promise<{ ok: boolean; conversationId?: string; error?: string }> {
+  const routine = (await readRoutines()).find((item) => item.id === id);
+  if (!routine) return { ok: false, error: "Routine not found." };
+  await appendAudit("info", "routine.dryrun", `Dry-running routine "${routine.name}" in plan mode.`, { id: routine.id });
+  try {
+    const run = await runSessionTracked({
+      prompt: routine.prompt,
+      projectPath: routine.projectPath,
+      preset: routine.preset,
+      permissionMode: "plan",
+      rawPromptStorage: "local-only"
+    });
+    await appendAudit("info", "routine.dryrun", `Dry run of "${routine.name}" completed.`, {
+      id: routine.id,
+      conversationId: run.conversationId
+    });
+    return { ok: true, conversationId: run.conversationId };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await appendAudit("error", "routine.dryrun", `Dry run of "${routine.name}" failed.`, { id: routine.id, error: message });
+    return { ok: false, error: message };
+  }
+}
+
 /** The scheduler chain: finds the soonest enabled routine, sleeps until it is
  *  due (capped at 60s slices so a laptop sleep/wake or clock change is
  *  re-evaluated at least once a minute instead of oversleeping), fires every
@@ -11229,6 +11261,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-routines:save", (_event, input: Routine) => saveRoutine(input));
   ipcMain.handle("metis-routines:delete", (_event, id: string) => deleteRoutine(id));
   ipcMain.handle("metis-routines:run-now", (_event, id: string) => runRoutineNow(id));
+  // I9.4: plan-only preview of what a routine would do - never mutates the routine.
+  ipcMain.handle("metis-routines:dry-run", (_event, id: string) => dryRunRoutine(id));
   ipcMain.handle("metis-manager:chat", (_event, history: ManagerChatMessage[]) => runManagerChat(history));
   // Streaming sibling of metis-manager:chat (docs/DRILL_PLAN.md Phase 8) —
   // mirrors metis-session:run-stream's streamId + sender.send pattern exactly.

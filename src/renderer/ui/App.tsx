@@ -12954,6 +12954,8 @@ function RoutineCard({
   now,
   onToggle,
   onRunNow,
+  onDryRun,
+  dryRunning,
   onEdit,
   onDelete,
   onOpenConversation,
@@ -12963,6 +12965,9 @@ function RoutineCard({
   now: number;
   onToggle: () => void;
   onRunNow: () => void;
+  /** I9.4 dry run - plan-only preview of what this routine would do. */
+  onDryRun: () => void;
+  dryRunning?: boolean;
   onEdit: () => void;
   onDelete: () => void;
   onOpenConversation: () => void;
@@ -12993,6 +12998,11 @@ function RoutineCard({
         {!readOnly ? (
           <button type="button" onClick={onRunNow} title="Run now">
             <Play size={14} />
+          </button>
+        ) : null}
+        {!readOnly ? (
+          <button type="button" onClick={onDryRun} disabled={dryRunning} title="Dry run - preview what this routine would do, plan-only, nothing written">
+            {dryRunning ? <Loader2 size={14} className="spin" /> : <Eye size={14} />}
           </button>
         ) : null}
         {!readOnly ? (
@@ -13058,6 +13068,32 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
     await refresh();
   }
 
+  // I9.4 dry run: plan-only preview in a FRESH conversation, routine record
+  // untouched. On success, jump straight to the preview conversation so the
+  // "what would it have done" answer is one click total.
+  const [dryRunningId, setDryRunningId] = useState<string | null>(null);
+  const [dryRunNote, setDryRunNote] = useState<string | null>(null);
+  async function dryRun(id: string): Promise<void> {
+    const dryRunFn = window.metisRoutines?.dryRun;
+    if (!dryRunFn || dryRunningId) return;
+    setDryRunningId(id);
+    setDryRunNote(null);
+    try {
+      const result = await dryRunFn(id);
+      if (result.ok && result.conversationId && onConversationOpen) {
+        onConversationOpen(result.conversationId);
+      } else if (!result.ok) {
+        setDryRunNote(result.error ?? "Dry run failed.");
+      } else {
+        setDryRunNote("Dry run complete - see the newest conversation for the preview.");
+      }
+    } catch {
+      setDryRunNote("Dry run failed.");
+    } finally {
+      setDryRunningId(null);
+    }
+  }
+
   async function deleteRoutine(id: string): Promise<void> {
     if (!window.metisRoutines) return;
     const confirmed = window.confirm("Delete this routine? This does not delete its conversation history.");
@@ -13113,6 +13149,7 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
           </div>
         ) : (
           <div className="routines-list">
+            {dryRunNote ? <p className="field-hint">{dryRunNote}</p> : null}
             {routines.map((routine) => (
               <RoutineCard
                 key={routine.id}
@@ -13121,6 +13158,8 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
                 readOnly={!hasBridge}
                 onToggle={() => void toggleRoutine(routine)}
                 onRunNow={() => void runNow(routine.id)}
+                onDryRun={() => void dryRun(routine.id)}
+                dryRunning={dryRunningId === routine.id}
                 onEdit={() => setEditingDraft(draftFromRoutine(routine, currentProjectPath))}
                 onDelete={() => void deleteRoutine(routine.id)}
                 onOpenConversation={() => {

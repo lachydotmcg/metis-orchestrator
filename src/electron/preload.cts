@@ -162,7 +162,9 @@ contextBridge.exposeInMainWorld("metisRoutines", {
   list: () => ipcRenderer.invoke("metis-routines:list") as Promise<Routine[]>,
   save: (routine: Routine) => ipcRenderer.invoke("metis-routines:save", routine) as Promise<Routine>,
   delete: (id: string) => ipcRenderer.invoke("metis-routines:delete", id) as Promise<Routine[]>,
-  runNow: (id: string) => ipcRenderer.invoke("metis-routines:run-now", id) as Promise<Routine | undefined>
+  runNow: (id: string) => ipcRenderer.invoke("metis-routines:run-now", id) as Promise<Routine | undefined>,
+  // DRILL_PLAN I9.4 — plan-only dry run; resolves the preview conversation id.
+  dryRun: (id: string) => ipcRenderer.invoke("metis-routines:dry-run", id) as Promise<{ ok: boolean; conversationId?: string; error?: string }>
 });
 
 contextBridge.exposeInMainWorld("metisOllama", {

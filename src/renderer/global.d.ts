@@ -150,6 +150,10 @@ declare global {
       save: (routine: Routine) => Promise<Routine>;
       delete: (id: string) => Promise<Routine[]>;
       runNow: (id: string) => Promise<Routine | undefined>;
+      // DRILL_PLAN I9.4 — plan-only dry run: fires the routine's prompt under
+      // permissionMode "plan" into a fresh conversation and resolves its id,
+      // never mutating the routine record. Optional: older preloads lack it.
+      dryRun?: (id: string) => Promise<{ ok: boolean; conversationId?: string; error?: string }>;
     };
     metisOllama?: {
       list(): Promise<OllamaListResult>;
