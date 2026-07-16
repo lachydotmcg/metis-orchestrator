@@ -7036,8 +7036,11 @@ async function runOrchestratedStages(
   // — read back further down when assembling stageImages for that same stage.
   let styleCardImage: ProviderImageInput | undefined;
 
-  for (const stage of stages) {
+  for (const [stageIndex, stage] of stages.entries()) {
     throwIfCancelled(projectPath);
+    // I9.3 warm-chain: while this stage generates, the NEXT stage's local
+    // model loads in parallel - fire-and-forget, gated inside the helper.
+    warmChainNextStage(stages, stageIndex);
     let stagePrompt: string;
     if (stage.templateRole === "plan") {
       stagePrompt = `You are the PLANNING model in a build pipeline. The user wants:\n${prompt}\n\nWrite a short, concrete build plan: the pages/components, the data, and the interactivity. Be tight — no code yet, just the plan.\n\nNever ask the user for a brief, requirements, or say the project is empty. If details are missing, invent tasteful, specific choices yourself (name, copy, palette, content) and state them briefly — you are the creative lead. Do not end with a question asking permission to proceed; proceed.`;
@@ -9677,6 +9680,41 @@ async function draftModel(
     // throw out of this function.
     return null;
   }
+}
+
+/** Warm-chain for the build pipeline (docs/DRILL_PLAN.md I9.3): while stage N
+ *  streams, keep stage N+1's local model resident so the stage-to-stage
+ *  handoff never pays a cold load. Residency-only (empty prompt, 1 token) -
+ *  the next stage's real prompt depends on the current stage's output, so
+ *  prefix warming can't apply here; loading the weights is the whole win.
+ *  Same posture as prewarmModel: behind prewarmEnabled, local Ollama only,
+ *  fire-and-forget, fail soft and silent. Skipped when the next stage opens
+ *  on the SAME model as the current one (already resident, and the extra
+ *  request would just queue behind the in-flight generation). */
+function warmChainNextStage(stages: StageConfig[], currentIndex: number): void {
+  const current = stages[currentIndex]?.chain[0];
+  const next = stages[currentIndex + 1]?.chain[0];
+  if (!next || next.provider !== "ollama") return;
+  if (current && current.provider === next.provider && current.model === next.model) return;
+  void (async () => {
+    try {
+      if (!(await readStoreValue<boolean>("prewarmEnabled", false))) return;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), PREWARM_FETCH_TIMEOUT_MS);
+      try {
+        await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({ model: next.model, prompt: "", stream: false, keep_alive: "5m", options: { num_predict: 1 } })
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
+    } catch {
+      // Ollama unreachable / model missing - warming is best-effort only.
+    }
+  })();
 }
 
 // --- O5: cloud Oracle (docs/DRILL_PLAN.md O5, DeepSeek first) ---

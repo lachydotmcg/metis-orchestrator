@@ -227,10 +227,16 @@ Grounded in the existing substrate; each names what it builds on.
   onDraftDelta subscribe, renderer streams deltas straight into the popover's oracleDraft
   state. Cloud drafts (O5) stay one-shot for now. NEEDS-LIVE-TEST: open the Oracle popover
   while typing-pausing, the guess should form live including thinking.
-- [ ] **I9.3 - Warm-chain for the build pipeline.** While the PLAN stage streams, prewarm the
+- [x] **I9.3 - Warm-chain for the build pipeline.** While the PLAN stage streams, prewarm the
   FRONTEND stage's model with its (partially known) prompt prefix; while frontend streams,
   prewarm functional. Stage-to-stage TTFT drops across the whole pipeline. Builds on
   prewarmModel + the stage chain in runOrchestratedStages.
+  SHIPPED (Fable direct): warmChainNextStage fires at each stage start - residency-only
+  (empty prompt, 1 token, keep_alive 5m) for the NEXT stage's chain[0] when it is a local
+  Ollama model, behind prewarmEnabled, skipped when next opens on the same model as current
+  (already resident; the extra request would only queue). Prefix warming deliberately not
+  attempted - the next prompt depends on the current stage's output. NEEDS-LIVE-TEST: run a
+  graph build with two different local models, stage 2 should start noticeably faster.
 - [ ] **I9.4 - Routine dry-run + preview.** Before enabling a routine, run it once in plan-only
   permission mode and show what it WOULD have done (files, calls). Reuses permissionMode plan +
   the existing routine runner. Trust-builder for scheduled automation.
