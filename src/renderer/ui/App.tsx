@@ -673,6 +673,28 @@ const CATALOG_PROVIDER_TO_BRAND: Record<ProviderKey, ProviderId> = {
   ollama: "qwen"
 };
 
+/** Finds the registry catalog entry for a picker ModelRef (docs/DRILL_PLAN.md
+ *  B11.1). The picker's library uses short brand-scoped names ("V4 Flash")
+ *  while the catalog uses full names ("DeepSeek V4 Flash"), so an exact name
+ *  match alone misses most library models - which is why the Gateway picker
+ *  used to offer only the model's home provider. Match order: exact name
+ *  (remote-catalog picks carry the full name), then a same-home-provider
+ *  entry whose full name CONTAINS the short name, then any entry with an
+ *  access route on that provider whose raw route id matches (covers custom
+ *  hand-typed models entered as real API ids). */
+function findCatalogModelEntry(catalog: CatalogModel[], ref: ModelRef): CatalogModel | undefined {
+  const name = ref.model.trim().toLowerCase();
+  if (!name) return undefined;
+  const exact = catalog.find((entry) => entry.name.toLowerCase() === name);
+  if (exact) return exact;
+  const key = PROVIDER_CONNECTIONS[ref.provider];
+  if (!key) return undefined;
+  return (
+    catalog.find((entry) => entry.provider === key && entry.name.toLowerCase().includes(name)) ??
+    catalog.find((entry) => (entry.access ?? []).some((route) => route.provider === key && route.id.toLowerCase() === name))
+  );
+}
+
 const MODEL_LIBRARY: ModelRef[] = [
   { provider: "claude", model: "Opus 4.8" },
   { provider: "claude", model: "Sonnet 5" },
@@ -3766,7 +3788,11 @@ function NewSessionWorkspace({
   // listProviders in main.ts) — approximate but fine for a picker hint.
   const resolveRouteSuffix = useCallback(
     (ref: ModelRef): string | null => {
-      const entry = remoteModelCatalog.find((candidate) => candidate.name.toLowerCase() === ref.model.toLowerCase());
+      // Same brand-aware lookup as the Gateway picker (B11.1): short library
+      // names like "V4 Flash" resolve to their full catalog entry, so the
+      // "via <Provider>" suffix works for library picks too, not just
+      // remote-catalog picks that carry the full name.
+      const entry = findCatalogModelEntry(remoteModelCatalog, ref);
       const access = entry?.access;
       if (!entry || !access || access.length < 2) return null;
 
@@ -15068,7 +15094,7 @@ function NodeInspector({
   // one provider (harmless — every provider family, including
   // anthropic/gemini, is handled identically here).
   const gatewayOptions = useMemo((): ProviderId[] => {
-    const catalogEntry = editingSlot ? catalogModels.find((entry) => entry.name.toLowerCase() === editingSlot.model.toLowerCase()) : undefined;
+    const catalogEntry = editingSlot ? findCatalogModelEntry(catalogModels, editingSlot) : undefined;
     const routes = catalogEntry?.access ?? [];
     const brands = routes.map((route) => CATALOG_PROVIDER_TO_BRAND[route.provider]).filter((brand): brand is ProviderId => Boolean(brand));
     const distinct = Array.from(new Set(brands));
