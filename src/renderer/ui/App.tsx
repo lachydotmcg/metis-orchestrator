@@ -50,6 +50,7 @@ import {
   FileText,
   Folder,
   GalleryHorizontalEnd,
+  Gauge,
   GitBranch,
   GitFork,
   Github,
@@ -5808,14 +5809,17 @@ function SessionComposer({
             ) : null}
           </div>
           {oracleVisible ? (
-            <OracleChip
-              activity={oracleActivity}
-              log={oracleLog}
-              draft={oracleDraft}
-              open={oracleLogOpen}
-              onToggle={() => setOracleLogOpen((open) => !open)}
-              onClose={() => setOracleLogOpen(false)}
-            />
+            <>
+              <UsageRing />
+              <OracleChip
+                activity={oracleActivity}
+                log={oracleLog}
+                draft={oracleDraft}
+                open={oracleLogOpen}
+                onToggle={() => setOracleLogOpen((open) => !open)}
+                onClose={() => setOracleLogOpen(false)}
+              />
+            </>
           ) : null}
           {sessionBusy && !prompt.trim() ? (
             <button
@@ -5869,6 +5873,62 @@ function secondsAgoLabel(at: number): string {
  *  clearly-labeled speculative preview of the latest draft() resolution
  *  ("Oracle's guess"). The chip itself grows a small dot when a fresh draft
  *  is available, so there's a reason to peek even while idle/warm. */
+/** Usage ring (docs/DRILL_PLAN.md B12.7, Lachy's ask): a small ring beside
+ *  the Oracle chip that FILLS WITH WHITE as the rolling 4-hour usage window
+ *  is consumed. Only rendered when Oracle is enabled (pure BYO users never
+ *  see it); with no 4-hour limit set it stays an empty track whose tooltip
+ *  points at Settings > Usage. Polls the local ledger every 60s - display
+ *  only, never throttles anything. */
+function UsageRing(): JSX.Element | null {
+  const [ring, setRing] = useState<{ used: number; limit: number | null } | null>(null);
+  useEffect(() => {
+    const usage = window.metisUsage;
+    if (!usage) return;
+    let alive = true;
+    const poll = (): void => {
+      void usage
+        .summary()
+        .then((summary) => {
+          if (!alive) return;
+          setRing({ used: summary.last4h.totalTokens, limit: summary.limits.fourHourTokens ?? null });
+        })
+        .catch(() => undefined);
+    };
+    poll();
+    const timer = window.setInterval(poll, 60_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+  if (!ring) return null;
+  const fraction = ring.limit ? Math.min(1, ring.used / ring.limit) : 0;
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const title = ring.limit
+    ? `${formatTokenCount(ring.used)} of ${formatTokenCount(ring.limit)} tokens used in the last 4 hours (${Math.round(fraction * 100)}%)`
+    : `${formatTokenCount(ring.used)} tokens in the last 4 hours — set a 4-hour limit in Settings > Usage to fill the ring`;
+  return (
+    <span className="usage-ring" title={title} role="img" aria-label={title}>
+      <svg width="18" height="18" viewBox="0 0 18 18">
+        <circle className="usage-ring-track" cx="9" cy="9" r={radius} fill="none" strokeWidth="2" />
+        <circle
+          className="usage-ring-fill"
+          cx="9"
+          cy="9"
+          r={radius}
+          fill="none"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={circumference * (1 - fraction)}
+          transform="rotate(-90 9 9)"
+        />
+      </svg>
+    </span>
+  );
+}
+
 function OracleChip({
   activity,
   log,
@@ -5890,6 +5950,14 @@ function OracleChip({
       : activity.phase === "warm"
       ? `Oracle: ${activity.model} warm, ${activity.ms}ms`
       : "Oracle ready";
+  // Popover status subline - a shipped-feature voice for the same honest
+  // facts the chip label carries (docs/DRILL_PLAN.md B12 cosmetic pass).
+  const statusLine =
+    activity.phase === "warming"
+      ? `Warming ${activity.model}…`
+      : activity.phase === "warm"
+      ? `${activity.model} · warm in ${activity.ms}ms`
+      : "Idle · watching for your next pause";
   const hasDraft = Boolean(draft && (draft.text?.trim() || draft.thoughts?.trim()));
   return (
     <div className="oracle-chip-wrap">
@@ -5907,10 +5975,20 @@ function OracleChip({
       {open ? (
         <>
           <div className="oracle-backdrop" onClick={onClose} />
-          <div className="oracle-log-popover" role="dialog" aria-label="Recent Oracle activity">
+          <div className={`oracle-log-popover ${activity.phase}`} role="dialog" aria-label="Oracle">
+            <header className="oracle-popover-head">
+              <span className="oracle-wordmark">
+                <Sparkles size={12} />
+                Oracle
+              </span>
+              <span className={`oracle-status ${activity.phase}`}>{statusLine}</span>
+            </header>
             {hasDraft && draft ? (
               <div className="oracle-draft-block">
-                <p className="oracle-draft-title">Oracle&apos;s guess</p>
+                <p className="oracle-draft-title">
+                  Oracle&apos;s guess
+                  {activity.phase === "warming" ? <span className="oracle-live-caret" aria-hidden="true" /> : null}
+                </p>
                 <div className="oracle-draft-body">
                   {draft.thoughts?.trim() ? <p className="oracle-draft-thinking">{draft.thoughts}</p> : null}
                   {draft.text?.trim() ? <p className="oracle-draft-text">{draft.text}</p> : null}
@@ -5918,6 +5996,7 @@ function OracleChip({
                 <p className="oracle-draft-hint">Speculative. Updates as you pause typing.</p>
               </div>
             ) : null}
+            <p className="oracle-log-heading">Recent warms</p>
             {log.length === 0 ? (
               <p className="oracle-log-empty">No warm calls yet this session.</p>
             ) : (
@@ -5929,6 +6008,7 @@ function OracleChip({
                 </div>
               ))
             )}
+            <footer className="oracle-popover-foot">Answers before you finish asking.</footer>
           </div>
         </>
       ) : null}
@@ -14113,7 +14193,7 @@ function formatRelativeTime(iso: string): string {
  *  backing bridge (Profile, Configuration, Personalization, Browser, Computer
  *  use, Hooks, Git, Worktrees) were dropped; every section below renders real
  *  content wired to an existing store key or window bridge. */
-type SettingsSection = "general" | "providers" | "appearance" | "chat" | "mcp" | "privacy" | "audit" | "about";
+type SettingsSection = "general" | "providers" | "appearance" | "chat" | "mcp" | "usage" | "privacy" | "audit" | "about";
 
 const SETTINGS_NAV: Array<{ group: string; icon: JSX.Element; label: string; section: SettingsSection }> = [
   { group: "Personal", icon: <ShieldCheck size={15} />, label: "General", section: "general" },
@@ -14121,6 +14201,7 @@ const SETTINGS_NAV: Array<{ group: string; icon: JSX.Element; label: string; sec
   { group: "Personal", icon: <MessageCircle size={15} />, label: "Chat", section: "chat" },
   { group: "Integrations", icon: <Cable size={15} />, label: "Providers", section: "providers" },
   { group: "Integrations", icon: <Plug size={15} />, label: "MCP servers", section: "mcp" },
+  { group: "System", icon: <Gauge size={15} />, label: "Usage", section: "usage" },
   { group: "System", icon: <Shield size={15} />, label: "Privacy & Data", section: "privacy" },
   { group: "System", icon: <ScrollText size={15} />, label: "Audit", section: "audit" },
   { group: "System", icon: <HelpCircle size={15} />, label: "About", section: "about" }
@@ -14132,6 +14213,7 @@ const SETTINGS_SECTION_META: Record<SettingsSection, { subtitle: string; title: 
   appearance: { title: "Appearance", subtitle: "Accent color, density, and text size — applied app-wide, not just here." },
   chat: { title: "Chat", subtitle: "Route ceremony verbosity, streaming, and self-verification for new runs." },
   mcp: { title: "MCP servers", subtitle: "Installed Model Context Protocol connections available to routes." },
+  usage: { title: "Usage", subtitle: "Tokens, runs, and costs per provider, model, and route — measured locally from your own runs." },
   privacy: { title: "Privacy & Data", subtitle: "What gets stored locally, audit retention, and data controls." },
   audit: { title: "Audit", subtitle: "Recent events emitted by the policy bridge, permissions, and marketplace actions." },
   about: { title: "About", subtitle: "App version, update check, and project links." }
@@ -14146,6 +14228,33 @@ function maskGatewayToken(token: string): string {
   if (!token) return "";
   if (token.length <= 8) return "•".repeat(token.length);
   return `${token.slice(0, 4)}${"•".repeat(Math.max(token.length - 8, 4))}${token.slice(-4)}`;
+}
+
+/** The metisUsage.summary() resolution type, derived from the bridge typing
+ *  so the Usage tab and the ring never drift from what preload declares. */
+type UsageSummaryData = Awaited<ReturnType<NonNullable<Window["metisUsage"]>["summary"]>>;
+
+/** Finds the $/Mtok pricing of the catalog route matching the SERVING
+ *  provider + model id recorded on a ledger row (docs/DRILL_PLAN.md B12.2).
+ *  Null when unknown - unknown never renders as $0, it renders as a dash. */
+function usageRoutePricing(catalog: CatalogModel[], provider: string, model: string): { in: number; out: number } | null {
+  for (const entry of catalog) {
+    const route = (entry.access ?? []).find((candidate) => candidate.provider === provider && candidate.id === model);
+    if (route?.pricing) return route.pricing;
+  }
+  return null;
+}
+
+/** Display-only cost estimate for one usage rollup row. Local (ollama) rows
+ *  are honestly "Free"; rows with no known route pricing get a dash rather
+ *  than a fake zero; estimated token counts get a ~ prefix. */
+function usageCostLabel(catalog: CatalogModel[], row: { provider: string; model: string; inputTokens: number; outputTokens: number; estimated: boolean }): string {
+  if (row.provider === "ollama") return "Free";
+  const pricing = usageRoutePricing(catalog, row.provider, row.model);
+  if (!pricing) return "—";
+  const cost = (row.inputTokens * pricing.in + row.outputTokens * pricing.out) / 1_000_000;
+  const prefix = row.estimated ? "~" : "";
+  return cost >= 0.01 ? `${prefix}$${cost.toFixed(2)}` : `${prefix}<$0.01`;
 }
 
 function SettingsWorkspace({
@@ -14233,6 +14342,48 @@ function SettingsWorkspace({
   // OFF by default.
   const [mcpToolsEnabled, setMcpToolsEnabled] = useAppStoreState("mcpToolsEnabled", false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  // --- Usage tab (docs/DRILL_PLAN.md B12.2/B12.7) ---
+  // Summary comes from the local usage ledger via metisUsage; catalog is only
+  // for per-route $/Mtok rates. Cost figures are DISPLAY estimates from list
+  // prices, clearly marked, never billing.
+  const [usageSummary, setUsageSummary] = useState<UsageSummaryData | null>(null);
+  const [usageCatalog, setUsageCatalog] = useState<CatalogModel[]>([]);
+  const [usageLimitDrafts, setUsageLimitDrafts] = useState<{ fourHour: string; weekly: string; wallet: string }>({ fourHour: "", weekly: "", wallet: "" });
+  useEffect(() => {
+    if (section !== "usage" || !window.metisUsage) return;
+    let alive = true;
+    void window.metisUsage.summary().then((summary) => {
+      if (!alive) return;
+      setUsageSummary(summary);
+      setUsageLimitDrafts({
+        fourHour: summary.limits.fourHourTokens ? String(summary.limits.fourHourTokens) : "",
+        weekly: summary.limits.weeklyTokens ? String(summary.limits.weeklyTokens) : "",
+        wallet: summary.limits.walletTokens ? String(summary.limits.walletTokens) : ""
+      });
+    });
+    void window.metisCatalog
+      ?.models()
+      .then((state) => {
+        if (alive) setUsageCatalog(state.models);
+      })
+      .catch(() => undefined);
+    return () => {
+      alive = false;
+    };
+  }, [section]);
+  async function saveUsageLimits(): Promise<void> {
+    if (!window.metisUsage) return;
+    const parse = (raw: string): number | undefined => {
+      const value = Number(raw.replace(/[,\s]/g, ""));
+      return Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+    };
+    const limits = await window.metisUsage.setLimits({
+      fourHourTokens: parse(usageLimitDrafts.fourHour),
+      weeklyTokens: parse(usageLimitDrafts.weekly),
+      walletTokens: parse(usageLimitDrafts.wallet)
+    });
+    setUsageSummary((current) => (current ? { ...current, limits } : current));
+  }
   const [updateBusy, setUpdateBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [exportResult, setExportResult] = useState<ConversationExportResult | null>(null);
@@ -15123,6 +15274,116 @@ function SettingsWorkspace({
               Add from Marketplace
             </button>
           </div>
+        </article>
+      </section>
+      ) : null}
+
+      {section === "usage" ? (
+      <section className="settings-grid">
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Windows</small>
+              <h2>Recent usage</h2>
+            </span>
+            {usageSummary?.since ? <span className="status-pill">since {new Date(usageSummary.since).toLocaleDateString()}</span> : null}
+          </header>
+          {!window.metisUsage ? (
+            <p>Usage metering needs the desktop app.</p>
+          ) : !usageSummary ? (
+            <p>Loading…</p>
+          ) : (
+            <div className="usage-windows">
+              <div className="usage-window-card">
+                <strong>{formatTokenCount(usageSummary.last4h.totalTokens)}</strong>
+                <small>tokens · last 4 hours · {usageSummary.last4h.runs} runs</small>
+                {usageSummary.limits.fourHourTokens ? (
+                  <em>{Math.min(100, Math.round((usageSummary.last4h.totalTokens / usageSummary.limits.fourHourTokens) * 100))}% of your 4-hour limit</em>
+                ) : null}
+              </div>
+              <div className="usage-window-card">
+                <strong>{formatTokenCount(usageSummary.last7d.totalTokens)}</strong>
+                <small>tokens · last 7 days · {usageSummary.last7d.runs} runs</small>
+                {usageSummary.limits.weeklyTokens ? (
+                  <em>{Math.min(100, Math.round((usageSummary.last7d.totalTokens / usageSummary.limits.weeklyTokens) * 100))}% of your weekly limit</em>
+                ) : null}
+              </div>
+            </div>
+          )}
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Limits</small>
+              <h2>Usage limits</h2>
+            </span>
+          </header>
+          <p className="settings-hint">Display-only for now: the ring by the composer and the meters above track these. Nothing is throttled yet. Leave a field empty for no limit.</p>
+          <label className="settings-field">
+            <span>4-hour window (tokens)</span>
+            <input type="text" inputMode="numeric" placeholder="e.g. 500000" value={usageLimitDrafts.fourHour} onChange={(event) => setUsageLimitDrafts((current) => ({ ...current, fourHour: event.target.value }))} />
+          </label>
+          <label className="settings-field">
+            <span>Weekly (tokens)</span>
+            <input type="text" inputMode="numeric" placeholder="e.g. 5000000" value={usageLimitDrafts.weekly} onChange={(event) => setUsageLimitDrafts((current) => ({ ...current, weekly: event.target.value }))} />
+          </label>
+          <label className="settings-field">
+            <span>Wallet top-up (tokens)</span>
+            <input type="text" inputMode="numeric" placeholder="extra headroom beyond the window" value={usageLimitDrafts.wallet} onChange={(event) => setUsageLimitDrafts((current) => ({ ...current, wallet: event.target.value }))} />
+          </label>
+          <div className="panel-actions">
+            <button type="button" disabled={!window.metisUsage} onClick={() => void saveUsageLimits()}>
+              Save limits
+            </button>
+          </div>
+        </article>
+
+        <article className="settings-panel usage-tables-panel">
+          <header>
+            <span>
+              <small>Breakdown</small>
+              <h2>By provider and model</h2>
+            </span>
+          </header>
+          <p className="settings-hint">Provider here is the route that actually served the call (your exact gateway use). Costs are estimates from catalog list prices; ~ marks estimated token counts; local is free.</p>
+          {usageSummary && usageSummary.byProvider.length > 0 ? (
+            <>
+              <table className="usage-table">
+                <thead>
+                  <tr><th>Provider</th><th>Runs</th><th>In</th><th>Out</th></tr>
+                </thead>
+                <tbody>
+                  {usageSummary.byProvider.map((row) => (
+                    <tr key={row.provider}>
+                      <td>{row.provider}</td>
+                      <td>{row.runs}</td>
+                      <td>{row.estimated ? "~" : ""}{formatTokenCount(row.inputTokens)}</td>
+                      <td>{row.estimated ? "~" : ""}{formatTokenCount(row.outputTokens)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <table className="usage-table">
+                <thead>
+                  <tr><th>Model</th><th>Route</th><th>Runs</th><th>Tokens</th><th>Cost</th></tr>
+                </thead>
+                <tbody>
+                  {usageSummary.byModel.map((row) => (
+                    <tr key={`${row.provider}|${row.model}`}>
+                      <td className="usage-model-cell" title={row.model}>{row.model}</td>
+                      <td>{row.provider}</td>
+                      <td>{row.runs}</td>
+                      <td>{row.estimated ? "~" : ""}{formatTokenCount(row.inputTokens + row.outputTokens)}</td>
+                      <td>{usageCostLabel(usageCatalog, row)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          ) : (
+            <p>No metered runs yet — usage appears here as you use Metis.</p>
+          )}
         </article>
       </section>
       ) : null}

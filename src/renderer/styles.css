@@ -13716,3 +13716,215 @@ a:focus-visible,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* --- Oracle cosmetic pass (B12, "shipped feature" treatment) ---
+   Same slim greyscale language, but with an identity: a soft breathing
+   sparkle when idle-ready, a shimmer sweep while warming, a faint white
+   halo when warm, and a popover with a proper wordmark head + tagline
+   foot. All motion is subtle and disabled under prefers-reduced-motion. */
+.oracle-chip {
+  position: relative;
+  overflow: hidden;
+}
+.oracle-chip.warming::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 30%, rgb(255 255 255 / 0.07) 50%, transparent 70%);
+  animation: oracle-shimmer 1.6s linear infinite;
+  pointer-events: none;
+}
+@keyframes oracle-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+.oracle-chip.warm {
+  border-color: rgb(255 255 255 / 0.22);
+  box-shadow: 0 0 10px rgb(255 255 255 / 0.05), inset 0 0 6px rgb(255 255 255 / 0.03);
+}
+.oracle-chip.warm svg {
+  color: var(--text);
+}
+.oracle-chip-dot {
+  animation: oracle-dot-breathe 2.4s ease-in-out infinite;
+}
+@keyframes oracle-dot-breathe {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.25); }
+}
+.oracle-log-popover {
+  width: 280px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
+}
+.oracle-log-popover > * {
+  margin-left: 10px;
+  margin-right: 10px;
+}
+.oracle-popover-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 10px 8px;
+  border-bottom: 1px solid var(--line);
+  background: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent);
+}
+.oracle-wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text);
+}
+.oracle-wordmark svg {
+  color: var(--soft);
+}
+.oracle-status {
+  font-size: 10.5px;
+  color: var(--faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.oracle-status.warm {
+  color: var(--soft);
+}
+.oracle-draft-block {
+  margin-top: 8px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-left: 2px solid rgb(255 255 255 / 0.3);
+  border-radius: 8px;
+  border-bottom: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.015);
+}
+.oracle-live-caret {
+  display: inline-block;
+  width: 6px;
+  height: 10px;
+  margin-left: 6px;
+  background: var(--soft);
+  animation: oracle-caret 1s steps(2) infinite;
+  vertical-align: baseline;
+}
+@keyframes oracle-caret {
+  50% { opacity: 0; }
+}
+.oracle-log-heading {
+  margin: 8px 0 2px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.oracle-popover-foot {
+  margin: 6px 0 0;
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  font-style: italic;
+  color: var(--faint);
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+.oracle-log-popover > .oracle-popover-head,
+.oracle-log-popover > .oracle-popover-foot {
+  margin-left: 0;
+  margin-right: 0;
+}
+.oracle-log-popover > :nth-last-child(2) {
+  margin-bottom: 8px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .oracle-chip.warming::after,
+  .oracle-chip-dot,
+  .oracle-live-caret {
+    animation: none;
+  }
+}
+
+/* --- Usage ring + Usage tab (DRILL_PLAN B12.2/B12.7) --- */
+/* The ring fills WHITE as the rolling 4-hour window is consumed (Lachy's
+   ask); the track stays a faint line so an empty ring reads as calm, not
+   broken. Sits beside the Oracle chip; only rendered when Oracle is on. */
+.usage-ring {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+.usage-ring-track {
+  stroke: var(--line);
+}
+.usage-ring-fill {
+  stroke: #fff;
+  transition: stroke-dashoffset 600ms ease;
+}
+.usage-windows {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.usage-window-card {
+  flex: 1 1 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--node);
+}
+.usage-window-card strong {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+.usage-window-card small {
+  font-size: 11px;
+  color: var(--muted);
+}
+.usage-window-card em {
+  font-size: 11px;
+  font-style: normal;
+  color: var(--soft);
+}
+.usage-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 8px;
+}
+.usage-table th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--line);
+}
+.usage-table td {
+  padding: 5px 8px;
+  color: var(--muted);
+  border-bottom: 1px solid var(--line);
+}
+.usage-table tr:last-child td {
+  border-bottom: none;
+}
+.usage-table td:first-child {
+  color: var(--text);
+}
+.usage-model-cell {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

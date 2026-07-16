@@ -128,3 +128,23 @@ Settings > Providers.
   correctly (same brand fix as the gateway picker).
 - [ ] A plain chat on Auto Router with every new flag OFF behaves exactly like last week —
   the whole batch is supposed to be invisible until opted into.
+
+---
+
+## 11. Usage tab + the ring + Oracle's glow-up (added later on 2026-07-16)
+
+- [ ] **Usage tab exists and fills.** Settings > Usage (System group). Run a few chats first,
+  then open it: window cards for last 4h / last 7d, a provider table, and a model table with a
+  Cost column - local rows say "Free", cloud rows show a $ estimate from catalog list prices,
+  ~ marks estimated token counts. "Provider" in the tables is the route that actually served.
+- [ ] **Limits save.** Set a 4-hour limit (try something small like 20000 so you can watch it
+  fill), Save limits, reopen the tab - the window card should now show "% of your 4-hour
+  limit". The UI says display-only; nothing should ever throttle.
+- [ ] **The ring.** With Oracle (prewarm) enabled, look beside the Oracle chip in the
+  composer: a small ring. With your small 4h limit set, chat a bit - the ring should fill
+  with WHITE as tokens burn (updates within a minute; hover for the exact numbers). Turn
+  prewarm off: the ring disappears (BYO users never see it).
+- [ ] **Oracle looks shipped.** Open the Oracle popover: wordmark header with a live status
+  line, the guess in a carded block (with a blinking caret while it's still forming), a
+  RECENT WARMS section, and the tagline footer. While warming, the chip should have a subtle
+  shimmer sweep; when warm, a faint white halo. Nothing should flash or feel busy at idle.

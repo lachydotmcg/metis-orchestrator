@@ -148,6 +148,40 @@ declare global {
     metisPulse?: {
       feed: () => Promise<PulseFeed>;
     };
+    // DRILL_PLAN B12.2/B12.7 — usage metering (Usage tab in Settings) +
+    // usage limits (the ring). Shapes are declared inline here rather than
+    // in shared/runtime-contracts.ts since this bridge is metering-only and
+    // has no SessionRun-side counterpart to share a type with. Display-only
+    // in this pass: setLimits persists the numbers, main.ts does not yet
+    // throttle or warn against them.
+    metisUsage?: {
+      summary: () => Promise<{
+        byProvider: Array<{
+          provider: string;
+          runs: number;
+          inputTokens: number;
+          outputTokens: number;
+          estimated: boolean;
+        }>;
+        byModel: Array<{
+          provider: string;
+          model: string;
+          runs: number;
+          inputTokens: number;
+          outputTokens: number;
+          estimated: boolean;
+        }>;
+        last4h: { runs: number; totalTokens: number };
+        last7d: { runs: number; totalTokens: number };
+        limits: { fourHourTokens?: number; weeklyTokens?: number; walletTokens?: number };
+        since: string | null;
+      }>;
+      setLimits: (patch: {
+        fourHourTokens?: number;
+        weeklyTokens?: number;
+        walletTokens?: number;
+      }) => Promise<{ fourHourTokens?: number; weeklyTokens?: number; walletTokens?: number }>;
+    };
     metisRoutines?: {
       list: () => Promise<Routine[]>;
       save: (routine: Routine) => Promise<Routine>;

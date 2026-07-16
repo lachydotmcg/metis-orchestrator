@@ -4505,6 +4505,182 @@ async function writeSessionRuns(runs: SessionRun[]): Promise<void> {
 async function writeSessionRun(run: SessionRun): Promise<void> {
   const current = await readSessionRuns();
   await writeSessionRuns([run, ...current]);
+  // Usage metering (DRILL_PLAN B12.2/B12.7): sessionRuns above is capped at
+  // the most recent 100 (writeSessionRuns), so it is NOT a durable usage
+  // record — a busy day rolls old runs off the list entirely. This ledger is
+  // the durable record: one small entry per completed run with a real
+  // provider result, capped generously (5000) instead of 100. Fail-soft by
+  // design — a ledger read/write problem must never break a run, so every
+  // failure here is swallowed after the run itself has already been written
+  // above.
+  try {
+    await appendUsageLedgerEntry(run);
+  } catch {
+    // Ledger is best-effort telemetry, not run-critical.
+  }
+}
+
+/** One row of the durable usage ledger (DRILL_PLAN B12.2/B12.7). Only
+ *  emitted for runs that actually produced a provider result — chat stubs,
+ *  policy-only answers, and other no-model-call runs carry nothing to meter
+ *  and are skipped. */
+interface UsageLedgerEntry {
+  at: string;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  estimated?: boolean;
+  oracleServed?: boolean;
+}
+
+async function appendUsageLedgerEntry(run: SessionRun): Promise<void> {
+  const result = run.providerResult;
+  if (!result) return;
+  const entry: UsageLedgerEntry = {
+    at: run.completedAt || new Date().toISOString(),
+    provider: result.provider,
+    model: result.model,
+    inputTokens: result.usage?.inputTokens ?? 0,
+    outputTokens: result.usage?.outputTokens ?? 0,
+    estimated: result.usage?.estimated,
+    oracleServed: run.oracleServed
+  };
+  const current = await readStoreValue<UsageLedgerEntry[]>("usageLedger", []);
+  const next = [...current, entry].slice(-5000);
+  await writeStoreValue("usageLedger", next);
+}
+
+/** DRILL_PLAN B12.7 — usage limits are stored/exposed here for display only
+ *  in this pass. Nothing in main.ts reads these values to throttle, refuse,
+ *  or warn about a run; they exist purely so the Settings ring/usage UI has
+ *  somewhere to persist the numbers the user sets. Enforcement is a
+ *  deliberately separate follow-up round. */
+interface UsageLimits {
+  fourHourTokens?: number;
+  weeklyTokens?: number;
+  walletTokens?: number;
+}
+
+async function readUsageLimits(): Promise<UsageLimits> {
+  return readStoreValue<UsageLimits>("usageLimits", {});
+}
+
+async function writeUsageLimits(patch: Partial<UsageLimits>): Promise<UsageLimits> {
+  const current = await readUsageLimits();
+  const next: UsageLimits = { ...current, ...patch };
+  await writeStoreValue("usageLimits", next);
+  return next;
+}
+
+interface UsageProviderRollup {
+  provider: string;
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimated: boolean;
+}
+
+interface UsageModelRollup {
+  provider: string;
+  model: string;
+  runs: number;
+  inputTokens: number;
+  outputTokens: number;
+  estimated: boolean;
+}
+
+interface UsageSummary {
+  byProvider: UsageProviderRollup[];
+  byModel: UsageModelRollup[];
+  last4h: { runs: number; totalTokens: number };
+  last7d: { runs: number; totalTokens: number };
+  limits: UsageLimits;
+  since: string | null;
+}
+
+/** DRILL_PLAN B12.2 — Usage tab in Settings. Rolls the durable ledger up
+ *  into per-provider / per-model totals plus rolling 4h/7d windows. Every
+ *  rollup's `estimated` flips true the moment ANY contributing entry was
+ *  estimated (usage.estimated on a ProviderInvokeResult means the provider
+ *  didn't return real token counts and main.ts approximated them) — an
+ *  honest "estimated" label beats a falsely precise number. */
+async function computeUsageSummary(): Promise<UsageSummary> {
+  const ledger = await readStoreValue<UsageLedgerEntry[]>("usageLedger", []);
+  const limits = await readUsageLimits();
+
+  const providerMap = new Map<string, UsageProviderRollup>();
+  const modelMap = new Map<string, UsageModelRollup>();
+  let since: string | null = null;
+
+  const now = Date.now();
+  const fourHoursAgo = now - 4 * 60 * 60 * 1000;
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  let last4hRuns = 0;
+  let last4hTokens = 0;
+  let last7dRuns = 0;
+  let last7dTokens = 0;
+
+  for (const entry of ledger) {
+    if (since === null || entry.at < since) since = entry.at;
+
+    const providerRow = providerMap.get(entry.provider) ?? {
+      provider: entry.provider,
+      runs: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimated: false
+    };
+    providerRow.runs += 1;
+    providerRow.inputTokens += entry.inputTokens;
+    providerRow.outputTokens += entry.outputTokens;
+    providerRow.estimated = providerRow.estimated || Boolean(entry.estimated);
+    providerMap.set(entry.provider, providerRow);
+
+    const modelKey = `${entry.provider}::${entry.model}`;
+    const modelRow = modelMap.get(modelKey) ?? {
+      provider: entry.provider,
+      model: entry.model,
+      runs: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      estimated: false
+    };
+    modelRow.runs += 1;
+    modelRow.inputTokens += entry.inputTokens;
+    modelRow.outputTokens += entry.outputTokens;
+    modelRow.estimated = modelRow.estimated || Boolean(entry.estimated);
+    modelMap.set(modelKey, modelRow);
+
+    const entryMs = Date.parse(entry.at);
+    const entryTokens = entry.inputTokens + entry.outputTokens;
+    if (!Number.isNaN(entryMs)) {
+      if (entryMs >= fourHoursAgo) {
+        last4hRuns += 1;
+        last4hTokens += entryTokens;
+      }
+      if (entryMs >= sevenDaysAgo) {
+        last7dRuns += 1;
+        last7dTokens += entryTokens;
+      }
+    }
+  }
+
+  const totalTokens = (row: { inputTokens: number; outputTokens: number }) => row.inputTokens + row.outputTokens;
+
+  const byProvider = [...providerMap.values()].sort((a, b) => totalTokens(b) - totalTokens(a));
+  const byModel = [...modelMap.values()]
+    .sort((a, b) => totalTokens(b) - totalTokens(a))
+    .slice(0, 40);
+
+  return {
+    byProvider,
+    byModel,
+    last4h: { runs: last4hRuns, totalTokens: last4hTokens },
+    last7d: { runs: last7dRuns, totalTokens: last7dTokens },
+    limits,
+    since
+  };
 }
 
 async function readConversations(): Promise<ConversationRecord[]> {
@@ -11307,6 +11483,13 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-routines:run-now", (_event, id: string) => runRoutineNow(id));
   // I9.4: plan-only preview of what a routine would do - never mutates the routine.
   ipcMain.handle("metis-routines:dry-run", (_event, id: string) => dryRunRoutine(id));
+  // DRILL_PLAN B12.2/B12.7 — usage metering + limits. summary is read-only
+  // (computed from the usageLedger store key on every call, cheap even at the
+  // 5000-entry cap); set-limits is a partial patch, display-only in this pass
+  // (see the UsageLimits comment above readUsageLimits — nothing enforces
+  // these yet).
+  ipcMain.handle("metis-usage:summary", () => computeUsageSummary());
+  ipcMain.handle("metis-usage:set-limits", (_event, patch: Partial<UsageLimits>) => writeUsageLimits(patch ?? {}));
   ipcMain.handle("metis-manager:chat", (_event, history: ManagerChatMessage[]) => runManagerChat(history));
   // Streaming sibling of metis-manager:chat (docs/DRILL_PLAN.md Phase 8) —
   // mirrors metis-session:run-stream's streamId + sender.send pattern exactly.

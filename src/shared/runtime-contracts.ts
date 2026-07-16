@@ -409,6 +409,11 @@ export interface RegistryState {
 export interface ModelAccessRoute {
   provider: ProviderKey;
   id: string;
+  /** USD per million tokens for this route (docs/DRILL_PLAN.md B12.2) —
+   *  carried by the registry catalog for cloud routes; omitted on local
+   *  routes (omission means free). Best-effort list prices, used only for
+   *  the Usage tab's cost display, never for billing. */
+  pricing?: { in: number; out: number };
 }
 
 /** `catalog/models.json` entry from the live community registry

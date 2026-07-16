@@ -160,6 +160,19 @@ contextBridge.exposeInMainWorld("metisPulse", {
   feed: () => ipcRenderer.invoke("metis-pulse:feed")
 });
 
+// DRILL_PLAN B12.2/B12.7 — usage metering (Usage tab) + usage limits (the
+// ring). summary() is read-only and cheap to poll; setLimits() is a partial
+// patch of the usageLimits store key. Display-only in this pass — main.ts
+// does not enforce these limits yet, see the comment on UsageLimits there.
+contextBridge.exposeInMainWorld("metisUsage", {
+  summary: () => ipcRenderer.invoke("metis-usage:summary"),
+  setLimits: (patch: {
+    fourHourTokens?: number;
+    weeklyTokens?: number;
+    walletTokens?: number;
+  }) => ipcRenderer.invoke("metis-usage:set-limits", patch)
+});
+
 contextBridge.exposeInMainWorld("metisRoutines", {
   list: () => ipcRenderer.invoke("metis-routines:list") as Promise<Routine[]>,
   save: (routine: Routine) => ipcRenderer.invoke("metis-routines:save", routine) as Promise<Routine>,

@@ -108,13 +108,33 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   facts/decisions (knowledge banks + conversation embeddings are the substrate), link-optimized
   between files. Everything local, nothing leaves the machine. Research: RouteLLM-family
   preference routing is validated (2x+ cost cut, no quality loss); nobody does it local+personal.
-- [ ] **B12.2 [P1] - Usage tab in Settings.** Per-provider / per-model / per-GATEWAY (actual
+- [x] **B12.2 [P1] - Usage tab in Settings.** Per-provider / per-model / per-GATEWAY (actual
   route served) token + call counts, daily/monthly rollups; cost from per-route $/Mtok rates
   added to the registry catalog (estimated-usage runs flagged as estimates); local-inference
   cost as duration x configurable wattage x electricity rate (the marketing screenshot number).
   Same metering pipeline later becomes the billing engine for managed plans ($25/$80, token
   wallet at measured cost + margin per the L23 business doc) - build for BYO now, billing
   inherits it.
+  SHIPPED: rolling usageLedger store (append per completed run in writeSessionRun, cap 5000 -
+  sessionRuns only keeps 100 so the ledger is the durable record); metis-usage:summary
+  (byProvider/byModel sorted, last4h/last7d windows, limits, since) + metis-usage:set-limits;
+  registry catalog carries pricing {in,out} USD/Mtok on all 46 cloud routes (9ef114f, local =
+  free by omission, ModelAccessRoute.pricing added to contracts); Settings > Usage tab: window
+  cards with percent-of-limit, limits editor, provider table, model table with per-route cost
+  estimates (Free for ollama, dash for unknown, ~ for estimated counts). Follow-ups: local
+  wattage cost estimate; pricing for the cloud sub-routes on local-tier entries; enforcement.
+- [x] **B12.7 [P1, Lachy live-add] - Usage limits + the RING.** 4-hour window / weekly / wallet
+  top-up limit fields (usageLimits store, display-only in this pass - nothing throttles yet,
+  said honestly in the UI) and a small ring beside the Oracle chip that FILLS WITH WHITE as
+  the rolling 4h window is consumed - only rendered when Oracle is enabled (pure BYO never
+  sees it), empty-track tooltip points to Settings > Usage when no limit is set, polls the
+  ledger every 60s. NEEDS-LIVE-TEST alongside the Usage tab.
+- [x] **B12.8 [Lachy live-add] - Oracle cosmetic pass (shipped-feature treatment).** Chip:
+  shimmer sweep while warming, faint white halo + bright sparkle when warm, breathing
+  draft-ready dot. Popover: wordmark head (Oracle + live status line), carded guess block with
+  streaming caret while warming, RECENT WARMS section heading, tagline foot (Answers before
+  you finish asking), 280px, blur backdrop. All greyscale, all honest, reduced-motion safe.
+  NEEDS-LIVE-TEST.
 - [ ] **B12.3 [P2] - Oracle v0.4 similarity serving.** NOT a response cache: serve the draft
   generated seconds ago from the 95%-final prompt when the sent prompt differs only
   cosmetically. Embed draft-prompt vs sent-prompt locally (nomic-embed already in the stack),
