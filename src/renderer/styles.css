@@ -13676,3 +13676,46 @@ a:focus-visible,
   font-size: 11px;
   color: var(--muted);
 }
+
+/* --- Per-model gateways (DRILL_PLAN B11.3) --- */
+/* Model tiles on canvas nodes are click targets for gateway config: a clean
+   click (under the drag threshold) opens that model's gateways in the
+   inspector; dragging still moves the node as before. */
+.graph-node .model-clickable {
+  cursor: pointer;
+}
+.graph-node .node-fallbacks .fallback-dot.model-clickable:hover {
+  transform: scale(1.12);
+}
+.gateway-model-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.gateway-model-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px 4px 5px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+  max-width: 100%;
+}
+.gateway-model-chip span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gateway-model-chip:hover {
+  color: var(--text);
+  background: var(--node);
+}
+.gateway-model-chip.active {
+  color: var(--text);
+  border-color: var(--text);
+  background: var(--node);
+}

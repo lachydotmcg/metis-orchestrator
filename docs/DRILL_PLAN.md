@@ -89,6 +89,25 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ## ★ LACHY BATCH 11 (2026-07-15, depths + gateway fix)
 
+- [x] **B11.3 - Gateways move from the NODE to each MODEL (Lachy).** Nodes now hold multiple
+  models (primary + fallback chain + depth levels L1-L3), so a node-level gateway is the wrong
+  granularity - the gateway is a property of a specific model, a huge variable per model. Rework:
+  clicking a MODEL inside the node (its tile/row - CAREFUL to disambiguate click from drag, use a
+  small movement threshold like the manager fab drag fix) opens that model s gateway config
+  (gateway + ordered gateway fallbacks, same interaction pattern as today s node-level control but
+  scoped to the clicked model). Data: gateway/gatewayFallbacks move onto each ModelRef-carrying
+  slot ({ provider, model, gateway?, gatewayFallbacks? }); MIGRATE existing node-level
+  gateway/gatewayFallbacks onto the primary model on load (keep reading old fields, write new).
+  projectGraphPipeline + expandStageRef must consume per-model gateways per chain entry. Pairs
+  with B11.1 (the picker must list every catalog access route for THAT model).
+  SHIPPED (Fable direct): NodeModelSlot fallback entries carry gateway/gatewayFallbacks; the
+  primary model's config stays on the node fields (which IS the migration - old graphs' node
+  pin becomes the primary's pin); inspector Gateway section is scoped by a per-model chips row;
+  canvas primary logo + fallback dots are click targets with a 5px drag threshold
+  (NODE_DRAG_THRESHOLD_PX) so drags still move the node; promoteFallback swaps gateway configs
+  with the models; StageModelRef.routePreference rides each chain entry through
+  expandChainByRoutes. NEEDS-LIVE-TEST. Follow-ups: depth-level models (L1-L3) do not carry
+  per-model gateways yet; B11.1 catalog-route population still open.
 - [ ] **B11.1 - Correct gateways per model/provider in the Orchestration UI.** Lachy: DeepSeek
   still only shows DeepSeek as its api/gateway option in the node Gateway control. The registry
   catalog's access[] routes already model multi-gateway (e.g. DeepSeek via deepseek native,

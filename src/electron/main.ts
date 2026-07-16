@@ -4617,7 +4617,14 @@ async function recentConversationContext(conversationId?: string, maxTurns = 6):
   return block || null;
 }
 
-type StageModelRef = { provider: ProviderKey; model: string };
+// `routePreference` (docs/DRILL_PLAN.md B11.3, per-MODEL gateways): an ordered
+// [gateway, ...gatewayFallbacks] route list carried BY the chain entry itself,
+// so every model in a stage chain (not just the primary) can pin its own
+// routes. expandChainByRoutes honors it per entry; entries without one keep
+// the old behavior (primaryPreference for chain[0], default gateways/health
+// ordering for the rest). Optional everywhere - existing StageModelRef
+// literals never need to set it.
+type StageModelRef = { provider: ProviderKey; model: string; routePreference?: ProviderKey[] };
 // `gatewayPreference` (docs/FABLE_PLANS.md section 25) is the ordered route
 // preference for this stage's PRIMARY model only (a graph node's "Gateway" +
 // "Gateway fallbacks" controls — formerly a single "Access via" pin):
@@ -4782,9 +4789,22 @@ function graphAgenticStages(config: GraphPipelineConfig, prompt: string, overrid
 
   const stages: StageConfig[] = usable.map((stage, index) => {
     const primary: StageModelRef = { provider: stage.provider, model: resolveGraphStageModel(stage.provider, stage.model) };
+    // Per-MODEL gateways (docs/DRILL_PLAN.md B11.3): each fallback entry may
+    // carry its own gateway + gateway fallbacks now that gateways live on the
+    // model, not the node. They ride along as the chain entry's
+    // routePreference so expandChainByRoutes applies them to THAT entry.
     const fallbackRefs: StageModelRef[] = stage.fallback
       .filter((ref) => isKnownProvider(ref.provider) && ref.model.trim().length > 0)
-      .map((ref) => ({ provider: ref.provider, model: resolveGraphStageModel(ref.provider, ref.model) }));
+      .map((ref) => {
+        const refGateway = ref.gateway && isKnownProvider(ref.gateway) ? ref.gateway : undefined;
+        const refGatewayFallbacks = (ref.gatewayFallbacks ?? []).filter((provider): provider is ProviderKey => isKnownProvider(provider));
+        const routePreference = refGateway
+          ? [refGateway, ...refGatewayFallbacks.filter((provider) => provider !== refGateway)]
+          : refGatewayFallbacks.length > 0
+            ? refGatewayFallbacks
+            : undefined;
+        return { provider: ref.provider, model: resolveGraphStageModel(ref.provider, ref.model), routePreference };
+      });
     // Gateway + gateway fallbacks (docs/FABLE_PLANS.md section 25): the
     // renderer sends `gateway`/`gatewayFallbacks` for graphs authored with the
     // new NodeInspector controls; older persisted graphs (or older renderer
@@ -5733,11 +5753,13 @@ async function expandStageRef(ref: StageModelRef, preference?: ProviderKey[]): P
  *
  *  `primaryPreference` (docs/FABLE_PLANS.md section 25) is a node's ordered
  *  [gateway, ...gatewayFallbacks] list (generalized from the old single
- *  "Access via" pin) — it only ever applies to the chain's FIRST entry (the
- *  stage's own primary model), never to fallback entries, which keep
- *  resolving through their own defaultGateways/health ordering. */
+ *  "Access via" pin) — it applies to the chain's FIRST entry (the stage's own
+ *  primary model). Per-MODEL gateways (docs/DRILL_PLAN.md B11.3): a chain
+ *  entry carrying its own `routePreference` wins over both — every model in
+ *  the chain can pin its own routes now, and entries without one keep the old
+ *  defaultGateways/health ordering. */
 async function expandChainByRoutes(chain: StageModelRef[], primaryPreference?: ProviderKey[]): Promise<StageModelRef[]> {
-  const expandedGroups = await Promise.all(chain.map((ref, index) => expandStageRef(ref, index === 0 ? primaryPreference : undefined)));
+  const expandedGroups = await Promise.all(chain.map((ref, index) => expandStageRef(ref, ref.routePreference ?? (index === 0 ? primaryPreference : undefined))));
   const seen = new Set<string>();
   const result: StageModelRef[] = [];
   for (const group of expandedGroups) {

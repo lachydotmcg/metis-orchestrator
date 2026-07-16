@@ -209,6 +209,13 @@ type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize
 const SLASH_SUMMARIZE_PROMPT = "Summarize this conversation so far: key decisions, open questions, next steps. Be concise.";
 type ProjectFolder = { name: string; latest: string; age: string; path?: string };
 
+/** One model slot inside a graph node's fallback chain (docs/DRILL_PLAN.md
+ *  B11.3): gateways are per-MODEL now, not per-node, because a node holds
+ *  several models (primary + fallback chain). Each slot can pin its own
+ *  gateway + ordered gateway fallbacks; plain old ModelRef entries persisted
+ *  by earlier builds simply have neither field and keep Auto routing. */
+type NodeModelSlot = ModelRef & { gateway?: ProviderId; gatewayFallbacks?: ProviderId[] };
+
 type GraphNode = {
   id: string;
   kind: NodeKind;
@@ -216,7 +223,7 @@ type GraphNode = {
   pos: Vec;
   provider?: ProviderId;
   model?: string;
-  fallbacks?: ModelRef[];
+  fallbacks?: NodeModelSlot[];
   intent?: string;
   skills?: string[];
   temperature?: number;
@@ -226,14 +233,15 @@ type GraphNode = {
    *  `gateway` set becomes the node's `gateway`. Not written by the
    *  NodeInspector anymore; do not read it directly elsewhere. */
   accessVia?: ProviderId;
-  /** Gateway (docs/FABLE_PLANS.md section 25, renamed from "Access via"):
-   *  pins this node's primary model to a specific route provider instead of
-   *  Auto resolution. Persisted with the rest of the graph node state (see
-   *  the GraphWorkspace localStorage effect) and projected into
-   *  GraphPipelineStage.gateway by projectGraphPipeline for main.ts to
-   *  consume as the stage's first route preference. */
+  /** The PRIMARY model's gateway (docs/DRILL_PLAN.md B11.3 reinterpretation
+   *  of the section-25 field): gateways are per-model now, and since the
+   *  primary model lives directly on the node as `provider`/`model`, its
+   *  gateway keeps living here too - which is also the migration story, old
+   *  persisted graphs' node-level pin simply becomes the primary model's pin.
+   *  Fallback-chain models carry their own gateway on their NodeModelSlot.
+   *  Projected into GraphPipelineStage.gateway by projectGraphPipeline. */
   gateway?: ProviderId;
-  /** Gateway fallbacks (docs/FABLE_PLANS.md section 25): an ordered list of
+  /** The PRIMARY model's ordered gateway fallbacks (see `gateway` above):
    *  additional route providers to try, in order, after `gateway` and before
    *  falling through to the model's remaining routes by health. Mirrors the
    *  per-node model fallback chain's interaction pattern (add/remove/promote). */
@@ -7355,8 +7363,23 @@ const samplePreviewDecision: PolicyDecisionResult["decision"] = {
 
 type Interaction =
   | { type: "pan"; startClient: Vec; startPan: Vec }
-  | { type: "node"; id: string; offset: Vec; isSkill: boolean; moved: boolean }
+  // `startClient` + `modelTarget` (docs/DRILL_PLAN.md B11.3): a pointerdown on
+  // a model INSIDE the node (the primary logo or a fallback dot) starts a
+  // normal node drag, but if the pointer never travels past the small
+  // NODE_DRAG_THRESHOLD_PX it was a CLICK on that model - which opens that
+  // model's gateway config in the inspector instead of just selecting.
+  | { type: "node"; id: string; offset: Vec; isSkill: boolean; moved: boolean; startClient: Vec; modelTarget?: GatewayTarget }
   | null;
+
+/** Which model of a node a gateway interaction addresses: the primary model,
+ *  or a fallback-chain slot by index (docs/DRILL_PLAN.md B11.3). */
+type GatewayTarget = "primary" | number;
+
+/** Client-space pixels a node pointerdown may travel and still count as a
+ *  click (same disambiguation trick as the Manager fab's drag fix): below
+ *  this, pointerup on a model tile opens its gateway config; beyond it, the
+ *  gesture is a drag and the node moves. */
+const NODE_DRAG_THRESHOLD_PX = 5;
 
 /** Migrates a single persisted node's legacy `accessVia` pin onto the new
  *  `gateway` field (docs/FABLE_PLANS.md section 25 update) — old graphs saved
@@ -7423,9 +7446,23 @@ function projectGraphPipeline(nodes: GraphNode[]): GraphPipelineConfig {
     if (!node.provider || !node.model?.trim()) continue;
     const providerKey = PROVIDER_CONNECTIONS[node.provider];
     if (!providerKey) continue;
+    // Per-MODEL gateways (docs/DRILL_PLAN.md B11.3): each fallback slot's own
+    // gateway + gateway fallbacks project alongside its model, so main.ts can
+    // route every model in the chain through that model's pinned gateways.
     const fallback = (node.fallbacks ?? [])
       .filter((ref) => ref.model?.trim() && PROVIDER_CONNECTIONS[ref.provider])
-      .map((ref) => ({ provider: PROVIDER_CONNECTIONS[ref.provider], model: ref.model }));
+      .map((ref) => {
+        const refGateway = ref.gateway ? PROVIDER_CONNECTIONS[ref.gateway] : undefined;
+        const refGatewayFallbacks = (ref.gatewayFallbacks ?? [])
+          .map((brand) => PROVIDER_CONNECTIONS[brand])
+          .filter((key): key is ProviderKey => Boolean(key));
+        return {
+          provider: PROVIDER_CONNECTIONS[ref.provider],
+          model: ref.model,
+          gateway: refGateway,
+          gatewayFallbacks: refGatewayFallbacks.length > 0 ? refGatewayFallbacks : undefined
+        };
+      });
     const gatewayKey = node.gateway ? PROVIDER_CONNECTIONS[node.gateway] : undefined;
     const gatewayFallbackKeys = (node.gatewayFallbacks ?? [])
       .map((brand) => PROVIDER_CONNECTIONS[brand])
@@ -7456,6 +7493,11 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
   const [drag, setDrag] = useState<GhostDrag | null>(null);
   const [overTarget, setOverTarget] = useState<string | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // Per-model gateway focus (docs/DRILL_PLAN.md B11.3): set when a clean CLICK
+  // (not a drag) lands on a model inside a canvas node - the inspector opens
+  // that model's gateway config. `nonce` lets a repeat click on the same
+  // model re-focus the section after the user navigated away from it.
+  const [gatewayFocus, setGatewayFocus] = useState<{ nodeId: string; target: GatewayTarget; nonce: number } | null>(null);
   const [pulse, setPulse] = useState<{ agentId: string; key: number } | null>(null);
   const [routeTest, setRouteTest] = useState<RouteTestState | null>(null);
   const [connectionStates, setConnectionStates] = useState<Partial<Record<ProviderKey, ProviderConnectionState>>>({ ollama: "local" });
@@ -7611,13 +7653,21 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
     setInteraction({ type: "pan", startClient: { x: event.clientX, y: event.clientY }, startPan: pan });
   }
 
-  function onNodePointerDown(event: ReactPointerEvent<HTMLElement>, node: GraphNode): void {
+  function onNodePointerDown(event: ReactPointerEvent<HTMLElement>, node: GraphNode, modelTarget?: GatewayTarget): void {
     if (event.button !== 0) return;
     event.stopPropagation();
     setSelected(node.id);
     canvasRef.current?.setPointerCapture(event.pointerId);
     const world = toWorld(event.clientX, event.clientY);
-    setInteraction({ type: "node", id: node.id, offset: { x: world.x - node.pos.x, y: world.y - node.pos.y }, isSkill: node.kind === "skill", moved: false });
+    setInteraction({
+      type: "node",
+      id: node.id,
+      offset: { x: world.x - node.pos.x, y: world.y - node.pos.y },
+      isSkill: node.kind === "skill",
+      moved: false,
+      startClient: { x: event.clientX, y: event.clientY },
+      modelTarget
+    });
   }
 
   function onCanvasPointerMove(event: ReactPointerEvent<HTMLDivElement>): void {
@@ -7626,16 +7676,29 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
       setPan({ x: interaction.startPan.x + (event.clientX - interaction.startClient.x), y: interaction.startPan.y + (event.clientY - interaction.startClient.y) });
       return;
     }
+    // Click-vs-drag disambiguation (docs/DRILL_PLAN.md B11.3): the node stays
+    // put until the pointer clears a small client-space threshold, so a click
+    // on a model tile doesn't nudge the node a pixel and can open that
+    // model's gateway config on pointerup instead.
+    if (!interaction.moved) {
+      const travelled = Math.hypot(event.clientX - interaction.startClient.x, event.clientY - interaction.startClient.y);
+      if (travelled < NODE_DRAG_THRESHOLD_PX) return;
+      setInteraction({ ...interaction, moved: true });
+    }
     const world = toWorld(event.clientX, event.clientY);
     const nextPos = { x: world.x - interaction.offset.x, y: world.y - interaction.offset.y };
     setNodes((current) => current.map((node) => (node.id === interaction.id ? { ...node, pos: nextPos } : node)));
-    if (!interaction.moved) setInteraction({ ...interaction, moved: true });
     if (interaction.isSkill) setOverTarget(nearestSkillTarget(nextPos, interaction.id));
   }
 
   function endCanvasPointer(event: ReactPointerEvent<HTMLDivElement>): void {
     if (interaction?.type === "node" && interaction.isSkill && interaction.moved && overTarget) {
       attachSkillToAgent(interaction.id, overTarget);
+    }
+    // A clean click (never crossed the drag threshold) on a model inside the
+    // node opens THAT model's gateway config in the inspector (B11.3).
+    if (interaction?.type === "node" && !interaction.moved && interaction.modelTarget !== undefined) {
+      setGatewayFocus({ nodeId: interaction.id, target: interaction.modelTarget, nonce: Date.now() });
     }
     setOverTarget(null);
     setInteraction(null);
@@ -8079,6 +8142,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
       connectionStates={connectionStates}
       routeTest={routeTest?.agentId === selectedNode.id ? routeTest : null}
       onTest={runTest}
+      gatewayFocus={gatewayFocus?.nodeId === selectedNode.id ? gatewayFocus : null}
     />
   ) : activeNav === "routines" ? (
     <RoutinesPanel />
@@ -8272,7 +8336,7 @@ function NodeCard({
    *  pipeline (owner idea "Gallery model-visualisation inside orchestration") instead of a plain
    *  skill. Undefined for every non-gallery node. */
   galleryVisual?: GalleryVisual;
-  onPointerDown: (event: ReactPointerEvent<HTMLElement>, node: GraphNode) => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLElement>, node: GraphNode, modelTarget?: GatewayTarget) => void;
   onDelete: (id: string) => void;
 }): JSX.Element {
   const provider = node.provider ? PROVIDERS[node.provider] : null;
@@ -8280,6 +8344,11 @@ function NodeCard({
   const sublabel = node.kind === "skill" ? (isMoodboard ? "Board · loads first" : "Skill · loads first") : `${provider?.label ?? "Unassigned"}${node.model ? ` · ${node.model}` : ""}`;
   const fallbacks = node.fallbacks ?? [];
   const palette = galleryVisual?.palette ?? [];
+  // Per-model gateway click targets (docs/DRILL_PLAN.md B11.3): the primary
+  // logo and each fallback dot report WHICH model was pressed. The workspace
+  // still runs its normal drag from the same pointerdown - only a clean click
+  // (under the drag threshold) opens that model's gateway config.
+  const hasClickableModels = node.kind !== "skill" && Boolean(node.provider);
 
   return (
     <article
@@ -8292,7 +8361,11 @@ function NodeCard({
       style={{ left: `${node.pos.x}px`, top: `${node.pos.y}px` }}
       onPointerDown={(event) => onPointerDown(event, node)}
     >
-      <span className={`${node.kind === "skill" ? "node-icon skill" : "node-icon logo"}${isMoodboard ? " gallery" : ""}`}>
+      <span
+        className={`${node.kind === "skill" ? "node-icon skill" : "node-icon logo"}${isMoodboard ? " gallery" : ""}${hasClickableModels ? " model-clickable" : ""}`}
+        title={hasClickableModels ? `${node.model ?? "Primary model"} · click for gateways` : undefined}
+        onPointerDown={hasClickableModels ? (event) => onPointerDown(event, node, "primary") : undefined}
+      >
         {node.kind !== "router" ? (
           <button
             className="node-delete"
@@ -8331,9 +8404,14 @@ function NodeCard({
       </span>
 
       {fallbacks.length ? (
-        <span className="node-fallbacks" aria-hidden="true">
+        <span className="node-fallbacks">
           {fallbacks.slice(0, 3).map((ref, index) => (
-            <span className="fallback-dot" key={`${ref.provider}-${ref.model}-${index}`} title={`${PROVIDERS[ref.provider].label} ${ref.model}`}>
+            <span
+              className="fallback-dot model-clickable"
+              key={`${ref.provider}-${ref.model}-${index}`}
+              title={`${PROVIDERS[ref.provider].label} ${ref.model} · click for gateways`}
+              onPointerDown={(event) => onPointerDown(event, node, index)}
+            >
               <img alt="" src={PROVIDERS[ref.provider].logo} />
             </span>
           ))}
@@ -14916,7 +14994,8 @@ function NodeInspector({
   onDetachSkill,
   connectionStates,
   routeTest,
-  onTest
+  onTest,
+  gatewayFocus
 }: {
   node: GraphNode;
   nodes: GraphNode[];
@@ -14927,6 +15006,10 @@ function NodeInspector({
   connectionStates: Partial<Record<ProviderKey, ProviderConnectionState>>;
   routeTest: RouteTestState | null;
   onTest: (agentId: string) => void;
+  /** Set when a clean click landed on a model inside this node on the canvas
+   *  (docs/DRILL_PLAN.md B11.3) - scopes the Gateway section to that model.
+   *  `nonce` changes on every click so repeats re-focus. */
+  gatewayFocus: { target: GatewayTarget; nonce: number } | null;
 }): JSX.Element {
   const provider = node.provider ? PROVIDERS[node.provider] : null;
   const connectionStatus = node.provider ? providerConnectionStatus(node.provider, connectionStates) : "unknown";
@@ -14954,29 +15037,64 @@ function NodeInspector({
     };
   }, []);
 
-  // Distinct route providers for the node's current model: look up the
-  // catalog entry whose name matches this node's model text, and map its
-  // access routes' ProviderKeys onto the renderer's brand ids. When the model
-  // isn't in the catalog (custom/hand-typed model), fall back to just the
-  // node's own provider — there's no known alternate route to offer. When a
-  // model has only one route, this list is empty and the Gateway control
-  // shows just Auto + that one provider (harmless — every provider family,
-  // including anthropic/gemini, is handled identically here).
+  // --- Per-MODEL gateways (docs/DRILL_PLAN.md B11.3) ---
+  // Gateways are a property of a specific MODEL now, not the node: the node
+  // holds several models (primary + fallback chain) and each carries its own
+  // gateway + gateway fallbacks. `gatewayEditing` picks which model the
+  // Gateway section edits - via the chips row below, or a canvas click on a
+  // model tile (gatewayFocus).
+  const [gatewayEditing, setGatewayEditing] = useState<GatewayTarget>("primary");
+  useEffect(() => {
+    if (gatewayFocus) setGatewayEditing(gatewayFocus.target);
+  }, [gatewayFocus, node.id]);
+  // A removed fallback can leave the editor pointing past the end of the
+  // chain - snap back to primary rather than rendering a dead scope.
+  const editingSlot: NodeModelSlot | null =
+    gatewayEditing === "primary"
+      ? node.provider && node.model
+        ? { provider: node.provider, model: node.model, gateway: node.gateway, gatewayFallbacks: node.gatewayFallbacks }
+        : null
+      : fallbacks[gatewayEditing] ?? null;
+  useEffect(() => {
+    if (gatewayEditing !== "primary" && !fallbacks[gatewayEditing]) setGatewayEditing("primary");
+  }, [gatewayEditing, fallbacks.length]);
+
+  // Distinct route providers for the model being edited: look up the catalog
+  // entry whose name matches that model's text, and map its access routes'
+  // ProviderKeys onto the renderer's brand ids. When the model isn't in the
+  // catalog (custom/hand-typed model), fall back to just its own provider —
+  // there's no known alternate route to offer. When a model has only one
+  // route, this list is empty and the Gateway control shows just Auto + that
+  // one provider (harmless — every provider family, including
+  // anthropic/gemini, is handled identically here).
   const gatewayOptions = useMemo((): ProviderId[] => {
-    const catalogEntry = node.model ? catalogModels.find((entry) => entry.name.toLowerCase() === node.model!.toLowerCase()) : undefined;
+    const catalogEntry = editingSlot ? catalogModels.find((entry) => entry.name.toLowerCase() === editingSlot.model.toLowerCase()) : undefined;
     const routes = catalogEntry?.access ?? [];
     const brands = routes.map((route) => CATALOG_PROVIDER_TO_BRAND[route.provider]).filter((brand): brand is ProviderId => Boolean(brand));
     const distinct = Array.from(new Set(brands));
     if (distinct.length > 0) return distinct;
-    return node.provider ? [node.provider] : [];
-  }, [catalogModels, node.model, node.provider]);
+    return editingSlot ? [editingSlot.provider] : [];
+  }, [catalogModels, editingSlot?.provider, editingSlot?.model]);
 
-  const gatewayFallbacks = node.gatewayFallbacks ?? [];
-  // Gateway fallback picker offers the node's OTHER available route
+  const gatewayFallbacks = editingSlot?.gatewayFallbacks ?? [];
+  // Gateway fallback picker offers the edited model's OTHER available route
   // providers — the current gateway (or Auto's implicit home provider) and
   // already-added fallbacks are excluded, same exclusion pattern as the model
   // fallback picker's `exists` check below.
-  const gatewayFallbackChoices = gatewayOptions.filter((brand) => brand !== node.gateway);
+  const gatewayFallbackChoices = gatewayOptions.filter((brand) => brand !== editingSlot?.gateway);
+
+  /** Writes a gateway patch to whichever MODEL the Gateway section is scoped
+   *  to: the primary model's config lives on the node itself (its model does
+   *  too), a fallback model's config lives on its own chain slot. */
+  function patchEditingSlot(patch: { gateway?: ProviderId; gatewayFallbacks?: ProviderId[] }): void {
+    if (gatewayEditing === "primary") {
+      onUpdate(node.id, patch);
+      return;
+    }
+    onUpdate(node.id, {
+      fallbacks: fallbacks.map((ref, i) => (i === gatewayEditing ? { ...ref, ...patch } : ref))
+    });
+  }
 
   function setPrimary(event: ChangeEvent<HTMLSelectElement>): void {
     const [providerId, ...rest] = event.target.value.split("|");
@@ -14994,9 +15112,19 @@ function NodeInspector({
 
   function promoteFallback(index: number): void {
     const ref = fallbacks[index];
-    const demoted: ModelRef | null = provider && node.model ? { provider: node.provider as ProviderId, model: node.model } : null;
+    // Gateways travel WITH their model (B11.3): the promoted slot's gateway
+    // config becomes the node-level (primary) config, and the demoted primary
+    // keeps its own config on its new fallback slot.
+    const demoted: NodeModelSlot | null =
+      provider && node.model ? { provider: node.provider as ProviderId, model: node.model, gateway: node.gateway, gatewayFallbacks: node.gatewayFallbacks } : null;
     const nextFallbacks = fallbacks.filter((_, i) => i !== index);
-    onUpdate(node.id, { provider: ref.provider, model: ref.model, fallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks });
+    onUpdate(node.id, {
+      provider: ref.provider,
+      model: ref.model,
+      gateway: ref.gateway,
+      gatewayFallbacks: ref.gatewayFallbacks,
+      fallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks
+    });
   }
 
   function setGateway(value: ProviderId | ""): void {
@@ -15005,7 +15133,7 @@ function NodeInspector({
     // list (or clearing it) keeps the fallback list as-is otherwise — it only
     // dedupes the new gateway value out of the fallback list, mirroring how
     // promoteFallback avoids duplicate entries for the model chain.
-    onUpdate(node.id, {
+    patchEditingSlot({
       gateway: nextGateway,
       gatewayFallbacks: gatewayFallbacks.filter((brand) => brand !== nextGateway)
     });
@@ -15013,18 +15141,18 @@ function NodeInspector({
 
   function addGatewayFallback(brand: ProviderId): void {
     if (gatewayFallbacks.includes(brand)) return;
-    onUpdate(node.id, { gatewayFallbacks: [...gatewayFallbacks, brand] });
+    patchEditingSlot({ gatewayFallbacks: [...gatewayFallbacks, brand] });
   }
 
   function removeGatewayFallback(index: number): void {
-    onUpdate(node.id, { gatewayFallbacks: gatewayFallbacks.filter((_, i) => i !== index) });
+    patchEditingSlot({ gatewayFallbacks: gatewayFallbacks.filter((_, i) => i !== index) });
   }
 
   function promoteGatewayFallback(index: number): void {
     const brand = gatewayFallbacks[index];
-    const demoted = node.gateway;
+    const demoted = editingSlot?.gateway;
     const nextFallbacks = gatewayFallbacks.filter((_, i) => i !== index);
-    onUpdate(node.id, { gateway: brand, gatewayFallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks });
+    patchEditingSlot({ gateway: brand, gatewayFallbacks: demoted ? [demoted, ...nextFallbacks] : nextFallbacks });
   }
 
   // --- Depths (DRILL_PLAN B11.2) ---
@@ -15209,11 +15337,45 @@ function NodeInspector({
 
             {node.provider ? (
               <>
+                <div className="field">
+                  <span>Gateway · per model</span>
+                  <div className="gateway-model-chips" role="tablist" aria-label="Choose which model's gateway to edit">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={gatewayEditing === "primary"}
+                      className={`gateway-model-chip ${gatewayEditing === "primary" ? "active" : ""}`}
+                      onClick={() => setGatewayEditing("primary")}
+                    >
+                      <span className="palette-icon logo small">
+                        <img alt="" src={PROVIDERS[node.provider].logo} />
+                      </span>
+                      <span>{node.model ?? "Primary"}</span>
+                    </button>
+                    {fallbacks.map((ref, index) => (
+                      <button
+                        key={`${ref.provider}-${ref.model}-${index}`}
+                        type="button"
+                        role="tab"
+                        aria-selected={gatewayEditing === index}
+                        className={`gateway-model-chip ${gatewayEditing === index ? "active" : ""}`}
+                        onClick={() => setGatewayEditing(index)}
+                      >
+                        <span className="palette-icon logo small">
+                          <img alt="" src={PROVIDERS[ref.provider].logo} />
+                        </span>
+                        <span>{ref.model}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <small className="depths-hint">Each model routes through its own gateway. Click a model here, or on the node itself, to set where that model's calls go.</small>
+                </div>
+
                 <label className="field">
-                  <span>Gateway</span>
+                  <span>Gateway{editingSlot ? ` · ${editingSlot.model}` : ""}</span>
                   <CustomSelect
                     ariaLabel="Gateway"
-                    value={node.gateway ?? ""}
+                    value={editingSlot?.gateway ?? ""}
                     onChange={(value) => setGateway(value ? (value as ProviderId) : "")}
                     options={[
                       { value: "", label: "Auto", hint: "Best available route" },

@@ -465,7 +465,13 @@ export interface GraphPipelineStage {
    *  falling through to the model's remaining access routes by health. */
   gateway?: ProviderKey;
   gatewayFallbacks?: ProviderKey[];
-  fallback: Array<{ provider: ProviderKey; model: string }>;
+  /** Fallback models for this stage. Each entry may carry its OWN gateway +
+   *  gateway fallbacks (docs/DRILL_PLAN.md B11.3): gateways are a property of
+   *  a specific model, not the node, since a node now holds several models
+   *  (primary + fallback chain). Entries without gateway fields keep the old
+   *  behavior (default gateways / health-ordered routes). The stage-level
+   *  `gateway`/`gatewayFallbacks` above remain the PRIMARY model's config. */
+  fallback: Array<{ provider: ProviderKey; model: string; gateway?: ProviderKey; gatewayFallbacks?: ProviderKey[] }>;
 }
 
 /** Store payload for key "graphPipeline" (docs/FABLE_PLANS.md section 25). */
