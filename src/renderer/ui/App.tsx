@@ -4965,6 +4965,40 @@ function SessionComposer({
     return () => window.clearTimeout(timeoutId);
   }, [prompt, prewarmEnabled, localPrewarmTarget, activeConversationId, projectWorkspace?.path]);
 
+  // Prewarm-on-conversation-open (docs/DRILL_PLAN.md I9.1) — the moment a
+  // conversation with a confidently-resolved local model becomes active, warm
+  // that model once, so the FIRST keystroke of the visit never pays the
+  // cold-load (the 400ms typing warm above only fires once there's a prompt).
+  // Same guards, same honest chip/log surface, same fire-and-forget policy as
+  // the typing warm. The ref dedupes per conversation+model pair so re-renders
+  // (or the store flags settling) don't re-fire a warm that already went out;
+  // keep_alive on the backend holds the model for ~5m anyway.
+  const openWarmKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!prewarmEnabled || !window.metisPrewarm || !localPrewarmTarget || !activeConversationId) return;
+    if (prompt.trim()) return; // a draft in progress - the typing warm owns it
+    const target = localPrewarmTarget;
+    const key = `${activeConversationId}|${target}`;
+    if (openWarmKeyRef.current === key) return;
+    // Small delay so flicking through conversations doesn't warm every stop.
+    const timeoutId = window.setTimeout(() => {
+      openWarmKeyRef.current = key;
+      setOracleActivity({ phase: "warming", model: target });
+      const startedAt = Date.now();
+      void window.metisPrewarm
+        ?.warm(target, "", { conversationId: activeConversationId, projectPath: projectWorkspace?.path })
+        .then(() => {
+          const ms = Date.now() - startedAt;
+          setOracleActivity({ phase: "warm", model: target, ms });
+          setOracleLog((current) => [{ model: target, ms, at: Date.now() }, ...current].slice(0, ORACLE_LOG_CAP));
+        })
+        .catch(() => {
+          setOracleActivity((current) => (current.phase === "warming" && current.model === target ? ORACLE_IDLE : current));
+        });
+    }, 300);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeConversationId, prewarmEnabled, localPrewarmTarget, prompt, projectWorkspace?.path]);
+
   // Oracle "precognition" draft preview (docs/DRILL_PLAN.md O2b) — a SECOND,
   // harder debounce (~800ms pause, its own timer entirely separate from the
   // 400ms warm debounce above) that asks the backend for a full speculative
