@@ -13699,3 +13699,20 @@ a:focus-visible,
   font-size: 11.5px;
   color: var(--muted);
 }
+
+/* Per-source provenance list inside an operation's expandable body
+   (DRILL_PLAN I9.7 - which knowledge chunks grounded a turn). */
+.operation-source-list {
+  margin: 4px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.operation-source-list li {
+  font-size: 11px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

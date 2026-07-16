@@ -5555,7 +5555,12 @@ function knowledgeGroundingOperation(root: string, chunks: RetrievedKnowledgeChu
     status: "complete",
     charCount: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
     permission: "filesystem.read",
-    detail: distinctFiles.join(", ").slice(0, 400)
+    detail: distinctFiles.join(", ").slice(0, 400),
+    // Provenance (docs/DRILL_PLAN.md I9.7): one entry PER CHUNK - file, chunk
+    // ordinal, and a one-line preview - so the expandable op row answers
+    // "grounded on WHAT exactly", not just how many. Trust feature: the user
+    // can spot a wrong/stale chunk steering an answer.
+    sourcePaths: chunks.map((chunk) => `${chunk.path} #${chunk.ordinal + 1} — ${chunk.text.replace(/\s+/g, " ").slice(0, 90)}`)
   };
 }
 

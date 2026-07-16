@@ -7062,7 +7062,8 @@ function SlimOperationLine({ operation, targetDir }: { operation: AgentOperation
       operation.stderr ||
       operation.permission ||
       operation.screenshotPath ||
-      operation.consoleErrors?.length
+      operation.consoleErrors?.length ||
+      operation.sourcePaths?.length
   );
   const summaryContent = (
     <>
@@ -7093,6 +7094,15 @@ function SlimOperationLine({ operation, targetDir }: { operation: AgentOperation
         {targetDir ? <small>Target folder: {targetDir}</small> : null}
         {fullPath ? <small>Path: {fullPath}</small> : null}
         {operation.detail ? <p>{operation.detail}</p> : null}
+        {operation.sourcePaths?.length ? (
+          // Per-source provenance (DRILL_PLAN I9.7) - e.g. exactly which
+          // knowledge chunks grounded a turn, one line each.
+          <ul className="operation-source-list">
+            {operation.sourcePaths.map((entry, index) => (
+              <li key={`${entry}-${index}`}>{entry}</li>
+            ))}
+          </ul>
+        ) : null}
         {operation.title ? <small>Title: {operation.title}</small> : null}
         {operation.durationMs !== undefined ? <small>Duration: {operation.durationMs}ms</small> : null}
         {operation.command ? <code>{operation.command}</code> : null}

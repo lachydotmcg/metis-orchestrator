@@ -260,9 +260,14 @@ Grounded in the existing substrate; each names what it builds on.
 - [ ] **I9.6 - A/B answer mode.** Ask once, two models answer side by side (local vs cloud, or
   two locals), pick the winner; the pick is recorded as a preference signal (future: feeds the
   router policy). Builds on the side-chat surface + invokeProvider.
-- [ ] **I9.7 - Knowledge Banks auto-context chip.** When retrieval grounds a chat turn, show a
+- [x] **I9.7 - Knowledge Banks auto-context chip.** When retrieval grounds a chat turn, show a
   slim expandable chip listing WHICH chunks (file + line-ish) grounded it - the §16 renderer
   follow-up shaped as a trust feature (provenance, not just retrieval).
+  SHIPPED (Fable direct): knowledgeGroundingOperation now fills the previously-unused
+  AgentOperation.sourcePaths with one entry PER CHUNK (file + chunk ordinal + 90-char one-line
+  preview); the Grounded-on-N-chunks op row was already expandable and now lists them (both op
+  body renderers + hasBody), generic for any op that sets sourcePaths. NEEDS-LIVE-TEST: with a
+  knowledge-banked project, expand the grounded row on a chat turn.
 - [x] **I9.8 - Model health strip on the picker.** The picker already badges installed; add a
   tiny latency dot from recent ttftMs telemetry per model (green under 500ms, amber under 2s)
   so picking a model shows how it has actually been performing on THIS machine. Builds on
