@@ -180,6 +180,10 @@ declare global {
         draft: string,
         context?: { conversationId?: string; projectPath?: string }
       ) => Promise<{ text: string; thoughts?: string } | null>;
+      // DRILL_PLAN I9.2 — subscribe to live deltas of the in-flight local
+      // draft; returns the unsubscribe function. `reset` marks the first
+      // delta of a fresh generation (clear the previous partial guess).
+      onDraftDelta?: (cb: (event: { kind: "text" | "thought"; delta: string; reset?: boolean }) => void) => () => void;
       // DRILL_PLAN B8.2b v0.1 — sibling to warm/draft, but decides WHERE the
       // Auto Router would send the draft instead of touching a model at all.
       // Resolves to void like warm: the decision is consumed indirectly, by

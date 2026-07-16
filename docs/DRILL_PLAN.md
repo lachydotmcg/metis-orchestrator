@@ -217,10 +217,16 @@ Grounded in the existing substrate; each names what it builds on.
   draft when a conversationId is present (open-warm) and assembles the conversation prefix, or
   falls back to pure residency load. NEEDS-LIVE-TEST: open a conversation with a pinned local
   model, chip should flash warming before you type.
-- [ ] **I9.2 - Oracle draft STREAMING into the popover.** The guess currently appears all at
+- [x] **I9.2 - Oracle draft STREAMING into the popover.** The guess currently appears all at
   once (draftModel is stream:false). Stream it so the popover shows the guess forming live -
   the demo becomes hypnotic and Lachy sees thinking in real time. Small: reuse
   invokeOllamaProviderStream shape inside draftModel behind the same guards.
+  SHIPPED (Fable direct): draftModel is stream:true with the same accumulation + done_reason
+  servable rules; optional onDelta callback rides back on the invoking sender as
+  metis-prewarm:draft-delta (first delta of a generation carries reset:true), preload
+  onDraftDelta subscribe, renderer streams deltas straight into the popover's oracleDraft
+  state. Cloud drafts (O5) stay one-shot for now. NEEDS-LIVE-TEST: open the Oracle popover
+  while typing-pausing, the guess should form live including thinking.
 - [ ] **I9.3 - Warm-chain for the build pipeline.** While the PLAN stage streams, prewarm the
   FRONTEND stage's model with its (partially known) prompt prefix; while frontend streams,
   prewarm functional. Stage-to-stage TTFT drops across the whole pipeline. Builds on

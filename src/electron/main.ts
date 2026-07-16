@@ -9540,7 +9540,17 @@ function takeServableDraft(model: string, promptHash: string): { text: string; t
  *  a reasoning model's draft text is clean; the stripped thinking is
  *  returned alongside it when present, since the renderer may want to show
  *  what the model is "thinking" while the owner is still typing. */
-async function draftModel(model: string, draft: string, context?: PrewarmContext): Promise<{ text: string; thoughts?: string } | null> {
+async function draftModel(
+  model: string,
+  draft: string,
+  context?: PrewarmContext,
+  // I9.2: live draft deltas for the Oracle popover. The first delta of a new
+  // generation carries reset:true so the renderer clears the previous guess;
+  // backend latest-wins aborts mean deltas are effectively always from the
+  // newest request. Optional and fire-and-forget - a missing callback keeps
+  // the old all-at-once behavior for any other caller.
+  onDelta?: (event: { kind: "text" | "thought"; delta: string; reset?: boolean }) => void
+): Promise<{ text: string; thoughts?: string } | null> {
   const trimmedModel = typeof model === "string" ? model.trim() : "";
   const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
   if (!trimmedModel || trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return null;
@@ -9580,6 +9590,9 @@ async function draftModel(model: string, draft: string, context?: PrewarmContext
       // cached draft is a legitimate stand-in answer. num_predict is only a
       // runaway cap; done_reason tells us whether the model finished
       // naturally ("stop", servable) or hit the cap ("length", preview-only).
+      // I9.2: stream:true — deltas feed the popover live via onDelta while
+      // the same accumulation + servable rules as the old one-shot fetch
+      // apply to the completed text.
       const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -9587,24 +9600,73 @@ async function draftModel(model: string, draft: string, context?: PrewarmContext
         body: JSON.stringify({
           model: trimmedModel,
           prompt: sentPrompt,
-          stream: false,
+          stream: true,
           keep_alive: "5m",
           options: { num_predict: PREWARM_DRAFT_MAX_TOKENS }
         })
       });
-      if (!response.ok) return null;
-      const payload = (await response.json()) as { response?: string; done_reason?: string };
+      if (!response.ok || !response.body) return null;
+      let output = "";
+      let thoughts = "";
+      let doneReason: string | undefined;
+      let sentFirstDelta = false;
+      const emitDelta = (kind: "text" | "thought", delta: string): void => {
+        if (!onDelta || !delta) return;
+        try {
+          onDelta(sentFirstDelta ? { kind, delta } : { kind, delta, reset: true });
+          sentFirstDelta = true;
+        } catch {
+          /* a torn-down webContents must never kill the draft */
+        }
+      };
+      const splitter = createThinkTagStreamSplitter(
+        (delta) => {
+          output += delta;
+          emitDelta("text", delta);
+        },
+        (delta) => {
+          thoughts += delta;
+          emitDelta("thought", delta);
+        }
+      );
+      type DraftStreamChunk = { response?: string; thinking?: string; think?: string; done?: boolean; done_reason?: string };
+      const handleChunk = (payload: DraftStreamChunk): void => {
+        const thoughtField = payload.thinking ?? payload.think;
+        if (thoughtField) {
+          thoughts += thoughtField;
+          emitDelta("thought", thoughtField);
+        }
+        if (payload.response) splitter.feed(payload.response);
+        if (typeof payload.done_reason === "string") doneReason = payload.done_reason;
+      };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split(/\r?\n/);
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          handleChunk(JSON.parse(line) as DraftStreamChunk);
+        }
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) handleChunk(JSON.parse(buffer) as DraftStreamChunk);
+      splitter.flush();
       lastDraft = { model: trimmedModel, hash, at: Date.now() };
-      const raw = typeof payload.response === "string" ? payload.response : "";
-      const { output, thoughts } = splitThinkTaggedOutput(raw);
-      if (!output) return null;
+      const trimmedOutput = output.trim();
+      const trimmedThoughts = thoughts.trim() || undefined;
+      if (!trimmedOutput) return null;
       // Cache for instant serving only when generated from an ASSEMBLED
       // prompt (raw-draft prompts can never hash-match a real run) and the
       // model finished on its own rather than being truncated by the cap.
-      if (assembled && payload.done_reason === "stop") {
-        servableDraft = { model: trimmedModel, promptHash: sha256(assembled), text: output, thoughts, at: Date.now() };
+      if (assembled && doneReason === "stop") {
+        servableDraft = { model: trimmedModel, promptHash: sha256(assembled), text: trimmedOutput, thoughts: trimmedThoughts, at: Date.now() };
       }
-      return thoughts ? { text: output, thoughts } : { text: output };
+      return trimmedThoughts ? { text: trimmedOutput, thoughts: trimmedThoughts } : { text: trimmedOutput };
     } finally {
       clearTimeout(timeout);
       if (draftAborts.get(trimmedModel)?.controller === controller) draftAborts.delete(trimmedModel);
@@ -11111,7 +11173,14 @@ app.whenReady().then(async () => {
   // Speculative draft (docs/DRILL_PLAN.md O2a v0.1) — sibling to the warm
   // channel above, but resolves to the actual drafted text (or null on any
   // failure/guard) instead of void, so the renderer can choose to show it.
-  ipcMain.handle("metis-prewarm:draft", (_event, model: string, draft: string, context?: PrewarmContext) => draftModel(model, draft, context));
+  // I9.2: live deltas ride back on the invoking sender, same pattern as
+  // metis-ollama:pull-progress. Guarded - a destroyed webContents (window
+  // closed mid-draft) silently drops deltas rather than throwing.
+  ipcMain.handle("metis-prewarm:draft", (event, model: string, draft: string, context?: PrewarmContext) =>
+    draftModel(model, draft, context, (delta) => {
+      if (!event.sender.isDestroyed()) event.sender.send("metis-prewarm:draft-delta", delta);
+    })
+  );
   // Speculative route pre-routing (docs/DRILL_PLAN.md B8.2b v0.1) — sibling
   // to warm/draft above, but decides WHERE the Auto Router would send the
   // draft instead of touching a model at all; resolves to void like warm,

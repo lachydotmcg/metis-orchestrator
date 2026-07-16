@@ -4939,6 +4939,22 @@ function SessionComposer({
   // itself instead of clobbering a newer (possibly already-resolved) guess.
   const oracleDraftRequestId = useRef(0);
 
+  // I9.2: live-stream the in-flight local draft into the same oracleDraft
+  // state the popover renders, so the guess forms in real time instead of
+  // appearing all at once. `reset` marks the first delta of a fresh
+  // generation (clear the stale guess); the request's final resolution then
+  // replaces the accumulation with the identical completed result.
+  useEffect(() => {
+    const subscribe = window.metisPrewarm?.onDraftDelta;
+    if (!subscribe) return;
+    return subscribe((event) => {
+      setOracleDraft((current) => {
+        const base = event.reset || !current ? { text: "", thoughts: "" } : { text: current.text ?? "", thoughts: current.thoughts ?? "" };
+        return event.kind === "thought" ? { ...base, thoughts: `${base.thoughts}${event.delta}` } : { ...base, text: `${base.text}${event.delta}` };
+      });
+    });
+  }, []);
+
   useEffect(() => {
     if (!prewarmEnabled || !window.metisPrewarm || !localPrewarmTarget || !prompt.trim()) return;
     const target = localPrewarmTarget;

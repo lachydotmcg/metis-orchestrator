@@ -188,6 +188,13 @@ contextBridge.exposeInMainWorld("metisPrewarm", {
   // `model` is the picker display name; the backend resolves + double-gates.
   draftCloud: (model: string, draft: string, context?: { conversationId?: string; projectPath?: string }) =>
     ipcRenderer.invoke("metis-prewarm:draft-cloud", model, draft, context) as Promise<{ text: string; thoughts?: string } | null>,
+  // DRILL_PLAN I9.2 — live deltas of the in-flight local draft. Same
+  // subscribe/unsubscribe shape as metis-ollama:onPullProgress.
+  onDraftDelta: (cb: (event: { kind: "text" | "thought"; delta: string; reset?: boolean }) => void) => {
+    const listener = (_event: unknown, payload: { kind: "text" | "thought"; delta: string; reset?: boolean }) => cb(payload);
+    ipcRenderer.on("metis-prewarm:draft-delta", listener);
+    return () => ipcRenderer.removeListener("metis-prewarm:draft-delta", listener);
+  },
   // DRILL_PLAN B8.2b v0.1 — sibling to warm/draft, but decides WHERE the
   // Auto Router would send the draft instead of touching a model. Resolves
   // to void like warm: the decision is consumed indirectly, by runSession's
