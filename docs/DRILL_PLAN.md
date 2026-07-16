@@ -96,6 +96,48 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ LACHY BATCH 12 (2026-07-16, brainstorm round - PRIORITIZED BY LACHY, P1 highest)
+
+- [ ] **B12.1 [P1] - The router that learns YOU.** Usage should teach routing. Phase A: a local
+  preference LOG - per run record model/route + implicit signals (regenerate = dissatisfied,
+  instant-send-after-Oracle-draft = satisfied, per-conversation model picks, future A/B winner
+  clicks). Phase B: distill the log into routing adjustments (per-task-type model affinities
+  feeding Metis Policy). Phase C (Lachy's additions): SYSTEM PROMPTS in Settings - global
+  custom instructions + an editor for the current project's METIS.md (already consumed by
+  prompts); MEMORY BANKS notebooklm/hermes-style - a curated Memory view over extracted
+  facts/decisions (knowledge banks + conversation embeddings are the substrate), link-optimized
+  between files. Everything local, nothing leaves the machine. Research: RouteLLM-family
+  preference routing is validated (2x+ cost cut, no quality loss); nobody does it local+personal.
+- [ ] **B12.2 [P1] - Usage tab in Settings.** Per-provider / per-model / per-GATEWAY (actual
+  route served) token + call counts, daily/monthly rollups; cost from per-route $/Mtok rates
+  added to the registry catalog (estimated-usage runs flagged as estimates); local-inference
+  cost as duration x configurable wattage x electricity rate (the marketing screenshot number).
+  Same metering pipeline later becomes the billing engine for managed plans ($25/$80, token
+  wallet at measured cost + margin per the L23 business doc) - build for BYO now, billing
+  inherits it.
+- [ ] **B12.3 [P2] - Oracle v0.4 similarity serving.** NOT a response cache: serve the draft
+  generated seconds ago from the 95%-final prompt when the sent prompt differs only
+  cosmetically. Embed draft-prompt vs sent-prompt locally (nomic-embed already in the stack),
+  serve above ~0.97 with an honest "near-match (98%)" label + one-click answer-my-exact-prompt;
+  lexical guard vetoes serving when the diff contains negations/numbers/model names. Endgame =
+  Lachy's confidence idea: serve instantly AND verify with the real call in the background,
+  append a visible correction if it diverges.
+- [ ] **B12.4 [P2] - Global quick-ask.** OS-level hotkey summons a tiny floating prompt bar
+  anywhere in Windows (Electron globalShortcut + a slim always-on-top window), routed through
+  Metis, Oracle-warmed, answer in the overlay with open-in-app. Pairs with headless/tray mode
+  (P10.5, shipped) - Metis as ambient OS infrastructure. Lachy: shortkey when you get an idea
+  and it is done.
+- [ ] **B12.5 [P3] - Metis AS an MCP server.** Expose route_task / ask_local / search_knowledge
+  over MCP so Claude Code, Cursor, any agent uses Metis as its quality/cost/quota brain - the
+  inverse of P10.2, riding the apps-as-MCP-servers wave. Pairs with the Gateway: infrastructure
+  from both directions.
+- [ ] **B12.6 [P3] - A/B answer mode (design pass with Lachy first).** Ask once, two models
+  side by side, click the winner; the pick lands in B12.1's preference log (A/B is the labeled
+  data faucet for the learned router - build after B12.1 phase A exists). Needs: second-model
+  picker surface in the composer + side-by-side answer cards.
+
+---
+
 ## ★ LACHY BATCH 11 (2026-07-15, depths + gateway fix)
 
 - [x] **B11.3 - Gateways move from the NODE to each MODEL (Lachy).** Nodes now hold multiple
