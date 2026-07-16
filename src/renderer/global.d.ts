@@ -171,6 +171,15 @@ declare global {
         draft: string,
         context?: { conversationId?: string; projectPath?: string }
       ) => Promise<{ text: string; thoughts?: string } | null>;
+      // DRILL_PLAN O5 — cloud Oracle draft (DeepSeek first): the paid,
+      // explicitly opted-in sibling of `draft`. `model` is the picker
+      // display name; the backend resolves it and enforces BOTH flags
+      // (prewarmEnabled and oracleCloudEnabled) plus the saved key.
+      draftCloud?: (
+        model: string,
+        draft: string,
+        context?: { conversationId?: string; projectPath?: string }
+      ) => Promise<{ text: string; thoughts?: string } | null>;
       // DRILL_PLAN B8.2b v0.1 — sibling to warm/draft, but decides WHERE the
       // Auto Router would send the draft instead of touching a model at all.
       // Resolves to void like warm: the decision is consumed indirectly, by

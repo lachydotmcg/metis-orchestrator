@@ -4910,6 +4910,9 @@ function SessionComposer({
   // Experiments toggle writes; OFF by default. See main.ts's prewarmModel()
   // for the backend half (already shipped, commit 8c2e31b).
   const [prewarmEnabled] = useAppStoreState("prewarmEnabled", DEFAULT_PREWARM_ENABLED);
+  // Cloud Oracle opt-in (docs/DRILL_PLAN.md O5) — a SEPARATE paid flag on top
+  // of prewarmEnabled; see the Experiments panel toggle. OFF by default.
+  const [oracleCloudEnabled] = useAppStoreState("oracleCloudEnabled", false);
   // Resolves the composer's pinned model (if any) to the literal Ollama tag
   // Ollama's /api/generate expects (e.g. "qwen2.5:72b"), via the LOCAL_MODELS
   // catalog's `name` <-> `ollamaTag` pairing. Stays null — meaning "don't
@@ -5036,6 +5039,34 @@ function SessionComposer({
     }, 800);
     return () => window.clearTimeout(timeoutId);
   }, [prompt, prewarmEnabled, localPrewarmTarget, activeConversationId, projectWorkspace?.path]);
+
+  // Cloud Oracle draft (docs/DRILL_PLAN.md O5) — the paid sibling of the local
+  // draft effect above, for a pinned DEEPSEEK model with the explicit cloud
+  // opt-in on. Much harder debounce (2s of real pause, not per keystroke):
+  // every fire costs tokens, so this waits for genuine thinking pauses.
+  // Shares the request-id stale guard with the local draft effect so the two
+  // can never clobber each other's newer guess.
+  useEffect(() => {
+    if (!prewarmEnabled || !oracleCloudEnabled || !prompt.trim()) return;
+    if (selectedModel?.provider !== "deepseek") return;
+    const draftFn = window.metisPrewarm?.draftCloud;
+    if (!draftFn) return;
+    const target = selectedModel.model;
+    const draftPrompt = prompt;
+    const timeoutId = window.setTimeout(() => {
+      const requestId = ++oracleDraftRequestId.current;
+      void draftFn(target, draftPrompt, { conversationId: activeConversationId, projectPath: projectWorkspace?.path })
+        .then((result) => {
+          if (requestId !== oracleDraftRequestId.current) return;
+          if (!result) return;
+          setOracleDraft(result);
+        })
+        .catch(() => {
+          // Fail quiet, same policy as the local draft effect.
+        });
+    }, 2000);
+    return () => window.clearTimeout(timeoutId);
+  }, [prompt, prewarmEnabled, oracleCloudEnabled, selectedModel?.provider, selectedModel?.model, activeConversationId, projectWorkspace?.path]);
 
   const showSuggestion = Boolean(suggestion) && !suggestionDismissed && !sessionBusy && prompt.trim().length === 0;
   // Mirrors main.ts's ORCHESTRATION_COMMAND_RE (/orchestration or /orch as the
@@ -14063,6 +14094,10 @@ function SettingsWorkspace({
     "modelDrivenRoutingEnabled",
     DEFAULT_MODEL_DRIVEN_ROUTING_ENABLED
   );
+  // Cloud Oracle opt-in (docs/DRILL_PLAN.md O5) — the PAID sibling of the
+  // prewarm flag; main.ts double-gates on both keys plus a saved DeepSeek
+  // key, so this toggle alone never spends anything. OFF by default.
+  const [oracleCloudEnabled, setOracleCloudEnabled] = useAppStoreState("oracleCloudEnabled", false);
   // Close-to-tray — same store key main.ts reads to decide whether closing the
   // window hides Metis in the tray instead of quitting. OFF by default.
   const [closeToTray, setCloseToTray] = useAppStoreState("closeToTray", DEFAULT_CLOSE_TO_TRAY);
@@ -14861,6 +14896,21 @@ function SettingsWorkspace({
             </button>
           </label>
           <p className="settings-hint">A fast local model classifies each prompt as chat or build instead of keyword rules. Falls back to the rules on any failure.</p>
+          <label className="settings-field toggle-field">
+            <span>Cloud Oracle via DeepSeek (paid, experimental)</span>
+            <button
+              type="button"
+              className={`toggle-switch ${oracleCloudEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={oracleCloudEnabled}
+              onClick={() => setOracleCloudEnabled(!oracleCloudEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">
+            When a DeepSeek model is pinned, Oracle drafts your answer through your own DeepSeek key while you pause typing. This sends your in-progress prompt to DeepSeek and costs tokens on every draft. Needs the prewarm toggle on and a saved DeepSeek key.
+          </p>
         </article>
       </section>
       ) : null}

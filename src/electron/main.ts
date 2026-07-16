@@ -8462,8 +8462,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // stall this call by many seconds (measured 13390ms). Abort all
   // speculative work first, then claim any already-completed draft.
   abortOracleSpeculativeWork();
+  // O5: a pinned DeepSeek model is servable too when the cloud Oracle opt-in
+  // is on - its drafts land in the same servableDraft slot keyed by the same
+  // resolved model id, so the exact-hash claim below is provider-agnostic.
+  const oracleCloudServe =
+    provider === ORACLE_CLOUD_PROVIDER && (await readStoreValue<boolean>("oracleCloudEnabled", false));
   const servedDraft =
-    override && provider === "ollama" && !chatImages && (await readStoreValue<boolean>("prewarmEnabled", false))
+    override && (provider === "ollama" || oracleCloudServe) && !chatImages && (await readStoreValue<boolean>("prewarmEnabled", false))
       ? takeServableDraft(model, sha256(sessionPrompt))
       : null;
   if (servedDraft) {
@@ -8480,7 +8485,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       model,
       output: servedDraft.text,
       thoughts: servedDraft.thoughts,
-      source: "ollama",
+      // O5: served drafts can come from the local engine or the cloud Oracle
+      // now - attribute honestly to whichever provider actually generated it.
+      source: provider,
       auditId: servedAudit.id,
       ttftMs: Date.now() - providerStart
     };
@@ -9479,6 +9486,13 @@ function abortOracleSpeculativeWork(): void {
   draftAborts.clear();
   for (const [, controller] of prewarmAborts) controller.abort();
   prewarmAborts.clear();
+  // O5: the cloud draft too - a real send should never wait on (or pay for
+  // more of) a stale speculative cloud call. Forward reference to a later
+  // module-level `let`, same pattern as routePrewarmAbort below.
+  if (cloudDraftAbort) {
+    cloudDraftAbort.controller.abort();
+    cloudDraftAbort = null;
+  }
   // B8.2b: sweep the speculative route-prewarm sibling too, so a real send's
   // own decidePolicy call never contends with a stale in-flight metis-policy
   // CLI spawn for CPU. routePrewarmAbort is declared further below with the
@@ -9599,6 +9613,71 @@ async function draftModel(model: string, draft: string, context?: PrewarmContext
     // Ollama unreachable, model missing, aborted, malformed JSON, or any
     // other failure — drafting is best-effort only, so stay quiet and never
     // throw out of this function.
+    return null;
+  }
+}
+
+// --- O5: cloud Oracle (docs/DRILL_PLAN.md O5, DeepSeek first) ---
+// Drafts via the user's own DeepSeek key behind a SEPARATE explicit opt-in
+// (oracleCloudEnabled) on top of prewarmEnabled - every draft costs tokens
+// and sends the assembled prompt to that provider, so this must never fire
+// silently. DeepSeek's server-side automatic context caching plays the role
+// Ollama's KV prefix cache plays locally, so repeated drafts of a growing
+// prompt bill mostly the delta. No warm sibling on purpose: a cloud "warm"
+// is a paid no-op, only full drafts are worth the spend.
+const ORACLE_CLOUD_PROVIDER: ProviderKey = "deepseek";
+const ORACLE_CLOUD_DRAFT_TIMEOUT_MS = 60000;
+let lastCloudDraft: { model: string; hash: string; at: number } | null = null;
+let cloudDraftAbort: { controller: AbortController; hash: string } | null = null;
+
+/** Cloud sibling of draftModel: same guard posture (fail soft, resolve null,
+ *  dedupe, latest-wins abort), but ONLY from an assembled prompt - a raw
+ *  keystroke draft could never hash-match a real run, and unlike the free
+ *  local path a cloud draft that can never be served is money burned for a
+ *  preview alone. Successful complete drafts land in the same servableDraft
+ *  slot keyed by the RESOLVED model id, so runSession's serve gate works
+ *  identically for a pinned DeepSeek model. */
+async function draftCloudModel(model: string, draft: string, context?: PrewarmContext): Promise<{ text: string; thoughts?: string } | null> {
+  const trimmedDraft = typeof draft === "string" ? draft.trim() : "";
+  const displayModel = typeof model === "string" ? model.trim() : "";
+  if (!displayModel || trimmedDraft.length < PREWARM_MIN_DRAFT_LENGTH) return null;
+  try {
+    if (!(await readStoreValue<boolean>("prewarmEnabled", false))) return null;
+    if (!(await readStoreValue<boolean>("oracleCloudEnabled", false))) return null;
+    const secret = await readProviderSecret(ORACLE_CLOUD_PROVIDER);
+    if (!secret) return null;
+    // Resolve the SAME way the pinned run resolves its override, so the
+    // servableDraft model key matches at send time.
+    const resolved = resolveOverrideModel({ provider: ORACLE_CLOUD_PROVIDER, model: displayModel });
+    const hash = sha256(`${resolved}\n${trimmedDraft}`);
+    const now = Date.now();
+    if (lastCloudDraft && lastCloudDraft.model === resolved && lastCloudDraft.hash === hash && now - lastCloudDraft.at < PREWARM_DEDUPE_WINDOW_MS) {
+      return null;
+    }
+    if (cloudDraftAbort) {
+      if (cloudDraftAbort.hash === hash) return null;
+      cloudDraftAbort.controller.abort();
+      cloudDraftAbort = null;
+    }
+    const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context);
+    if (!assembled) return null;
+    const controller = new AbortController();
+    cloudDraftAbort = { controller, hash };
+    const timeout = setTimeout(() => controller.abort(), ORACLE_CLOUD_DRAFT_TIMEOUT_MS);
+    try {
+      const { text } = await invokeCloudProvider({ provider: ORACLE_CLOUD_PROVIDER, model: resolved, prompt: assembled }, secret, controller.signal);
+      lastCloudDraft = { model: resolved, hash, at: Date.now() };
+      const { output, thoughts } = splitThinkTaggedOutput(text ?? "");
+      if (!output.trim()) return null;
+      // Cloud responses are always complete (no num_predict cap) - servable.
+      servableDraft = { model: resolved, promptHash: sha256(assembled), text: output, thoughts, at: Date.now() };
+      return thoughts ? { text: output, thoughts } : { text: output };
+    } finally {
+      clearTimeout(timeout);
+      if (cloudDraftAbort?.controller === controller) cloudDraftAbort = null;
+    }
+  } catch {
+    // Key missing/invalid, quota, network, aborted - best-effort only.
     return null;
   }
 }
@@ -11024,6 +11103,11 @@ app.whenReady().then(async () => {
   // in every case (including all its own no-op/fail-soft paths), so there is
   // nothing meaningful to await here beyond letting IPC settle.
   ipcMain.handle("metis-prewarm:warm", (_event, model: string, draft: string, context?: PrewarmContext) => prewarmModel(model, draft, context));
+  // O5: cloud Oracle draft - `model` is the picker DISPLAY name; the handler
+  // resolves it the same way a pinned run would. Double-gated backend-side
+  // (prewarmEnabled AND oracleCloudEnabled), so a renderer bug can never
+  // spend tokens with the opt-in off.
+  ipcMain.handle("metis-prewarm:draft-cloud", (_event, model: string, draft: string, context?: PrewarmContext) => draftCloudModel(model, draft, context));
   // Speculative draft (docs/DRILL_PLAN.md O2a v0.1) — sibling to the warm
   // channel above, but resolves to the actual drafted text (or null on any
   // failure/guard) instead of void, so the renderer can choose to show it.

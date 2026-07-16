@@ -83,7 +83,16 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 ---
 
 - [x] **O4.1 - sends never queue behind speculation (Lachy measured 13390ms).** The v0.3 draft is a heavyweight job (2048 tokens + thinking) and Ollama serializes per-model requests, so a send during an in-flight draft queued behind it. Fixed Fable-direct (4c155cf): abortOracleSpeculativeWork aborts ALL in-flight warms + drafts at the top of the chat invoke path; a newer prompt ABORTS and replaces a stale in-flight draft (latest wins); cap 768 -> 2048 so thinking models finish naturally (done_reason stop) and become servable.
-- [ ] **O5 - cloud Oracle (Lachy consents: happy to test via DeepSeek V4 Flash).** Draft/warm via a cloud provider with his own key, behind a SEPARATE explicit opt-in toggle (costs tokens, sends partial prompts to that provider, never silently). DeepSeek has automatic context caching, the natural first target. Harder debounce, no per-keystroke spend, clear cost copy. Fable-direct per the Oracle rule.
+- [x] **O5 - cloud Oracle (Lachy consents: happy to test via DeepSeek V4 Flash).** Draft/warm via a cloud provider with his own key, behind a SEPARATE explicit opt-in toggle (costs tokens, sends partial prompts to that provider, never silently). DeepSeek has automatic context caching, the natural first target. Harder debounce, no per-keystroke spend, clear cost copy. Fable-direct per the Oracle rule.
+  SHIPPED (Fable direct): oracleCloudEnabled store key + Experiments toggle with explicit cost
+  copy; draftCloudModel drafts ONLY from assembled prompts via invokeCloudProvider with the
+  saved DeepSeek key (no warm sibling - a cloud warm is a paid no-op, DeepSeek context caching
+  covers the prefix), latest-wins abort + swept by abortOracleSpeculativeWork; drafts land in
+  the same servableDraft slot keyed by the RESOLVED model id and the runSession serve gate now
+  accepts pinned DeepSeek when the opt-in is on (served source attributed honestly); renderer
+  fires on a 2s hard pause only for a pinned deepseek model, sharing the stale-guard request id
+  with the local draft effect. Double-gated backend-side. NEEDS-LIVE-TEST: pin DeepSeek V4
+  Flash, both toggles on, type + pause 2s+, send unchanged -> Oracle answered instantly.
 
 ---
 
