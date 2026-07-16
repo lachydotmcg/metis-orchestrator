@@ -7488,8 +7488,31 @@ button.pulse-tile:hover {
 .settings-panel > .permission-presets,
 .settings-panel > .grant-list,
 .settings-panel > .audit-list,
-.settings-panel > .settings-warning {
+.settings-panel > .settings-warning,
+/* B12 additions (Lachy: Usage padding was rubbing the panel edges). */
+.settings-panel > .usage-windows,
+.settings-panel > .usage-table,
+.settings-panel > .instructions-editor,
+.settings-panel > .panel-actions,
+.settings-panel > .registry-list {
   margin-inline: 12px;
+}
+
+/* The instructions textarea sits inside the 12px margins, so its 100% width
+   must account for them. */
+.settings-panel > .instructions-editor {
+  width: calc(100% - 24px);
+}
+.settings-panel > .usage-table {
+  width: calc(100% - 24px);
+}
+
+/* CustomSelect menus were CLIPPED by the panel's overflow:hidden (Lachy:
+   route ceremony / self-verification selector cut off). Unclip only while a
+   select inside the panel is open - the rest of the time the hidden overflow
+   keeps rounded corners crisp. */
+.settings-panel:has(.custom-select.open) {
+  overflow: visible;
 }
 
 .settings-panel > :last-child {
@@ -13946,4 +13969,15 @@ a:focus-visible,
 .instructions-editor:focus {
   outline: none;
   border-color: var(--soft);
+}
+
+/* Oracle chip model logo (B12 polish, Lachy): the chip reads just
+   "Oracle" + the pinned model's brand mark - names and timings live in
+   the popover status line now. */
+.oracle-chip-logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  object-fit: contain;
+  flex: 0 0 auto;
 }

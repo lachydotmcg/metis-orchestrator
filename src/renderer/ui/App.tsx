@@ -5641,7 +5641,7 @@ function SessionComposer({
               type="button"
               aria-label="Save as template"
               aria-expanded={saveTemplateOpen}
-              title={prompt.trim() ? "Save this draft as a reusable template" : "Type something to save it as a template"}
+              title={prompt.trim() ? "Save this draft as a /template - reuse it anytime by typing /" : "Save as /template: type a prompt you reuse often, then click this to save it. Recall it anytime by typing /"}
               disabled={!prompt.trim()}
               onClick={() => { setDraftTemplateName(""); setSaveTemplateOpen((open) => !open); }}
             >
@@ -5680,7 +5680,10 @@ function SessionComposer({
         <div className="composer-send">
           <div className="router-wrap">
             <button className={`router-pill ${routerOpen ? "active" : ""}`} type="button" aria-haspopup="listbox" aria-expanded={routerOpen} onClick={() => setRouterOpen((open) => !open)}>
-              <img src={selectedModel ? PROVIDERS[selectedModel.provider].logo : AUTOROUTER_LOGO} alt="" />
+              {/* B12 polish (Lachy): a SELECTED model shows text only - the
+                  logos stay on the rows inside the picker. Auto router keeps
+                  its glyph since it has no text identity of its own. */}
+              {!selectedModel ? <img src={AUTOROUTER_LOGO} alt="" /> : null}
               {selectedModel ? selectedModel.model : "Auto router"}
               {selectedModel && resolveRouteSuffix(selectedModel) ? <small className="router-route-suffix">via {resolveRouteSuffix(selectedModel)}</small> : null}
               <ChevronUp className={`router-caret ${routerOpen ? "open" : ""}`} size={14} />
@@ -5818,6 +5821,7 @@ function SessionComposer({
                 open={oracleLogOpen}
                 onToggle={() => setOracleLogOpen((open) => !open)}
                 onClose={() => setOracleLogOpen(false)}
+                modelLogo={selectedModel ? PROVIDERS[selectedModel.provider].logo : undefined}
               />
             </>
           ) : null}
@@ -5935,7 +5939,8 @@ function OracleChip({
   draft,
   open,
   onToggle,
-  onClose
+  onClose,
+  modelLogo
 }: {
   activity: OracleActivity;
   log: OracleWarmEvent[];
@@ -5943,6 +5948,9 @@ function OracleChip({
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
+  /** The pinned model's brand logo (B12 polish, Lachy: chip shows just
+   *  "Oracle" + the logo - model name and ms live in the popover now). */
+  modelLogo?: string;
 }): JSX.Element {
   const label =
     activity.phase === "warming"
@@ -5967,9 +5975,11 @@ function OracleChip({
         onClick={onToggle}
         aria-expanded={open}
         aria-label={hasDraft ? `${label} — a speculative guess is ready to preview` : `${label} — click for recent warm calls`}
+        title={label}
       >
         {activity.phase === "warming" ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
-        <span>{label}</span>
+        <span>Oracle</span>
+        {modelLogo ? <img className="oracle-chip-logo" alt="" src={modelLogo} /> : null}
         {hasDraft ? <span className="oracle-chip-dot" aria-hidden="true" /> : null}
       </button>
       {open ? (
