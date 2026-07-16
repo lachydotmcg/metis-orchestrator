@@ -182,6 +182,26 @@ declare global {
         walletTokens?: number;
       }) => Promise<{ fourHourTokens?: number; weeklyTokens?: number; walletTokens?: number }>;
     };
+    // DRILL_PLAN B12.1 Phase A — learned-router preference log. Raw signal
+    // capture only in this pass: no learning/routing changes read this data
+    // yet. Shapes are declared inline here (no SessionRun-side counterpart to
+    // share a type with), same as metisUsage above. Optional: older preloads
+    // lack it.
+    metisPreference?: {
+      signal: (input: {
+        kind: "regenerate" | "model_switch" | "ab_pick" | "thumbs_up" | "thumbs_down";
+        at?: string;
+        provider?: string;
+        model?: string;
+        conversationId?: string;
+        detail?: string;
+      }) => Promise<void>;
+      summary: () => Promise<{
+        total: number;
+        byKind: Record<string, number>;
+        since: string | null;
+      }>;
+    };
     metisRoutines?: {
       list: () => Promise<Routine[]>;
       save: (routine: Routine) => Promise<Routine>;

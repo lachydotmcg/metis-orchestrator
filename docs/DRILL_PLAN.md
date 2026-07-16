@@ -108,6 +108,16 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   facts/decisions (knowledge banks + conversation embeddings are the substrate), link-optimized
   between files. Everything local, nothing leaves the machine. Research: RouteLLM-family
   preference routing is validated (2x+ cost cut, no quality loss); nobody does it local+personal.
+  PHASE A + C(instructions) SHIPPED: preferenceLog store (cap 5000) - automatic run entries
+  {provider, model, pinned, oracleServed, depth, taskType} appended in writeSessionRun across
+  all 4 call sites, plus metis-preference:signal (whitelisted kinds regenerate/model_switch/
+  ab_pick/thumbs_up/thumbs_down, silent reject) and metis-preference:summary; NO learning or
+  routing changes yet (raw signals only, by design). globalInstructions store injected via the
+  metisFilePromptBlock choke point at all 6 assembly sites (chat, fanout, stages, recovery,
+  repair, edit - edit now works even without a METIS.md), Oracle draft/run LOCKSTEP preserved
+  (both sides funnel through sessionProviderPrompt); Settings > Chat gained the Custom
+  instructions editor (draft/save, never per-keystroke writes). Phase B (distill the log into
+  routing adjustments) and the Memory-view part of Phase C remain open. NEEDS-LIVE-TEST.
 - [x] **B12.2 [P1] - Usage tab in Settings.** Per-provider / per-model / per-GATEWAY (actual
   route served) token + call counts, daily/monthly rollups; cost from per-route $/Mtok rates
   added to the registry catalog (estimated-usage runs flagged as estimates); local-inference

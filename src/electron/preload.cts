@@ -173,6 +173,28 @@ contextBridge.exposeInMainWorld("metisUsage", {
   }) => ipcRenderer.invoke("metis-usage:set-limits", patch)
 });
 
+// DRILL_PLAN B12.1 Phase A — learned-router preference log. Raw signal
+// capture only in this pass (see main.ts comment on RunPreferenceEntry): no
+// learning/routing changes read this data yet. signal() posts an explicit
+// renderer-observed preference event; summary() is a cheap read-only rollup
+// so the UI can show the log exists without dumping every row over IPC.
+contextBridge.exposeInMainWorld("metisPreference", {
+  signal: (input: {
+    kind: "regenerate" | "model_switch" | "ab_pick" | "thumbs_up" | "thumbs_down";
+    at?: string;
+    provider?: string;
+    model?: string;
+    conversationId?: string;
+    detail?: string;
+  }) => ipcRenderer.invoke("metis-preference:signal", input) as Promise<void>,
+  summary: () =>
+    ipcRenderer.invoke("metis-preference:summary") as Promise<{
+      total: number;
+      byKind: Record<string, number>;
+      since: string | null;
+    }>
+});
+
 contextBridge.exposeInMainWorld("metisRoutines", {
   list: () => ipcRenderer.invoke("metis-routines:list") as Promise<Routine[]>,
   save: (routine: Routine) => ipcRenderer.invoke("metis-routines:save", routine) as Promise<Routine>,

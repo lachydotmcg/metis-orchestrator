@@ -2063,9 +2063,33 @@ async function loadProjectMetisFile(projectPath?: string): Promise<{ content: st
   return { content: truncated, chars: trimmed.length };
 }
 
-function metisFilePromptBlock(metisFile: { content: string; chars: number } | null): string {
-  if (!metisFile) return "";
-  return `Project instructions from METIS.md (follow these; the user's explicit request always outranks these instructions):\n${metisFile.content}\n\n---\n`;
+/** DRILL_PLAN B12.1 Phase C — global custom instructions are a user-level
+ *  "system prompt" (the Claude-Code-style equivalent), stored as a single
+ *  plain string under the "globalInstructions" key. The Settings UI that
+ *  writes this key belongs to the renderer team; this file only reads and
+ *  injects it. An empty/whitespace-only value MUST produce an empty block so
+ *  every prompt this feeds into stays byte-identical to today. */
+async function globalInstructionsPromptBlock(): Promise<string> {
+  const raw = await readStoreValue<string>("globalInstructions", "");
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  return `User's global instructions (apply to every conversation):\n${trimmed}\n\n---\n`;
+}
+
+/** Combines the per-project METIS.md block with the global custom
+ *  instructions block (DRILL_PLAN B12.1 Phase C) into the single prefix
+ *  string every prompt-assembly site injects. This is the SOLE choke point
+ *  both runSession's live chat assembly and assembleChatPrewarmPrompt's
+ *  Oracle-mirror assembly call through (directly or via sessionProviderPrompt)
+ *  — keeping the combination logic in one async function is what keeps the
+ *  two paths in LOCKSTEP (see assembleChatPrewarmPrompt's own comment) without
+ *  each call site needing to remember to read both stores itself. Empty
+ *  metisFile + empty globalInstructions => "" => byte-identical to the
+ *  pre-B12.1 prompts. */
+async function metisFilePromptBlock(metisFile: { content: string; chars: number } | null): Promise<string> {
+  const globalBlock = await globalInstructionsPromptBlock();
+  const metisBlock = metisFile ? `Project instructions from METIS.md (follow these; the user's explicit request always outranks these instructions):\n${metisFile.content}\n\n---\n` : "";
+  return `${globalBlock}${metisBlock}`;
 }
 
 const snapshotIgnoredDirs = new Set([
@@ -3346,7 +3370,7 @@ function sessionActionProtocolBlock(): string {
   ].join("\n\n");
 }
 
-function sessionProviderPrompt(
+async function sessionProviderPrompt(
   prompt: string,
   decision: RouteDecision,
   _pipelineName: string,
@@ -3357,7 +3381,7 @@ function sessionProviderPrompt(
   conversationContext?: string | null,
   knowledgeContext?: string | null,
   allowActions?: boolean
-): string {
+): Promise<string> {
   const previousSource = previousRun?.providerResult
     ? `Previous response source: ${providerInfo[previousRun.providerResult.provider].label} / ${previousRun.providerResult.model} via ${previousRun.pipelineName}.`
     : previousRun
@@ -3365,7 +3389,7 @@ function sessionProviderPrompt(
       : "";
   return [
     knowledgeContext ?? "",
-    metisFilePromptBlock(metisFile ?? null),
+    await metisFilePromptBlock(metisFile ?? null),
     conversationContext ? `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}` : "",
     `You are running inside Metis Orchestrator.`,
     `Task type: ${decision.task_type}.`,
@@ -4502,7 +4526,11 @@ async function writeSessionRuns(runs: SessionRun[]): Promise<void> {
   await writeStoreValue("sessionRuns", runs.slice(0, 100));
 }
 
-async function writeSessionRun(run: SessionRun): Promise<void> {
+/** `input` is optional and used only for the preference-log "pinned" flag
+ *  below (DRILL_PLAN B12.1 Phase A) — every existing caller that doesn't pass
+ *  it keeps working exactly as before, just without a pinned flag on that
+ *  run's preference-log row. */
+async function writeSessionRun(run: SessionRun, input?: SessionRunInput): Promise<void> {
   const current = await readSessionRuns();
   await writeSessionRuns([run, ...current]);
   // Usage metering (DRILL_PLAN B12.2/B12.7): sessionRuns above is capped at
@@ -4517,6 +4545,15 @@ async function writeSessionRun(run: SessionRun): Promise<void> {
     await appendUsageLedgerEntry(run);
   } catch {
     // Ledger is best-effort telemetry, not run-critical.
+  }
+  // Preference log (DRILL_PLAN B12.1 Phase A): raw signal capture only in
+  // this pass — no learning/routing changes happen from this data yet, it is
+  // purely recorded for a future round to consume. Same fail-soft contract as
+  // the usage ledger above: a preference-log problem must never break a run.
+  try {
+    await appendRunPreferenceEntry(run, input);
+  } catch {
+    // Preference log is best-effort telemetry, not run-critical.
   }
 }
 
@@ -4549,6 +4586,107 @@ async function appendUsageLedgerEntry(run: SessionRun): Promise<void> {
   const current = await readStoreValue<UsageLedgerEntry[]>("usageLedger", []);
   const next = [...current, entry].slice(-5000);
   await writeStoreValue("usageLedger", next);
+}
+
+/** DRILL_PLAN B12.1 Phase A — the learned router's preference log. This pass
+ *  captures RAW SIGNALS ONLY: no learning, scoring, or routing decision reads
+ *  this data yet. It exists purely so a future round has real preference
+ *  history to train against. Two kinds of rows land here:
+ *   - "run": one automatic entry per completed run with a real provider
+ *     result (mirrors appendUsageLedgerEntry's own gate), recorded alongside
+ *     the usage ledger in writeSessionRun.
+ *   - explicit renderer-originated signals ("regenerate" | "model_switch" |
+ *     "ab_pick" | "thumbs_up" | "thumbs_down") posted via the
+ *     "metis-preference:signal" IPC handler below.
+ *  Same fail-soft contract as the usage ledger: a preference-log problem must
+ *  never break a run or a renderer call. */
+interface RunPreferenceEntry {
+  kind: "run";
+  at: string;
+  provider: string;
+  model: string;
+  /** Whether this run bypassed Metis Policy routing for a directly pinned
+   *  model (SessionRunInput.modelOverride presence) — the strongest available
+   *  signal for "the user picked this model on purpose". */
+  pinned: boolean;
+  oracleServed?: boolean;
+  depth?: 1 | 2 | 3;
+  taskType?: RouteDecision["task_type"];
+}
+
+const PREFERENCE_SIGNAL_KINDS = ["regenerate", "model_switch", "ab_pick", "thumbs_up", "thumbs_down"] as const;
+type PreferenceSignalKind = (typeof PREFERENCE_SIGNAL_KINDS)[number];
+
+interface SignalPreferenceEntry {
+  kind: PreferenceSignalKind;
+  at: string;
+  provider?: string;
+  model?: string;
+  conversationId?: string;
+  detail?: string;
+}
+
+type PreferenceLogEntry = RunPreferenceEntry | SignalPreferenceEntry;
+
+const PREFERENCE_LOG_MAX_ENTRIES = 5000;
+
+async function appendPreferenceLogEntry(entry: PreferenceLogEntry): Promise<void> {
+  const current = await readStoreValue<PreferenceLogEntry[]>("preferenceLog", []);
+  const next = [...current, entry].slice(-PREFERENCE_LOG_MAX_ENTRIES);
+  await writeStoreValue("preferenceLog", next);
+}
+
+/** Automatic per-run row, appended alongside the usage ledger in
+ *  writeSessionRun. Skipped for runs with no provider result (chat stubs,
+ *  policy-only answers) — same gate as appendUsageLedgerEntry. */
+async function appendRunPreferenceEntry(run: SessionRun, input?: SessionRunInput): Promise<void> {
+  const result = run.providerResult;
+  if (!result) return;
+  const entry: RunPreferenceEntry = {
+    kind: "run",
+    at: run.completedAt || new Date().toISOString(),
+    provider: result.provider,
+    model: result.model,
+    pinned: Boolean(input?.modelOverride),
+    oracleServed: run.oracleServed,
+    depth: run.depth,
+    taskType: run.decision?.decision?.task_type
+  };
+  await appendPreferenceLogEntry(entry);
+}
+
+/** Renderer-originated explicit preference signal (metis-preference:signal).
+ *  `kind` is validated against PREFERENCE_SIGNAL_KINDS; anything else is
+ *  rejected silently (resolves void, appends nothing) rather than throwing,
+ *  since this is telemetry from the renderer and must never surface an error
+ *  to the user for a malformed/unexpected payload. */
+async function recordPreferenceSignal(rawInput: unknown): Promise<void> {
+  if (!rawInput || typeof rawInput !== "object") return;
+  const input = rawInput as Record<string, unknown>;
+  const kind = input.kind;
+  if (typeof kind !== "string" || !(PREFERENCE_SIGNAL_KINDS as readonly string[]).includes(kind)) return;
+  const entry: SignalPreferenceEntry = {
+    kind: kind as PreferenceSignalKind,
+    at: typeof input.at === "string" && input.at ? input.at : new Date().toISOString(),
+    provider: typeof input.provider === "string" ? input.provider : undefined,
+    model: typeof input.model === "string" ? input.model : undefined,
+    conversationId: typeof input.conversationId === "string" ? input.conversationId : undefined,
+    detail: typeof input.detail === "string" ? input.detail : undefined
+  };
+  await appendPreferenceLogEntry(entry);
+}
+
+/** Deliberately terse — the renderer only needs to know the log exists and
+ *  roughly what's in it, not a dump of every row (DRILL_PLAN B12.1 Phase A). */
+async function computePreferenceSummary(): Promise<{ total: number; byKind: Record<string, number>; since: string | null }> {
+  const log = await readStoreValue<PreferenceLogEntry[]>("preferenceLog", []);
+  const byKind: Record<string, number> = {};
+  let since: string | null = null;
+  for (const entry of log) {
+    byKind[entry.kind] = (byKind[entry.kind] ?? 0) + 1;
+    if (since === null || entry.at < since) since = entry.at;
+  }
+  return { total: log.length, byKind, since };
 }
 
 /** DRILL_PLAN B12.7 — usage limits are stored/exposed here for display only
@@ -5404,7 +5542,7 @@ async function runPreviewRequest(args: {
     warnings
   };
   await appendRunToConversation(run, prompt);
-  await writeSessionRun(run);
+  await writeSessionRun(run, input);
   emitStream(stream, { kind: "complete", run });
   return run;
 }
@@ -6703,7 +6841,7 @@ async function runFanoutPipeline(
     const tasks = await planFanoutTasks(prompt, stream, scope);
     if (!tasks) return null;
 
-    const metisBlock = metisFilePromptBlock(metisFile ?? null);
+    const metisBlock = await metisFilePromptBlock(metisFile ?? null);
     const seed = pickDesignSeed(prompt, 0);
     const explicitStyle = promptHasExplicitStyle(prompt);
     const planSummary = tasks.map((task) => `- ${task.name}: ${task.task} (owns: ${task.territory.join(", ")})`).join("\n");
@@ -7217,7 +7355,7 @@ async function runOrchestratedStages(
   conversationContext?: string | null,
   images?: ProviderImageInput[]
 ): Promise<{ stages: OrchestrationStage[]; designSeed: DesignSeed }> {
-  const metisBlock = metisFilePromptBlock(metisFile ?? null);
+  const metisBlock = await metisFilePromptBlock(metisFile ?? null);
   const singleFile = wantsSingleFileFrontend(prompt);
   // Same scope key the Stop button cancels by (directiveScopeKey(projectPath))
   // — every stage/critic call below registers its AbortController under this
@@ -7903,7 +8041,7 @@ async function runRepairPasses(args: {
       .filter((file) => file.path !== "metis-brief.md")
       .map((file) => `\`${file.path}\`\n\`\`\`\n${file.content.slice(0, 6000)}\n\`\`\``)
       .join("\n\n");
-    const repairPrompt = `${metisFilePromptBlock(args.metisFile ?? null)}You are the REPAIR model in a build pipeline. The project below was written to disk, but verification failed.\n\nOriginal request:\n${args.prompt}\n\nVerification failures:\n${repairEvidence(projectResult)}\n\nCurrent project files:\n${fileDump}\n\nFix the failures. Return COMPLETE corrected files (full contents, not diffs) for every file you change — and only the files you change. Before each fenced code block, put the file path in backticks on its own line. One short sentence about what was wrong, then the files.`;
+    const repairPrompt = `${await metisFilePromptBlock(args.metisFile ?? null)}You are the REPAIR model in a build pipeline. The project below was written to disk, but verification failed.\n\nOriginal request:\n${args.prompt}\n\nVerification failures:\n${repairEvidence(projectResult)}\n\nCurrent project files:\n${fileDump}\n\nFix the failures. Return COMPLETE corrected files (full contents, not diffs) for every file you change — and only the files you change. Before each fenced code block, put the file path in backticks on its own line. One short sentence about what was wrong, then the files.`;
     const repairStageId = `repair-${repairCount}`;
     const attempt = await callStageWithFallback(repairChainFor(args.override), repairPrompt, undefined, {
       stream: args.stream,
@@ -7994,7 +8132,7 @@ async function runExtractionRecovery(args: {
       args.stream,
       timelineText(`The stages didn't include complete files — asking the build model to write them out properly (attempt ${attemptNumber} of ${EXTRACTION_RECOVERY_LIMIT}).`)
     );
-    const recoveryPrompt = `${metisFilePromptBlock(args.metisFile ?? null)}Your previous output described the project but did not include complete writable files. Output ALL project files NOW, complete file contents (not diffs, not descriptions). Before each fenced code block put the file path in backticks on its own line (e.g. \`index.html\`). Plan and prior output follow:\n${planOutput}\n${frontendOutput.slice(0, 8000)}`;
+    const recoveryPrompt = `${await metisFilePromptBlock(args.metisFile ?? null)}Your previous output described the project but did not include complete writable files. Output ALL project files NOW, complete file contents (not diffs, not descriptions). Before each fenced code block put the file path in backticks on its own line (e.g. \`index.html\`). Plan and prior output follow:\n${planOutput}\n${frontendOutput.slice(0, 8000)}`;
     const recoveryStageId = `extract-recovery-${attemptNumber}`;
     const recoveryStageLabel = `File recovery ${attemptNumber}`;
     const attempt = await callStageWithFallback(chain, recoveryPrompt, undefined, {
@@ -8132,7 +8270,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       warnings: []
     };
     await appendRunToConversation(run, originalPrompt);
-    await writeSessionRun(run);
+    await writeSessionRun(run, input);
     emitStream(stream, { kind: "complete", run });
     return run;
   }
@@ -8324,7 +8462,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       const fileDump = editContextFiles.map((file) => `\`${file.path}\`\n\`\`\`\n${file.content}\n\`\`\``).join("\n\n");
       let editPrompt = `You are EDITING an existing project. Do NOT redesign or rebuild it — preserve its current structure, style, and content except where the user's request requires changes. You may ADD new files (e.g. a new page) alongside changed ones when the request calls for it.\n\nUser request:\n${prompt}\n\nCurrent project files:\n${fileDump}\n\nReturn the complete files you changed or added — and nothing else. Before each fenced code block, put the file path in backticks on its own line. One short sentence describing the change, then the files.`;
       if (conversationContext) editPrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${editPrompt}`;
-      if (metisFile) editPrompt = `${metisFilePromptBlock(metisFile)}\n\n${editPrompt}`;
+      // Read via metisFilePromptBlock (not gated on `metisFile` alone, DRILL_PLAN
+      // B12.1 Phase C) so global instructions still land here even on a project
+      // with no METIS.md.
+      const editMetisBlock = await metisFilePromptBlock(metisFile ?? null);
+      if (editMetisBlock) editPrompt = `${editMetisBlock}\n\n${editPrompt}`;
       const editKnowledge = await retrieveKnowledgeForPrompt(writable?.path, prompt);
       if (editKnowledge) {
         editPrompt = `${editKnowledge.block}${editPrompt}`;
@@ -8542,7 +8684,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     // it (including a leading /orchestration command, if any) — the stripped
     // `prompt` is only for routing/stage inputs.
     await appendRunToConversation(run, originalPrompt);
-    await writeSessionRun(run);
+    await writeSessionRun(run, input);
     emitStream(stream, { kind: "complete", run });
     return run;
   }
@@ -8644,7 +8786,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     emitStream(stream, { kind: "operation", operation: chatKnowledge.operation });
     emitTimeline(stream, { id: randomUUID(), kind: "operations", title: chatKnowledge.operation.label, operationIds: [chatKnowledge.operation.id] });
   }
-  let sessionPrompt = sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block, !fastLane);
+  let sessionPrompt = await sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block, !fastLane);
   if (images.length > 0) {
     sessionPrompt += attachmentNoteFor(images.length);
   }
@@ -8953,7 +9095,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   );
 
   await appendRunToConversation(run, prompt);
-  await writeSessionRun(run);
+  await writeSessionRun(run, input);
   // Fire-and-forget: never awaited, so a slow/unavailable local model can
   // never delay or fail this run's return. See maybeAutoTitleConversation
   // for the one-shot / manual-rename guards and the local-model prompt.
@@ -11490,6 +11632,14 @@ app.whenReady().then(async () => {
   // these yet).
   ipcMain.handle("metis-usage:summary", () => computeUsageSummary());
   ipcMain.handle("metis-usage:set-limits", (_event, patch: Partial<UsageLimits>) => writeUsageLimits(patch ?? {}));
+  // DRILL_PLAN B12.1 Phase A — learned-router preference log. Raw signal
+  // capture only in this pass: "signal" appends an explicit renderer-observed
+  // preference event (regenerate/model_switch/ab_pick/thumbs up-down),
+  // silently dropping anything with an unrecognized `kind` rather than
+  // throwing back at the renderer; "summary" is a cheap read-only rollup so
+  // the UI can show the log exists without dumping every row over IPC.
+  ipcMain.handle("metis-preference:signal", (_event, input: unknown) => recordPreferenceSignal(input));
+  ipcMain.handle("metis-preference:summary", () => computePreferenceSummary());
   ipcMain.handle("metis-manager:chat", (_event, history: ManagerChatMessage[]) => runManagerChat(history));
   // Streaming sibling of metis-manager:chat (docs/DRILL_PLAN.md Phase 8) —
   // mirrors metis-session:run-stream's streamId + sender.send pattern exactly.

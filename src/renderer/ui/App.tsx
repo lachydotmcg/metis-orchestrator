@@ -14331,6 +14331,12 @@ function SettingsWorkspace({
   // prewarm flag; main.ts double-gates on both keys plus a saved DeepSeek
   // key, so this toggle alone never spends anything. OFF by default.
   const [oracleCloudEnabled, setOracleCloudEnabled] = useAppStoreState("oracleCloudEnabled", false);
+  // Global custom instructions (docs/DRILL_PLAN.md B12.1 Phase C, Lachy's
+  // "system prompts like Claude Code" ask) — main.ts injects this string
+  // into every prompt assembly next to the per-project METIS.md block.
+  // Draft/save split so the store isn't written per keystroke.
+  const [globalInstructions, setGlobalInstructions] = useAppStoreState("globalInstructions", "");
+  const [instructionsDraft, setInstructionsDraft] = useState<string | null>(null);
   // Close-to-tray — same store key main.ts reads to decide whether closing the
   // window hides Metis in the tray instead of quitting. OFF by default.
   const [closeToTray, setCloseToTray] = useAppStoreState("closeToTray", DEFAULT_CLOSE_TO_TRAY);
@@ -15186,6 +15192,36 @@ function SettingsWorkspace({
           <p className="settings-hint">
             When a DeepSeek model is pinned, Oracle drafts your answer through your own DeepSeek key while you pause typing. This sends your in-progress prompt to DeepSeek and costs tokens on every draft. Needs the prewarm toggle on and a saved DeepSeek key.
           </p>
+        </article>
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Instructions</small>
+              <h2>Custom instructions</h2>
+            </span>
+          </header>
+          <p className="settings-hint">Applied to every conversation and build, alongside any per-project METIS.md. Tone, stack preferences, things Metis should always know about you.</p>
+          <textarea
+            className="instructions-editor"
+            rows={6}
+            placeholder="e.g. Prefer TypeScript. Terse answers. Never use em dashes in copy."
+            value={instructionsDraft ?? globalInstructions}
+            onChange={(event) => setInstructionsDraft(event.target.value)}
+          />
+          <div className="panel-actions">
+            <button
+              type="button"
+              disabled={instructionsDraft === null || instructionsDraft === globalInstructions}
+              onClick={() => {
+                if (instructionsDraft === null) return;
+                setGlobalInstructions(instructionsDraft);
+                setInstructionsDraft(null);
+              }}
+            >
+              Save instructions
+            </button>
+            {instructionsDraft !== null && instructionsDraft !== globalInstructions ? <small className="mcp-probe-note">Unsaved changes</small> : null}
+          </div>
         </article>
       </section>
       ) : null}

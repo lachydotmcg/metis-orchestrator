@@ -148,3 +148,14 @@ Settings > Providers.
   line, the guess in a carded block (with a blinking caret while it's still forming), a
   RECENT WARMS section, and the tagline footer. While warming, the chip should have a subtle
   shimmer sweep; when warm, a faint white halo. Nothing should flash or feel busy at idle.
+
+## 12. Custom instructions + preference log (added later again on 2026-07-16)
+
+- [ ] **Instructions actually apply.** Settings > Chat > Custom instructions: write something
+  unmissable ("End every answer with the word BANANA."), Save, then chat on any model. The
+  answer should obey. Clear the instructions, chat again - back to normal. Also confirm
+  Oracle instant-serve still works WITH instructions set (type, pause, send unchanged) - the
+  draft and the real run assemble the same prompt, so the hash match must survive.
+- [ ] **Preference log is recording.** No UI yet by design - after a few chats run this in
+  the app's devtools console: `await window.metisPreference.summary()` - expect a total > 0
+  with byKind.run counting your runs. This is the learned router's raw data faucet.

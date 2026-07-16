@@ -13928,3 +13928,22 @@ a:focus-visible,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Custom instructions editor (DRILL_PLAN B12.1 Phase C). */
+.instructions-editor {
+  width: 100%;
+  resize: vertical;
+  min-height: 110px;
+  padding: 10px 12px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+  font-family: inherit;
+}
+.instructions-editor:focus {
+  outline: none;
+  border-color: var(--soft);
+}
