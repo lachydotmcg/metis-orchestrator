@@ -79,6 +79,8 @@ contextBridge.exposeInMainWorld("metisConversations", {
   delete: (id: string) => ipcRenderer.invoke("metis-conversations:delete", id) as Promise<ConversationRecord[]>,
   deleteProject: (projectPath?: string) => ipcRenderer.invoke("metis-conversations:delete-project", projectPath) as Promise<ConversationRecord[]>,
   rename: (id: string, title: string) => ipcRenderer.invoke("metis-conversations:rename", id, title) as Promise<ConversationRecord[]>,
+  // DRILL_PLAN I9.5 — fork a conversation (all turns, or up to a run id).
+  fork: (id: string, uptoRunId?: string) => ipcRenderer.invoke("metis-conversations:fork", id, uptoRunId) as Promise<ConversationRecord | null>,
   archive: (id: string, archived: boolean) => ipcRenderer.invoke("metis-conversations:archive", id, archived) as Promise<ConversationRecord[]>,
   exportMarkdown: (input?: { conversationId?: string }) => ipcRenderer.invoke("metis-conversations:export", input) as Promise<ConversationExportResult>
 });

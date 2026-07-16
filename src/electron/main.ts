@@ -4557,6 +4557,43 @@ async function deleteConversation(id: string): Promise<ConversationRecord[]> {
   return next;
 }
 
+/** Conversation FORK (docs/DRILL_PLAN.md I9.5): copies a conversation into a
+ *  new one - all turns, or only up to (and including) the turn that carries
+ *  `uptoRunId` when given. Turn copies DROP their runId on purpose:
+ *  deleteConversation removes session runs by the deleted turns' runIds, so a
+ *  forked copy sharing ids would let deleting the fork nuke the SOURCE's run
+ *  records. The embedded `run` snapshot stays for display. Pairs with
+ *  per-conversation model memory: fork the same context onto a different
+ *  model and compare (the renderer copies the model mapping). */
+async function forkConversation(id: string, uptoRunId?: string): Promise<ConversationRecord | null> {
+  const current = await readConversations();
+  const source = current.find((item) => item.id === id);
+  if (!source) return null;
+  let cut = source.turns.length;
+  if (uptoRunId) {
+    const index = source.turns.findIndex((turn) => turn.runId === uptoRunId);
+    if (index >= 0) cut = index + 1;
+  }
+  const now = new Date().toISOString();
+  const fork: ConversationRecord = {
+    id: randomUUID(),
+    projectPath: source.projectPath,
+    title: `${source.title} (fork)`,
+    createdAt: now,
+    updatedAt: now,
+    turns: source.turns.slice(0, cut).map(({ runId: _dropped, ...turn }) => ({ ...turn, id: randomUUID() })),
+    // The fork title is derived and deliberate - never auto-retitled.
+    titleManual: true,
+    autoTitleAttempted: true
+  };
+  await writeConversations([fork, ...current]);
+  await appendAudit("info", "conversation.fork", `Forked conversation "${source.title}" (${fork.turns.length} turns).`, {
+    sourceId: id,
+    forkId: fork.id
+  });
+  return fork;
+}
+
 async function renameConversation(id: string, title: string): Promise<ConversationRecord[]> {
   const trimmed = title.trim();
   const current = await readConversations();
@@ -11156,6 +11193,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-conversations:delete", (_event, id: string) => deleteConversation(id));
   ipcMain.handle("metis-conversations:delete-project", (_event, projectPath?: string) => deleteProjectConversations(projectPath));
   ipcMain.handle("metis-conversations:rename", (_event, id: string, title: string) => renameConversation(id, title));
+  // I9.5: fork a conversation (whole, or up to a run id) into a new one.
+  ipcMain.handle("metis-conversations:fork", (_event, id: string, uptoRunId?: string) => forkConversation(id, uptoRunId));
   ipcMain.handle("metis-conversations:archive", (_event, id: string, archived: boolean) => archiveConversation(id, archived));
   ipcMain.handle("metis-conversations:export", (_event, input?: { conversationId?: string }) => exportConversationsMarkdown(input?.conversationId));
   ipcMain.handle("metis-knowledge:searchConversations", (_event, query: string, topK?: number) => retrieveConversationContext(query, topK));

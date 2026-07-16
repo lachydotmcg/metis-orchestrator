@@ -246,10 +246,17 @@ Grounded in the existing substrate; each names what it builds on.
   button on each routine card, spinner while running, auto-opens the preview conversation on
   success. NEEDS-LIVE-TEST: dry-run a build-ish routine, it should stop after the plan stage
   with nothing written.
-- [ ] **I9.5 - Conversation forking.** Fork a conversation at any turn into a new conversation
+- [x] **I9.5 - Conversation forking.** Fork a conversation at any turn into a new conversation
   (copy turns up to that point). Cheap in the store model (ConversationRecord.turns slice) and
   pairs beautifully with per-conversation models: fork the same context onto a different model
   and compare.
+  SHIPPED (Fable direct): forkConversation(id, uptoRunId?) copies all turns (or up to and
+  including the uptoRunId turn), DROPS runIds on the copies (deleting a fork must never nuke
+  the sources run records - deleteConversation deletes runs by turn runId) while keeping the
+  embedded run snapshots for display, fresh turn ids, title "(fork)" + titleManual; Fork button
+  in the conversation context menu copies the per-conversation model mapping to the fork and
+  jumps straight to it. Per-turn fork UI (uptoRunId) is a wired-but-unexposed follow-up.
+  NEEDS-LIVE-TEST: fork a conversation, pick a different model in the fork, compare answers.
 - [ ] **I9.6 - A/B answer mode.** Ask once, two models answer side by side (local vs cloud, or
   two locals), pick the winner; the pick is recorded as a preference signal (future: feeds the
   router policy). Builds on the side-chat surface + invokeProvider.

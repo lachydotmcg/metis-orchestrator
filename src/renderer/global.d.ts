@@ -88,6 +88,9 @@ declare global {
       rename: (id: string, title: string) => Promise<ConversationRecord[]>;
       archive: (id: string, archived: boolean) => Promise<ConversationRecord[]>;
       exportMarkdown: (input?: { conversationId?: string }) => Promise<ConversationExportResult>;
+      // DRILL_PLAN I9.5 — fork a conversation (all turns, or up to and
+      // including the turn carrying uptoRunId). Optional: older preloads.
+      fork?: (id: string, uptoRunId?: string) => Promise<ConversationRecord | null>;
     };
     metisLab?: {
       runExperiment: (prompt?: string) => Promise<LabExperimentResult>;

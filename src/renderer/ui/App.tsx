@@ -2016,6 +2016,7 @@ export function App(): JSX.Element {
           onConversationsChanged={refreshConversations}
           onNewSession={startNewSession}
           onNavigate={setActiveNav}
+          onOpenConversationById={openConversationById}
           storedConversations={storedConversations}
           pendingByConversation={pendingByConversation}
           setPendingByConversation={setPendingByConversation}
@@ -3441,6 +3442,7 @@ function NewSessionWorkspace({
   onConversationsChanged,
   onNewSession,
   onNavigate,
+  onOpenConversationById,
   openConversation,
   storedConversations = [],
   pendingByConversation,
@@ -3457,6 +3459,8 @@ function NewSessionWorkspace({
   /** Lets an approved open_view action on a run's proposed-actions card (see
    *  RunProposedActions) switch the app's active nav, same as the Manager tab. */
   onNavigate?: (nav: NavKey) => void;
+  /** I9.5 fork: jump to a specific conversation (the fresh fork) by id. */
+  onOpenConversationById?: (id: string) => void;
   openConversation?: ConversationRecord | null;
   storedConversations?: ConversationRecord[];
   /** Parallel sessions phase A — lifted to App() (see comment there) so runs
@@ -4093,6 +4097,22 @@ function NewSessionWorkspace({
     onNewSession?.();
   }
 
+  // Fork (docs/DRILL_PLAN.md I9.5): copy this conversation into a new one and
+  // jump to it. The fork inherits the source's remembered model mapping so
+  // "same context, different model" is one picker change away.
+  async function forkOpenConversation(): Promise<void> {
+    const forkFn = window.metisConversations?.fork;
+    if (!openStoredConversation || !forkFn) return;
+    const fork = await forkFn(openStoredConversation.id);
+    if (!fork) return;
+    if (Object.prototype.hasOwnProperty.call(conversationModels, openStoredConversation.id)) {
+      rememberConversationModel(fork.id, conversationModels[openStoredConversation.id]);
+    }
+    onConversationsChanged?.();
+    setWorkspaceContextOpen(false);
+    onOpenConversationById?.(fork.id);
+  }
+
   async function deleteOpenConversation(): Promise<void> {
     if (!openStoredConversation || !window.metisConversations) return;
     if (!contextDeleteArmed) {
@@ -4535,6 +4555,10 @@ function NewSessionWorkspace({
                         Rename
                       </button>
                     )}
+                    <button type="button" onClick={() => void forkOpenConversation()} title="Copy this conversation into a new one - same context, pick a different model and compare">
+                      <GitFork size={13} />
+                      Fork
+                    </button>
                     <button type="button" onClick={() => void archiveOpenConversation()}>
                       <Archive size={13} />
                       Archive
