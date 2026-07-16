@@ -154,6 +154,17 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   Local entries list their ollama route FIRST so expandStageRef keeps local-first ordering and
   cloud routes only serve as fallback/pin options. Registry commits 612dd09 + d0b16d7.
 
+- [x] **B11.6 - L3 defaults to the node's own model (Lachy).** Whatever model you drag and drop
+  onto the node IS your L3 by default - the base model is the deep level, an explicit L3 pick
+  still wins. Stack row shows the primary with logo + NAME - base instead of Strongest cloud
+  (default); the L3 mini-picker's Default row copy says This node's own model (your base).
+  Depth mirroring moved OUT of the inspector into projectDepthRoutes in the workspace's
+  debounced nodes effect (same tick as the graphPipeline projection), so a drag-and-drop
+  primary swap on a depths-enabled node re-mirrors L3 with the inspector closed - the old
+  inspector-local mirrorDepthRoutes/read-modify-write is gone. NEEDS-LIVE-TEST: enable depths,
+  L3 row should read your node model - base; drop a different model on the node and depth-3
+  turns should route to it.
+
 ## ★ PITCH BATCH 10 (2026-07-13, research round - AWAITING LACHY GREEN LIGHT, ranked by Fable)
 
 - [x] **P10.1 - Metis Gateway (top pick).** Expose the router + Oracle as a localhost

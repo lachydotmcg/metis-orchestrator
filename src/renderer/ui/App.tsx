@@ -7484,6 +7484,45 @@ function graphNodeOrderRank(node: GraphNode): number {
  *  (fail-soft — main.ts's own validity check requires >=2 usable stages
  *  anyway). Ordered planning-ish first, frontend-ish second, everything else
  *  after (stable within each bucket). */
+/** Maps a picker ModelRef (renderer brand ids) to the backend StageModelRef
+ *  shape the depthRoutes store expects. Local-tier brands resolve to ollama
+ *  + their real tag; cloud brands whose id IS a backend ProviderKey pass
+ *  through; anything unmappable returns null and is simply not mirrored
+ *  (the node keeps the setting, the engine keeps its level default). */
+function depthStageRefFor(ref: ModelRef | "router"): { provider: string; model: string } | "router" | null {
+  if (ref === "router") return "router";
+  if (PROVIDERS[ref.provider]?.tier === "local") {
+    const tag = localOllamaTagFor(ref);
+    return tag ? { provider: "ollama", model: tag } : null;
+  }
+  const direct = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
+  return direct.includes(ref.provider) ? { provider: ref.provider, model: ref.model } : null;
+}
+
+/** Projects the depths-enabled node's level stack into the depthRoutes store
+ *  shape (docs/DRILL_PLAN.md B11.2/B11.6). L3 DEFAULTS TO THE NODE'S OWN
+ *  PRIMARY MODEL (Lachy: whatever model you drag and drop onto the node is by
+ *  default your L3) - an explicit L3 pick still wins. Runs from the same
+ *  debounced nodes effect as the pipeline projection, so a drag-and-drop
+ *  primary swap re-mirrors L3 without the inspector even being open. Returns
+ *  null when no node has depths enabled (nothing is written, the store keeps
+ *  its last value and the depthRoutingEnabled flag governs whether it's used). */
+function projectDepthRoutes(nodes: GraphNode[]): Record<string, unknown> | null {
+  const node = nodes.find((n) => n.depthsEnabled && (n.kind === "agent" || n.kind === "router"));
+  if (!node) return null;
+  const models = node.depthModels ?? {};
+  const primary: ModelRef | undefined = node.provider && node.model ? { provider: node.provider, model: node.model } : undefined;
+  const l3 = models.l3 ?? primary;
+  const next: Record<string, unknown> = {};
+  const deep = l3 ? depthStageRefFor(l3) : null;
+  const standard = models.l2 ? depthStageRefFor(models.l2) : null;
+  const shallow = models.l1 ? depthStageRefFor(models.l1) : null;
+  if (deep) next.deep = deep;
+  if (standard) next.standard = standard;
+  if (shallow) next.shallow = shallow;
+  return next;
+}
+
 function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, ModelGatewayConfig>): GraphPipelineConfig {
   // Per-MODEL gateways (docs/DRILL_PLAN.md B11.3 v2): a model's gateway
   // config lives in the global modelGateways store (set from the Library
@@ -7626,6 +7665,10 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
     const handle = window.setTimeout(() => {
       const config = projectGraphPipeline(nodesRef.current, modelGateways);
       void window.metisStore?.set("graphPipeline", config);
+      // Depths mirror (B11.6): L3 defaults to the node's primary model, so a
+      // drag-and-drop model swap on a depths-enabled node re-mirrors here too.
+      const depthRoutes = projectDepthRoutes(nodesRef.current);
+      if (depthRoutes) void window.metisStore?.set("depthRoutes", depthRoutes);
     }, 1000);
     return () => window.clearTimeout(handle);
   }, [nodes, modelGateways]);
@@ -15163,44 +15206,9 @@ function NodeInspector({
   // tile and a mini copy of the model library appears in this panel).
   const [depthPicking, setDepthPicking] = useState<"l1" | "l2" | "l3" | null>(null);
 
-  // Maps a picker ModelRef (renderer brand ids) to the backend StageModelRef
-  // shape the depthRoutes store expects. Local-tier brands resolve to ollama
-  // + their real tag; cloud brands whose id IS a backend ProviderKey pass
-  // through; anything unmappable returns null and is simply not mirrored
-  // (the node keeps the setting, the engine keeps its level default).
-  function depthStageRefFor(ref: ModelRef | "router"): { provider: string; model: string } | "router" | null {
-    if (ref === "router") return "router";
-    if (PROVIDERS[ref.provider]?.tier === "local") {
-      const tag = localOllamaTagFor(ref);
-      return tag ? { provider: "ollama", model: tag } : null;
-    }
-    const direct = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
-    return direct.includes(ref.provider) ? { provider: ref.provider, model: ref.model } : null;
-  }
-
-  // Mirrors the node's depth stack into the global depthRoutes store so the
-  // shipped backend engine (depthRouteFor) consumes it today. Read-modify-
-  // write, fire-and-forget, guarded for the preview. True per-node pipeline
-  // consumption is the noted follow-up (B11.2).
-  function mirrorDepthRoutes(models: { l1?: ModelRef | "router"; l2?: ModelRef | "router"; l3?: ModelRef | "router" }): void {
-    const store = window.metisStore;
-    if (!store) return;
-    void store
-      .get<Record<string, unknown>>("depthRoutes", {})
-      .then((current) => {
-        const next = { ...current };
-        const deep = models.l3 ? depthStageRefFor(models.l3) : null;
-        const standard = models.l2 ? depthStageRefFor(models.l2) : null;
-        const shallow = models.l1 ? depthStageRefFor(models.l1) : null;
-        if (deep) next.deep = deep; else delete next.deep;
-        if (standard) next.standard = standard; else delete next.standard;
-        if (shallow) next.shallow = shallow; else delete next.shallow;
-        return store.set("depthRoutes", next);
-      })
-      .catch(() => {
-        /* preview or transient store failure - the node state still holds the choice */
-      });
-  }
+  // Depth mirroring now lives in the workspace's debounced nodes effect
+  // (projectDepthRoutes, B11.6) so it also catches drag-and-drop primary
+  // swaps - this panel only edits node state.
 
   function setDepthsEnabled(enabled: boolean): void {
     onUpdate(node.id, { depthsEnabled: enabled });
@@ -15215,7 +15223,6 @@ function NodeInspector({
       models[level] = value;
     }
     onUpdate(node.id, { depthModels: models });
-    mirrorDepthRoutes(models);
     setDepthPicking(null);
   }
 
@@ -15294,7 +15301,7 @@ function NodeInspector({
                         <span className="depth-level-tile empty" />
                         <span className="depth-mini-text">
                           <strong>Default</strong>
-                          <small>Use this level's built-in default</small>
+                          <small>{depthPicking === "l3" ? "This node's own model (your base)" : "Use this level's built-in default"}</small>
                         </span>
                       </button>
                       {MODEL_LIBRARY.map((ref) => (
@@ -15321,14 +15328,19 @@ function NodeInspector({
                       { level: "l1" as const, badge: "L1", fallback: "Local model (default)" }
                     ]).map(({ level, badge, fallback }) => {
                       const chosen = node.depthModels?.[level];
+                      // L3 defaults to the node's OWN model (B11.6, Lachy:
+                      // whatever you drag and drop onto the node is your L3
+                      // by default) - an explicit pick still wins.
+                      const baseDefault = level === "l3" && !chosen && node.provider && node.model ? { provider: node.provider, model: node.model } : null;
+                      const shown = chosen ?? baseDefault ?? null;
                       return (
                         <button type="button" className="depth-level-row" key={level} onClick={() => setDepthPicking(level)} aria-label={`Choose ${badge} model`}>
                           <span className="depth-level-badge">{badge}</span>
-                          <span className={chosen ? "depth-level-tile" : "depth-level-tile empty"}>
-                            {chosen === "router" ? <Waypoints size={18} /> : chosen ? <img alt="" src={PROVIDERS[chosen.provider].logo} /> : null}
+                          <span className={shown ? "depth-level-tile" : "depth-level-tile empty"}>
+                            {shown === "router" ? <Waypoints size={18} /> : shown ? <img alt="" src={PROVIDERS[shown.provider].logo} /> : null}
                           </span>
                           <span className={chosen ? "depth-level-name" : "depth-level-name muted"}>
-                            {chosen === "router" ? "Router" : chosen ? chosen.model : fallback}
+                            {shown === "router" ? "Router" : baseDefault ? `${baseDefault.model} · base` : shown ? shown.model : fallback}
                           </span>
                         </button>
                       );
