@@ -172,9 +172,12 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   at Metis instead and silently gets quality/cost/quota routing + prewarming. Metis becomes
   infrastructure, not just an app. Trend-proof: LocalAI-style universal endpoints are the moat
   move in the space.
-- [ ] **P10.2 - MCP tools used IN the pipeline.** We install and probe MCP servers but stages
+- [x] **P10.2 - MCP tools used IN the pipeline.** We install and probe MCP servers but stages
   never call their tools mid-run. Wiring tool calls into stages makes the marketplace real and
-  matches the ecosystem standard (everything speaks MCP now).
+  matches the ecosystem standard (everything speaks MCP now). SHIPPED: chat runs behind the
+  new `mcpToolsEnabled` store key (default OFF) now advertise installed MCP servers' tools in
+  the prompt and execute the model's JSON tool-call directives over the servers' stdio (max 4
+  calls/turn, 30s per call, timeline + audit per call, fail-soft errors) — NEEDS-LIVE-TEST.
 - [x] **P10.3 - Living-spec fan-out.** The coordinator writes a spec doc as a first-class
   artifact; parallel agents update their sections live and you watch it evolve. We already have
   the fan-out engine, file-claim ledger and agent bus - this is the missing visible artifact.

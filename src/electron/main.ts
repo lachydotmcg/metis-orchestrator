@@ -2637,6 +2637,236 @@ async function probeMcpServer(installedPackageId: string): Promise<McpProbeResul
   return result;
 }
 
+// ---------------------------------------------------------------------------
+// MCP tools IN the chat pipeline (docs/DRILL_PLAN.md P10.2). Everything below
+// only runs when the `mcpToolsEnabled` store key is true (default OFF — flag
+// off is byte-identical to before). v1 mechanism is prompt-based tool
+// calling: the provider paths here are plain prompt -> text calls with no
+// native tool-call support, so tool schemas are appended to the chat prompt
+// and the model requests a call by replying with a single JSON directive,
+// which Metis executes against the installed server's stdio process (the same
+// spawn/handshake plumbing as probeMcpServer) and feeds back.
+
+const MCP_MAX_TOOL_CALLS_PER_RUN = 4;
+const MCP_TOOL_CALL_TIMEOUT_MS = 30_000;
+/** Leak guard: a run toolset's child is force-killed after this long even if
+ *  the normal close path was skipped (e.g. a Stop-button cancel between
+ *  connect and the tool loop). */
+const MCP_RUN_TOOLSET_TTL_MS = 5 * 60_000;
+
+/** Local shape only — deliberately NOT the shared McpTool contract, which has
+ *  no inputSchema field; the schema stays main-process-internal (P10.2). */
+type McpRunTool = { name: string; description?: string; inputSchema?: unknown };
+
+type McpRunToolset = {
+  packageName: string;
+  serverName: string;
+  client: McpStdioClient;
+  child: import("node:child_process").ChildProcess;
+  tools: McpRunTool[];
+};
+
+/** Spawns one installed MCP package's server and completes the handshake like
+ *  probeMcpServer, but keeps the child ALIVE for tools/call during the run
+ *  (docs/DRILL_PLAN.md P10.2). Never throws — failures resolve to {error}. */
+async function connectMcpToolset(pkg: RegistryPackage): Promise<McpRunToolset | { error: string }> {
+  if (!pkg.installedPath) return { error: `Package "${pkg.name}" has no installed mcp.json path.` };
+  let config: McpServersFile;
+  try {
+    config = JSON.parse(await readFile(pkg.installedPath, "utf8")) as McpServersFile;
+  } catch (err) {
+    return { error: `Failed to read/parse mcp.json: ${(err as Error).message}` };
+  }
+  const entries = Object.entries(config.mcpServers ?? {});
+  if (entries.length === 0) return { error: "mcp.json has no entries under mcpServers." };
+  const [serverName, serverConfig] = entries[0];
+  if (!serverConfig?.command) return { error: `Server "${serverName}" has no command.` };
+
+  const spawnEnv = { ...process.env, ...(serverConfig.env ?? {}) };
+  const args = serverConfig.args ?? [];
+  const trySpawn = (useShell: boolean) =>
+    spawn(serverConfig.command, args, { env: spawnEnv, stdio: ["pipe", "pipe", "pipe"], shell: useShell, windowsHide: true });
+
+  return await new Promise<McpRunToolset | { error: string }>((resolveConnect) => {
+    let settled = false;
+    let retried = false;
+    const timer = setTimeout(() => fail("MCP connect timed out after 20s."), 20_000);
+
+    const fail = (error: string, child?: import("node:child_process").ChildProcess) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        if (child && !child.killed) child.kill();
+      } catch {
+        // Best-effort — nothing more to do if kill throws.
+      }
+      resolveConnect({ error });
+    };
+
+    // Same Windows npx/.cmd shim quirk handling as probeMcpServer: a bare
+    // "npx" spawn can ENOENT even on PATH — retried once with shell:true.
+    const attempt = (useShell: boolean) => {
+      const child = trySpawn(useShell);
+      child.once("error", (err: NodeJS.ErrnoException) => {
+        if (settled) return;
+        if (!retried && err.code === "ENOENT" && process.platform === "win32" && !useShell) {
+          retried = true;
+          attempt(true);
+          return;
+        }
+        fail(`Failed to spawn MCP server: ${err.message}`, child);
+      });
+      child.once("exit", (code) => {
+        if (!settled) fail(`MCP server exited before handshake completed (code ${code ?? "null"}).`, child);
+      });
+      // TTL leak guard — unref'd so it never keeps the app alive.
+      const ttl = setTimeout(() => {
+        try {
+          if (!child.killed) child.kill();
+        } catch {
+          // Best-effort.
+        }
+      }, MCP_RUN_TOOLSET_TTL_MS);
+      ttl.unref();
+      const client = new McpStdioClient(child);
+      void (async () => {
+        try {
+          await client.request("initialize", {
+            protocolVersion: "2024-11-05",
+            capabilities: {},
+            clientInfo: { name: "metis", version: app.getVersion() }
+          });
+          client.notify("notifications/initialized", {});
+          const toolsResult = await client.request("tools/list", {});
+          const rawTools = Array.isArray(toolsResult?.tools) ? toolsResult.tools : [];
+          const tools: McpRunTool[] = rawTools
+            .filter((tool: unknown) => tool && typeof (tool as { name?: unknown }).name === "string")
+            .map((tool: { name: string; description?: string; inputSchema?: unknown }) => ({
+              name: tool.name,
+              description: typeof tool.description === "string" ? tool.description : undefined,
+              inputSchema: tool.inputSchema
+            }));
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolveConnect({ packageName: pkg.name, serverName, client, child, tools });
+        } catch (err) {
+          fail(`MCP handshake failed: ${(err as Error).message}`, child);
+        }
+      })();
+    };
+
+    attempt(process.platform === "win32" && /^npx(\.cmd)?$/i.test(serverConfig.command));
+  });
+}
+
+/** Connects every installed MCP package's server for one chat run. Fail soft
+ *  (P10.2): an unreachable server is audited and skipped, never a crash. */
+async function connectMcpToolsetsForRun(): Promise<McpRunToolset[]> {
+  const installed = await listInstalledPackages();
+  const toolsets: McpRunToolset[] = [];
+  for (const pkg of installed.filter((item) => item.kind === "mcp")) {
+    const outcome = await connectMcpToolset(pkg);
+    if ("error" in outcome) {
+      await appendAudit("warning", "mcp.tools", `MCP server for package ${pkg.name} is unavailable for this run: ${outcome.error}`, {
+        packageId: pkg.id,
+        error: outcome.error
+      });
+      continue;
+    }
+    if (outcome.tools.length > 0) toolsets.push(outcome);
+    else closeMcpToolsets([outcome]);
+  }
+  return toolsets;
+}
+
+function closeMcpToolsets(toolsets: McpRunToolset[]): void {
+  for (const toolset of toolsets) {
+    try {
+      toolset.client.rejectAllPending(new Error("Run finished"));
+      if (!toolset.child.killed) toolset.child.kill();
+    } catch {
+      // Best-effort — nothing more to do if kill throws.
+    }
+  }
+}
+
+/** Prompt block advertising the connected servers' tools plus the JSON
+ *  directive the model must reply with to request a call (P10.2 v1 —
+ *  prompt-based tool calling, see the section comment above). */
+function mcpToolPromptBlock(toolsets: McpRunToolset[]): string {
+  const lines: string[] = [];
+  for (const toolset of toolsets) {
+    for (const tool of toolset.tools) {
+      lines.push(
+        `- server "${toolset.serverName}", tool "${tool.name}"${tool.description ? `: ${tool.description}` : ""}${
+          tool.inputSchema ? `\n  input schema: ${JSON.stringify(tool.inputSchema)}` : ""
+        }`
+      );
+    }
+  }
+  return `\n\nYou can call these MCP tools:\n${lines.join("\n")}\n\nTo call a tool, reply with ONLY this JSON object and nothing else:\n{"mcp_tool_call": {"server": "<server name>", "tool": "<tool name>", "arguments": { ... }}}\nThe tool result will be given back to you so you can continue. At most ${MCP_MAX_TOOL_CALLS_PER_RUN} tool calls per turn. If no tool is needed, answer normally.`;
+}
+
+/** Extracts an mcp_tool_call directive from a model reply — tolerates a
+ *  fenced code block or surrounding prose. Null means "no tool requested". */
+function parseMcpToolCall(output: string): { server?: string; tool: string; arguments: Record<string, unknown> } | null {
+  if (!output.includes("mcp_tool_call")) return null;
+  const candidates: string[] = [output.trim()];
+  const fenced = output.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fenced?.[1]) candidates.push(fenced[1].trim());
+  const first = output.indexOf("{");
+  const last = output.lastIndexOf("}");
+  if (first >= 0 && last > first) candidates.push(output.slice(first, last + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as { mcp_tool_call?: { server?: unknown; tool?: unknown; arguments?: unknown } };
+      const call = parsed?.mcp_tool_call;
+      if (call && typeof call.tool === "string" && call.tool) {
+        return {
+          server: typeof call.server === "string" ? call.server : undefined,
+          tool: call.tool,
+          arguments: call.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments) ? (call.arguments as Record<string, unknown>) : {}
+        };
+      }
+    } catch {
+      // Not valid JSON — try the next candidate.
+    }
+  }
+  return null;
+}
+
+/** Runs one tools/call against a connected run toolset with a hard per-call
+ *  timeout. Never throws — every failure (dead server, timeout, tool isError)
+ *  comes back as { ok: false, text } so the model sees an error string and
+ *  the run keeps going (P10.2 fail-soft). */
+async function callMcpToolForRun(toolset: McpRunToolset, toolName: string, args: Record<string, unknown>): Promise<{ ok: boolean; text: string }> {
+  if (toolset.child.killed || toolset.child.exitCode !== null) {
+    return { ok: false, text: `MCP server "${toolset.serverName}" is no longer running.` };
+  }
+  let timeoutHandle: NodeJS.Timeout | undefined;
+  try {
+    const result = await Promise.race([
+      toolset.client.request("tools/call", { name: toolName, arguments: args }),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => reject(new Error(`MCP tool call timed out after ${MCP_TOOL_CALL_TIMEOUT_MS / 1000}s.`)), MCP_TOOL_CALL_TIMEOUT_MS);
+      })
+    ]);
+    const content = Array.isArray((result as { content?: unknown })?.content) ? ((result as { content: unknown[] }).content) : [];
+    const text = content
+      .map((part) => (typeof (part as { text?: unknown })?.text === "string" ? (part as { text: string }).text : JSON.stringify(part)))
+      .join("\n")
+      .trim();
+    const isError = Boolean((result as { isError?: unknown })?.isError);
+    return { ok: !isError, text: text || JSON.stringify(result ?? null) };
+  } catch (err) {
+    return { ok: false, text: `MCP tool call failed: ${(err as Error).message}` };
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
 function modelCatalogDefaultState(): ModelCatalogState {
   return { sourceUrl: METIS_REGISTRY_BASE_URL, status: "idle", models: [] };
 }
@@ -8197,6 +8427,24 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   if (images.length > 0) {
     sessionPrompt += attachmentNoteFor(images.length);
   }
+  // MCP tools in the chat pipeline (docs/DRILL_PLAN.md P10.2): opt-in via the
+  // `mcpToolsEnabled` store key (default OFF — flag off leaves this turn
+  // byte-identical to before). Connect each installed MCP package's server
+  // once for this run and advertise its tools in the prompt. Appending here,
+  // BEFORE the Oracle hash check below, also means an Oracle draft (drafted
+  // without the tool block) can never be served for a tool-enabled prompt.
+  const mcpToolsets = (await readStoreValue<boolean>("mcpToolsEnabled", false)) ? await connectMcpToolsetsForRun() : [];
+  if (mcpToolsets.length > 0) {
+    sessionPrompt += mcpToolPromptBlock(mcpToolsets);
+    emitTimeline(
+      stream,
+      timelineText(
+        `MCP tools available this turn: ${mcpToolsets
+          .map((toolset) => `${toolset.serverName} (${toolset.tools.length} tool${toolset.tools.length === 1 ? "" : "s"})`)
+          .join(", ")}.`
+      )
+    );
+  }
   const chatImages = images.length > 0 ? images : undefined;
   const overrideWarnings: string[] = [];
   let providerResult: ProviderInvokeResult;
@@ -8251,6 +8499,50 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     );
     emitTimeline(stream, timelineText(`Couldn’t reach ${overrideDisplayLabel(override)} — falling back to ${providerInfo[provider].label} (${fallbackModel}).`));
     providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
+  }
+  // P10.2 tool-call loop: when the model replied with an mcp_tool_call JSON
+  // directive, execute it against the connected server, feed the result back
+  // into the prompt, and re-invoke — capped at MCP_MAX_TOOL_CALLS_PER_RUN
+  // with a hard per-call timeout inside callMcpToolForRun. A tool/server
+  // error becomes a tool-result error string for the model (fail soft),
+  // never a crashed run. Servers are always closed when the loop ends; a
+  // cancellation before this point leaves them to the connect-time TTL kill.
+  if (mcpToolsets.length > 0 && providerResult.source !== "placeholder") {
+    try {
+      for (let callIndex = 0; callIndex < MCP_MAX_TOOL_CALLS_PER_RUN; callIndex++) {
+        const requested = parseMcpToolCall(providerResult.output);
+        if (!requested) break;
+        const toolset =
+          mcpToolsets.find(
+            (candidate) => (!requested.server || candidate.serverName === requested.server) && candidate.tools.some((tool) => tool.name === requested.tool)
+          ) ?? mcpToolsets.find((candidate) => candidate.serverName === requested.server);
+        const callStart = Date.now();
+        const outcome = toolset
+          ? await callMcpToolForRun(toolset, requested.tool, requested.arguments)
+          : { ok: false, text: `No connected MCP server exposes a tool named "${requested.tool}".` };
+        const callMs = Date.now() - callStart;
+        // Timeline honesty (P10.2): every tool call is a visible timeline
+        // line plus an audit entry — never a silent side effect.
+        emitTimeline(stream, timelineText(`MCP tool ${requested.tool}${toolset ? ` (${toolset.serverName})` : ""} ${outcome.ok ? "returned" : "failed"} in ${callMs}ms.`));
+        await appendAudit(outcome.ok ? "info" : "warning", "mcp.tool.call", `MCP tool ${requested.tool} ${outcome.ok ? "returned" : "failed"} in ${callMs}ms.`, {
+          serverName: toolset?.serverName,
+          tool: requested.tool,
+          durationMs: callMs,
+          ok: outcome.ok
+        });
+        const resultText = outcome.text.length > 8000 ? `${outcome.text.slice(0, 8000)}\n[truncated]` : outcome.text;
+        sessionPrompt += `\n\nYou requested MCP tool "${requested.tool}" with arguments ${JSON.stringify(requested.arguments)}. ${
+          outcome.ok ? "Result" : "It failed with this error"
+        }:\n${resultText}\n\n${
+          callIndex + 1 >= MCP_MAX_TOOL_CALLS_PER_RUN
+            ? "The tool-call limit for this turn is reached — answer the user now without requesting another tool."
+            : "Continue: either answer the user, or request another tool call with the same JSON format."
+        }`;
+        providerResult = await invokeProvider({ provider: providerResult.provider, model: providerResult.model, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
+      }
+    } finally {
+      closeMcpToolsets(mcpToolsets);
+    }
   }
   const providerMs = Date.now() - providerStart;
   // General-chat action proposals (bug L6): reuses the exact Manager-tab
