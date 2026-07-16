@@ -145,6 +145,15 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   streaming caret while warming, RECENT WARMS section heading, tagline foot (Answers before
   you finish asking), 280px, blur backdrop. All greyscale, all honest, reduced-motion safe.
   NEEDS-LIVE-TEST.
+- [x] **B12.9 [Lachy live-add] - Composer declutter.** The bordered box holds ONLY the input +
+  send; everything else moved to a bare row below it (no boxes - permission pill, + menu, model
+  selector, ring, Oracle all blend in). Removed: the standalone image button (redundant, the +
+  menu attaches images through the same hidden input), the coming-soon mic, and the toolbar
+  template-save button - templates are authored via a New template row in the "/" popover
+  (name + text form floating over the box). Model selector shows just the name + caret (logos
+  stay on the picker rows). Oracle chip is plain "Oracle" with its OWN inline SVG mark (compass
+  star, spins slowly while warming, glows when warm - no model logos, no ms; details live in
+  the popover). NEEDS-LIVE-TEST: whole composer bottom row.
 - [ ] **B12.3 [P2] - Oracle v0.4 similarity serving.** NOT a response cache: serve the draft
   generated seconds ago from the 95%-final prompt when the sent prompt differs only
   cosmetically. Embed draft-prompt vs sent-prompt locally (nomic-embed already in the stack),

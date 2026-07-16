@@ -204,7 +204,7 @@ type PromptTemplate = { id: string; name: string; text: string };
 // commands added alongside it. Unlike "template", these three never carry
 // deletable user data, they're fixed rows the popover always offers (subject
 // to their own bridge/availability checks at render time).
-type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "handoff" } | { kind: "template"; template: PromptTemplate };
+type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "handoff" } | { kind: "newTemplate" } | { kind: "template"; template: PromptTemplate };
 // Canned prompt /summarize submits verbatim through the normal onSubmit path
 // (DRILL_PLAN I9.9) — no new backend, it just reuses the same pipeline a
 // hand-typed message would use, so the reply lands as an ordinary assistant turn.
@@ -4895,6 +4895,9 @@ function SessionComposer({
   const [templateActiveIndex, setTemplateActiveIndex] = useState(0);
   const [saveTemplateOpen, setSaveTemplateOpen] = useState(false);
   const [draftTemplateName, setDraftTemplateName] = useState("");
+  // Template TEXT authored in the /-popover's New template form (B12
+  // declutter - the toolbar save button is gone).
+  const [draftTemplateText, setDraftTemplateText] = useState("");
   // /export built-in slash command result (DRILL_PLAN I9.9) — mirrors the
   // Settings > Privacy "Export all conversations" busy/result shape
   // (exportBusy/exportResult there) so the composer's inline note reads the
@@ -5153,12 +5156,15 @@ function SessionComposer({
   const summarizeRowMatches = !templateFilter || "summarize".includes(templateFilter) || "summary".includes(templateFilter);
   // Built-in /handoff row (DRILL_PLAN I9.10) — same discoverability idiom.
   const handoffRowMatches = !templateFilter || "handoff".includes(templateFilter) || "continue".includes(templateFilter);
+  // New template row (B12 declutter - replaces the old toolbar save button).
+  const newTemplateRowMatches = !templateFilter || "template".includes(templateFilter) || "new".includes(templateFilter) || "save".includes(templateFilter);
   const templateRows: TemplateRow[] = [
     ...(orchestrationRowMatches ? [{ kind: "builtin" as const }] : []),
     ...(exportRowMatches ? [{ kind: "export" as const }] : []),
     ...(summarizeRowMatches ? [{ kind: "summarize" as const }] : []),
     ...(handoffRowMatches ? [{ kind: "handoff" as const }] : []),
-    ...filteredTemplates.map((template) => ({ kind: "template" as const, template }))
+    ...filteredTemplates.map((template) => ({ kind: "template" as const, template })),
+    ...(newTemplateRowMatches ? [{ kind: "newTemplate" as const }] : [])
   ];
   const templateActiveRow = templateRows.length ? templateRows[Math.min(templateActiveIndex, templateRows.length - 1)] : undefined;
 
@@ -5205,15 +5211,26 @@ function SessionComposer({
       void onSubmit(SLASH_HANDOFF_PROMPT);
       return;
     }
+    if (row.kind === "newTemplate") {
+      setPrompt("");
+      setDraftTemplateName("");
+      setDraftTemplateText("");
+      setSaveTemplateOpen(true);
+      return;
+    }
     setPrompt(row.kind === "builtin" ? "/orchestration " : row.template.text);
   }
 
   function handleSaveTemplate(): void {
+    // B12 declutter: templates are authored in the /-popover's New template
+    // form now (name + text), not scraped from the composer draft.
     const name = draftTemplateName.trim();
-    if (!name || !prompt.trim()) return;
-    savePromptTemplate(name, prompt);
+    const text = draftTemplateText.trim();
+    if (!name || !text) return;
+    savePromptTemplate(name, text);
     setSaveTemplateOpen(false);
     setDraftTemplateName("");
+    setDraftTemplateText("");
   }
 
   // Oracle chip visibility (docs/DRILL_PLAN.md B5.5) — every condition the
@@ -5297,6 +5314,9 @@ function SessionComposer({
 
   return (
     <form className="home-composer" onSubmit={handleSubmit}>
+      {/* B12 declutter (Lachy): the BOX holds only the input + send; every
+          other control lives on the bare row below it. */}
+      <div className="composer-box">
       {showOrchestrationChip ? (
         <span className="composer-suggestion-chip composer-orchestration-chip">Build pipeline will run</span>
       ) : null}
@@ -5446,6 +5466,25 @@ function SessionComposer({
                         </button>
                       );
                     }
+                    if (row.kind === "newTemplate") {
+                      return (
+                        <button
+                          key="builtin-new-template"
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => selectTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>New template…</strong>
+                            <small>Save a prompt you reuse often — it appears in this menu</small>
+                          </span>
+                        </button>
+                      );
+                    }
                     if (row.kind === "handoff") {
                       return (
                         <button
@@ -5513,7 +5552,58 @@ function SessionComposer({
           </button>
         ) : null}
       </div>
-      <div className="home-composer-bar">
+      {saveTemplateOpen ? (
+        <>
+          <div className="resource-backdrop" onClick={() => setSaveTemplateOpen(false)} />
+          <div className="template-save-popover floating" role="dialog" aria-label="New template">
+            <input
+              value={draftTemplateName}
+              placeholder="Template name"
+              autoFocus
+              onChange={(event) => setDraftTemplateName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") setSaveTemplateOpen(false);
+              }}
+            />
+            <textarea
+              value={draftTemplateText}
+              placeholder="The prompt this template inserts"
+              rows={3}
+              onChange={(event) => setDraftTemplateText(event.target.value)}
+            />
+            <div className="router-add-actions">
+              <button type="button" disabled={!draftTemplateName.trim() || !draftTemplateText.trim()} onClick={handleSaveTemplate}>Save</button>
+              <button type="button" className="ghost" onClick={() => setSaveTemplateOpen(false)}>Cancel</button>
+            </div>
+          </div>
+        </>
+      ) : null}
+      {sessionBusy && !prompt.trim() ? (
+        <button
+          className="send-btn stop-btn"
+          type="button"
+          aria-label="Stop the run"
+          title="Stop — the run halts at its next stage boundary"
+          // NOTE (parallel sessions phase A): metisSession.cancel is
+          // projectPath-scoped, not conversation-scoped — with two streaming
+          // conversations in the same project folder this can stop the
+          // sibling run too. Known limitation, backend change to fix.
+          onClick={() => window.metisSession?.cancel?.(projectWorkspace?.path)}
+        >
+          <Square size={13} fill="currentColor" />
+        </button>
+      ) : (
+        <button
+          className="send-btn"
+          type="submit"
+          aria-label={sessionBusy ? "Send direction to the running build" : "Send message"}
+          disabled={(!prompt.trim() && !attachments.length) || (sessionBusy && !window.metisBus)}
+        >
+          <ArrowUp size={17} />
+        </button>
+      )}
+      </div>
+      <div className="home-composer-bar below-box">
         <div className="composer-tools">
           <div className="perm-wrap">
             <button
@@ -5617,16 +5707,10 @@ function SessionComposer({
               </>
             ) : null}
           </div>
-          <button
-            className="tool-btn"
-            type="button"
-            aria-label="Attach images"
-            title={attachments.length >= MAX_ATTACHMENTS ? `Up to ${MAX_ATTACHMENTS} images` : "Attach images"}
-            disabled={attachments.length >= MAX_ATTACHMENTS}
-            onClick={() => fileInputRef.current?.click()}
-          >
-            <ImagePlus size={16} />
-          </button>
+          {/* B12 declutter (Lachy): the standalone image button was redundant
+              (the + menu's Attach images does the same via this hidden input),
+              voice-coming-soon is gone, and template saving moved into the
+              "/" popover as a New template row. */}
           <input
             ref={fileInputRef}
             type="file"
@@ -5635,47 +5719,6 @@ function SessionComposer({
             className="composer-file-input"
             onChange={handleAttachFiles}
           />
-          <div className="template-save-wrap">
-            <button
-              className={`tool-btn ${saveTemplateOpen ? "active" : ""}`}
-              type="button"
-              aria-label="Save as template"
-              aria-expanded={saveTemplateOpen}
-              title={prompt.trim() ? "Save this draft as a /template - reuse it anytime by typing /" : "Save as /template: type a prompt you reuse often, then click this to save it. Recall it anytime by typing /"}
-              disabled={!prompt.trim()}
-              onClick={() => { setDraftTemplateName(""); setSaveTemplateOpen((open) => !open); }}
-            >
-              <Save size={16} />
-            </button>
-            {saveTemplateOpen ? (
-              <>
-                <div className="resource-backdrop" onClick={() => setSaveTemplateOpen(false)} />
-                <div className="template-save-popover" role="dialog" aria-label="Save as template">
-                  <input
-                    value={draftTemplateName}
-                    placeholder="Template name"
-                    autoFocus
-                    onChange={(event) => setDraftTemplateName(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        handleSaveTemplate();
-                      } else if (event.key === "Escape") {
-                        setSaveTemplateOpen(false);
-                      }
-                    }}
-                  />
-                  <div className="router-add-actions">
-                    <button type="button" disabled={!draftTemplateName.trim()} onClick={handleSaveTemplate}>Save</button>
-                    <button type="button" className="ghost" onClick={() => setSaveTemplateOpen(false)}>Cancel</button>
-                  </div>
-                </div>
-              </>
-            ) : null}
-          </div>
-          <button className="tool-btn" type="button" aria-label="Voice input" title="Voice input — coming soon" disabled>
-            <Mic size={16} />
-          </button>
         </div>
         <div className="composer-send">
           <div className="router-wrap">
@@ -5821,36 +5864,9 @@ function SessionComposer({
                 open={oracleLogOpen}
                 onToggle={() => setOracleLogOpen((open) => !open)}
                 onClose={() => setOracleLogOpen(false)}
-                modelLogo={selectedModel ? PROVIDERS[selectedModel.provider].logo : undefined}
               />
             </>
           ) : null}
-          {sessionBusy && !prompt.trim() ? (
-            <button
-              className="send-btn stop-btn"
-              type="button"
-              aria-label="Stop the run"
-              title="Stop — the run halts at its next stage boundary"
-              // NOTE (parallel sessions phase A): metisSession.cancel is
-              // projectPath-scoped, not conversation-scoped, in the main
-              // process today. If two conversations in this same project
-              // folder are both streaming, this can stop the sibling run too.
-              // Acceptable for phase A — a conversation-scoped cancel is a
-              // backend change out of this refactor's contained scope.
-              onClick={() => window.metisSession?.cancel?.(projectWorkspace?.path)}
-            >
-              <Square size={13} fill="currentColor" />
-            </button>
-          ) : (
-            <button
-              className="send-btn"
-              type="submit"
-              aria-label={sessionBusy ? "Send direction to the running build" : "Send message"}
-              disabled={(!prompt.trim() && !attachments.length) || (sessionBusy && !window.metisBus)}
-            >
-              <ArrowUp size={17} />
-            </button>
-          )}
         </div>
       </div>
     </form>
@@ -5933,14 +5949,26 @@ function UsageRing(): JSX.Element | null {
   );
 }
 
+/** Oracle's own mark (B12 declutter, Lachy: give it an SVG logo of its own) —
+ *  a small all-seeing compass star, drawn inline so it inherits currentColor
+ *  and needs no asset. Used by the chip and the popover wordmark. */
+function OracleMark({ size = 12 }: { size?: number }): JSX.Element {
+  return (
+    <svg className="oracle-mark" width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <circle cx="12" cy="12" r="3.1" fill="currentColor" />
+      <path d="M12 2v4.4M12 17.6V22M2 12h4.4M17.6 12H22" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+      <path d="M5.2 5.2l2.5 2.5M16.3 16.3l2.5 2.5M18.8 5.2l-2.5 2.5M7.7 16.3l-2.5 2.5" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" opacity="0.5" />
+    </svg>
+  );
+}
+
 function OracleChip({
   activity,
   log,
   draft,
   open,
   onToggle,
-  onClose,
-  modelLogo
+  onClose
 }: {
   activity: OracleActivity;
   log: OracleWarmEvent[];
@@ -5948,9 +5976,6 @@ function OracleChip({
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
-  /** The pinned model's brand logo (B12 polish, Lachy: chip shows just
-   *  "Oracle" + the logo - model name and ms live in the popover now). */
-  modelLogo?: string;
 }): JSX.Element {
   const label =
     activity.phase === "warming"
@@ -5977,9 +6002,8 @@ function OracleChip({
         aria-label={hasDraft ? `${label} — a speculative guess is ready to preview` : `${label} — click for recent warm calls`}
         title={label}
       >
-        {activity.phase === "warming" ? <Loader2 size={11} className="spin" /> : <Sparkles size={11} />}
+        <OracleMark size={12} />
         <span>Oracle</span>
-        {modelLogo ? <img className="oracle-chip-logo" alt="" src={modelLogo} /> : null}
         {hasDraft ? <span className="oracle-chip-dot" aria-hidden="true" /> : null}
       </button>
       {open ? (
@@ -5988,7 +6012,7 @@ function OracleChip({
           <div className={`oracle-log-popover ${activity.phase}`} role="dialog" aria-label="Oracle">
             <header className="oracle-popover-head">
               <span className="oracle-wordmark">
-                <Sparkles size={12} />
+                <OracleMark size={13} />
                 Oracle
               </span>
               <span className={`oracle-status ${activity.phase}`}>{statusLine}</span>

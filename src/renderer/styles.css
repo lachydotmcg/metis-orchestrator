@@ -13981,3 +13981,110 @@ a:focus-visible,
   object-fit: contain;
   flex: 0 0 auto;
 }
+
+/* --- Composer declutter (B12, Lachy: boxes begone) ---
+   The bordered box now holds only the input + send; every other control
+   sits on a bare row below it, no boxes, blending into the page. */
+.home-composer {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  gap: 6px;
+}
+.composer-box {
+  position: relative;
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.composer-box textarea {
+  padding-right: 52px;
+}
+.composer-box .send-btn {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+}
+.home-composer-bar.below-box {
+  padding: 0 6px;
+}
+/* Bare controls: no borders, no fills - just glyphs and text that light up
+   on hover. Popovers/menus they open are unchanged. */
+.home-composer-bar.below-box .tool-btn,
+.home-composer-bar.below-box .perm-pill,
+.home-composer-bar.below-box .router-pill,
+.home-composer-bar.below-box .oracle-chip {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.home-composer-bar.below-box .tool-btn:hover,
+.home-composer-bar.below-box .perm-pill:hover,
+.home-composer-bar.below-box .router-pill:hover,
+.home-composer-bar.below-box .oracle-chip:hover {
+  border-color: transparent;
+  color: var(--text);
+}
+/* The permission pill keeps its accent/bypass warning COLORS (honesty), just
+   without the box. */
+.home-composer-bar.below-box .perm-pill.accent,
+.home-composer-bar.below-box .perm-pill.bypass {
+  background: transparent;
+}
+/* Plain model selector: just the model name + caret (Lachy). */
+.home-composer-bar.below-box .router-pill img {
+  width: 14px;
+  height: 14px;
+}
+/* Oracle keeps its warm halo/shimmer inside a boxless chip: the shimmer
+   sweep still paints (overflow hidden on the chip), the warm state glows the
+   MARK instead of a border. */
+.home-composer-bar.below-box .oracle-chip.warm {
+  border-color: transparent;
+  box-shadow: none;
+}
+.home-composer-bar.below-box .oracle-chip.warm .oracle-mark {
+  color: var(--text);
+  filter: drop-shadow(0 0 4px rgb(255 255 255 / 0.45));
+}
+.oracle-mark {
+  flex: 0 0 auto;
+}
+.oracle-chip.warming .oracle-mark {
+  animation: oracle-mark-spin 2.8s linear infinite;
+}
+@keyframes oracle-mark-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(180deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .oracle-chip.warming .oracle-mark {
+    animation: none;
+  }
+}
+/* The /-popover's New template form floats over the composer box (the old
+   toolbar anchor is gone). */
+.template-save-popover.floating {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 10px;
+  z-index: 30;
+  width: 300px;
+  display: grid;
+  gap: 8px;
+}
+.template-save-popover.floating textarea {
+  min-height: 64px;
+  resize: vertical;
+  padding: 8px 10px;
+  background: var(--bg, #161616);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
