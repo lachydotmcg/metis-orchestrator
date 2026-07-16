@@ -133,6 +133,18 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   NEEDS-LIVE-TEST: DeepSeek V4 Flash node model should now offer DeepSeek + NVIDIA + OpenRouter.
 - [x] **B11.2 - DEPTHS node UI (Lachy speced).** Inside each orchestration model NODE: a checkbox to ENABLE depths + one brief sentence explaining it, then a STACK of the three levels rendered top-to-bottom L3 -> L2 -> L1 in the library UI when the node is clicked, each level row clickable to choose a different model for that depth (writes depthRoutes / per-node overrides). Plus a Settings toggle for depthRoutingEnabled and a slim depth chip on runs. NOTE the judgement direction shipped: depth is now the ROUTER MODEL S own call (classifyRouteWithModel returns depth 1-3, preferred over the keyword fallback); the future ideal per Lachy is the small model handling depth-1 turns itself.
 
+- [x] **B11.4 - OpenRouter routes displayed as Grok (Lachy's catch, 2026-07-16).** Claude's
+  gateway list offered a grok option - wrong: you cannot reach Claude through Grok. Root cause:
+  the renderer had no OpenRouter brand, so CATALOG_PROVIDER_TO_BRAND mapped the openrouter route
+  key onto the grok brand (Grok models being REACHED via OpenRouter got conflated with
+  OpenRouter as a route). Fix: new gateway-only openrouter ProviderId (label OpenRouter,
+  autorouter glyph until a logo asset exists) + ROUTE_PROVIDER_TO_BRAND map used by the gateway
+  picker and the via-Provider suffix; CATALOG_PROVIDER_TO_BRAND keeps openrouter->grok solely
+  for model-brand bucketing. Old persisted grok gateway pins still route correctly (grok's
+  connection key is openrouter) but display stale until reselected. REGISTRY: added missing
+  access routes - Grok 4.5/4.3 + GLM 5.2 via openrouter, and a missing Gemini 2.5 Flash entry
+  (gemini + openrouter). NEEDS-LIVE-TEST: Claude models should list Claude + OpenRouter only.
+
 ## ★ PITCH BATCH 10 (2026-07-13, research round - AWAITING LACHY GREEN LIGHT, ranked by Fable)
 
 - [x] **P10.1 - Metis Gateway (top pick).** Expose the router + Oracle as a localhost
