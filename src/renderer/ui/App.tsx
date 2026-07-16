@@ -186,7 +186,8 @@ type ProviderId =
   | "deepseek"
   | "glm"
   | "nvidia"
-  | "groq";
+  | "groq"
+  | "openrouter";
 
 type Vec = { x: number; y: number };
 type ModelRef = { provider: ProviderId; model: string };
@@ -633,13 +634,17 @@ const PROVIDERS: Record<ProviderId, { label: string; logo: string; tier: "cloud"
   // (docs/FABLE_PLANS.md §19) — reuse the auto-router glyph as a safe generic
   // fallback rather than a broken <img>.
   nvidia: { label: "NVIDIA NIM", logo: "assets/providers/autorouter.png", tier: "cloud" },
-  groq: { label: "Groq", logo: "assets/providers/autorouter.png", tier: "cloud" }
+  groq: { label: "Groq", logo: "assets/providers/autorouter.png", tier: "cloud" },
+  openrouter: { label: "OpenRouter", logo: "assets/providers/autorouter.png", tier: "cloud" }
 };
-// nvidia/groq are GATEWAYS (API-key route providers), never standalone model
-// brands in the picker — a model reached through them is expressed as an
-// access route (docs/FABLE_PLANS.md §21/§25b), surfaced on the node Gateway
-// control, not as its own brand here.
-const GATEWAY_ONLY_BRANDS: ProviderId[] = ["nvidia", "groq"];
+// nvidia/groq/openrouter are GATEWAYS (API-key route providers), never
+// standalone model brands in the picker — a model reached through them is
+// expressed as an access route (docs/FABLE_PLANS.md §21/§25b), surfaced on
+// the model's Gateway panel, not as its own brand here. The openrouter brand
+// exists ONLY so OpenRouter routes display as "OpenRouter" in gateway pickers
+// instead of borrowing the Grok brand (Grok models happen to be REACHED via
+// OpenRouter, which is a different fact entirely).
+const GATEWAY_ONLY_BRANDS: ProviderId[] = ["nvidia", "groq", "openrouter"];
 const AUTOROUTER_LOGO = "assets/providers/autorouter.png";
 const HEAT_ALPHAS = ["0", "0.18", "0.38", "0.62", "1"];
 
@@ -652,7 +657,8 @@ const PROVIDER_CONNECTIONS: Record<ProviderId, ProviderKey> = {
   deepseek: "deepseek",
   glm: "ollama",
   nvidia: "nvidia",
-  groq: "groq"
+  groq: "groq",
+  openrouter: "openrouter"
 };
 
 /** Key for the per-model latency map (DRILL_PLAN I9.8) — built once from real
@@ -687,6 +693,17 @@ const CATALOG_PROVIDER_TO_BRAND: Record<ProviderKey, ProviderId> = {
   nvidia: "nvidia",
   groq: "groq",
   ollama: "qwen"
+};
+
+/** Same mapping but for displaying ROUTE providers (gateway pickers, the
+ *  via-Provider suffix): an OpenRouter route must read "OpenRouter", not
+ *  "Grok". CATALOG_PROVIDER_TO_BRAND keeps openrouter->grok ONLY for model
+ *  bucketing (openrouter-home catalog models like Grok land under the Grok
+ *  brand in the picker); routes are a different concept - Claude via
+ *  OpenRouter has nothing to do with Grok (Lachy's B11 catch). */
+const ROUTE_PROVIDER_TO_BRAND: Record<ProviderKey, ProviderId> = {
+  ...CATALOG_PROVIDER_TO_BRAND,
+  openrouter: "openrouter"
 };
 
 /** Finds the registry catalog entry for a picker ModelRef (docs/DRILL_PLAN.md
@@ -3820,7 +3837,7 @@ function NewSessionWorkspace({
       const bestRoute = configuredNotCooling ?? access.find((route) => statusFor(route.provider)?.status !== "not_configured") ?? access[0];
       if (bestRoute.provider === entry.provider) return null;
 
-      const brand = CATALOG_PROVIDER_TO_BRAND[bestRoute.provider];
+      const brand = ROUTE_PROVIDER_TO_BRAND[bestRoute.provider];
       return brand ? PROVIDERS[brand].label : null;
     },
     [remoteModelCatalog, providerStatuses]
@@ -15489,7 +15506,7 @@ function ModelGatewayInspector({
   const gatewayOptions = useMemo((): ProviderId[] => {
     const catalogEntry = findCatalogModelEntry(catalogModels, modelRef);
     const routes = catalogEntry?.access ?? [];
-    const brands = routes.map((route) => CATALOG_PROVIDER_TO_BRAND[route.provider]).filter((brand): brand is ProviderId => Boolean(brand));
+    const brands = routes.map((route) => ROUTE_PROVIDER_TO_BRAND[route.provider]).filter((brand): brand is ProviderId => Boolean(brand));
     const distinct = Array.from(new Set(brands));
     if (distinct.length > 0) return distinct;
     return [modelRef.provider];
