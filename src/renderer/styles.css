@@ -13677,45 +13677,25 @@ a:focus-visible,
   color: var(--muted);
 }
 
-/* --- Per-model gateways (DRILL_PLAN B11.3) --- */
-/* Model tiles on canvas nodes are click targets for gateway config: a clean
-   click (under the drag threshold) opens that model's gateways in the
-   inspector; dragging still moves the node as before. */
-.graph-node .model-clickable {
+/* --- Per-model gateways (DRILL_PLAN B11.3 v2) --- */
+/* Library model rows: a clean click opens the model's gateway panel, a drag
+   past the threshold assigns the model to a node like before. */
+.palette-item.model {
   cursor: pointer;
 }
-.graph-node .node-fallbacks .fallback-dot.model-clickable:hover {
-  transform: scale(1.12);
-}
-.gateway-model-chips {
+.model-inspect-name {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  min-width: 0;
 }
-.gateway-model-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px 4px 5px;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--muted);
-  max-width: 100%;
-}
-.gateway-model-chip span:last-child {
+.model-inspect-name strong {
+  font-size: 14px;
+  color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.gateway-model-chip:hover {
-  color: var(--text);
-  background: var(--node);
-}
-.gateway-model-chip.active {
-  color: var(--text);
-  border-color: var(--text);
-  background: var(--node);
+.model-inspect-name small {
+  font-size: 11.5px;
+  color: var(--muted);
 }

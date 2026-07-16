@@ -108,6 +108,16 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   with the models; StageModelRef.routePreference rides each chain entry through
   expandChainByRoutes. NEEDS-LIVE-TEST. Follow-ups: depth-level models (L1-L3) do not carry
   per-model gateways yet; B11.1 catalog-route population still open.
+  V2 CORRECTION (Lachy): the click target is the model in the LIBRARY TAB, not the canvas node,
+  and the balancing act is click-vs-drag THERE (drag assigns the model to a node, clean click
+  opens gateways). Shipped: global modelGateways app-store map keyed provider|model - a model's
+  gateway config applies everywhere it appears; ModelGatewayInspector side panel (back to
+  Library) with Gateway + ordered gateway fallbacks from catalog routes; Library model rows use
+  a 5px threshold (pointerdown no longer starts the ghost drag instantly); canvas model-click
+  targets and the NodeInspector gateway section REMOVED (hint points to the Library); legacy
+  node/slot gateway fields still apply when a model has no global config; projections bake the
+  resolved config into graphPipeline so main.ts is unchanged. NEEDS-LIVE-TEST: click DeepSeek
+  V4 Flash in Library -> panel with DeepSeek + NVIDIA + OpenRouter; drag still drops onto nodes.
 - [x] **B11.1 - Correct gateways per model/provider in the Orchestration UI.** Lachy: DeepSeek
   still only shows DeepSeek as its api/gateway option in the node Gateway control. The registry
   catalog's access[] routes already model multi-gateway (e.g. DeepSeek via deepseek native,
