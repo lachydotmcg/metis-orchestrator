@@ -118,6 +118,12 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   (both sides funnel through sessionProviderPrompt); Settings > Chat gained the Custom
   instructions editor (draft/save, never per-keystroke writes). Phase B (distill the log into
   routing adjustments) and the Memory-view part of Phase C remain open. NEEDS-LIVE-TEST.
+  PHASE B v1 + SIGNAL WIRING SHIPPED (gym drill): distillPreferenceObservations writes plain-
+  sentence readouts (top model share, pinned vs auto, per-task favorites over 60 percent,
+  Oracle serve rate, most-regenerated model) into the Usage tab noticing panel - display-only
+  with minimum-volume gates; a regenerate button on every completed turn re-asks the prompt
+  AND records the signal; switching models mid-conversation records the abandoned model.
+  Remaining: applying learned affinities to routing (consented round), Memory view.
 - [x] **B12.2 [P1] - Usage tab in Settings.** Per-provider / per-model / per-GATEWAY (actual
   route served) token + call counts, daily/monthly rollups; cost from per-route $/Mtok rates
   added to the registry catalog (estimated-usage runs flagged as estimates); local-inference

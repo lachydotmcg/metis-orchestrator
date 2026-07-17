@@ -188,3 +188,17 @@ Settings > Providers.
   then ask Claude to "use the metis_route tool to ask what 2+2 is". Expect the call to route
   through YOUR Metis (check the run appears in Metis's own history via the Gateway) and the
   answer to come back. metis_models should list your catalog.
+
+## 15. Learned-router signals + observations + local cost (added 2026-07-17, gym drill)
+
+- [ ] **Regenerate button.** Every completed answer now has a small circular-arrow button next
+  to copy. Click it: the same prompt is genuinely re-asked, and Settings > Usage > "What Metis
+  is noticing" should show a regenerate signal counted after a refresh.
+- [ ] **Model switch signal.** Mid-conversation, switch the pinned model to a different one -
+  the noticing panel's signal table should count a model_switch.
+- [ ] **Observations appear.** After 10+ runs, the noticing panel should start writing
+  sentences ("X answers 72% of your runs", "You pin a model on 40% of runs"). Fresh installs
+  say nothing - that silence is deliberate.
+- [ ] **Local electricity card.** Usage tab > Local inference cost: set your GPU watts and
+  tariff, run some local chats, and the 7-day estimate should tick up from $0.00. Only runs
+  from this build onward carry timing.
