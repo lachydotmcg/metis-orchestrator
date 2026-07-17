@@ -11982,7 +11982,20 @@ app.whenReady().then(async () => {
   // startup down with it (requirement 6).
   try {
     if (await readStoreValue<boolean>("quickAskEnabled", false)) {
-      globalShortcut.register("Ctrl+Alt+M", toggleQuickAskWindow);
+      // register() reports a conflict by RETURNING FALSE, not throwing -
+      // surface every outcome in the audit log so a dead hotkey is
+      // diagnosable from Settings > Audit instead of being silent
+      // (Lachy's first live test hit exactly that silence).
+      const registered = globalShortcut.register("Ctrl+Alt+M", toggleQuickAskWindow);
+      if (registered && globalShortcut.isRegistered("Ctrl+Alt+M")) {
+        void appendAudit("info", "quickask.registered", "Quick-ask global shortcut registered (Ctrl+Alt+M).", {});
+      } else {
+        void appendAudit("warning", "quickask.register-failed", "Quick-ask shortcut Ctrl+Alt+M could not be registered - another app may own that combo.", {
+          registered
+        });
+      }
+    } else {
+      void appendAudit("info", "quickask.disabled", "Quick-ask hotkey not registered: quickAskEnabled is off at startup.", {});
     }
   } catch (error) {
     void appendAudit("error", "quickask.register-failed", "Failed to register the quick-ask global shortcut.", {
