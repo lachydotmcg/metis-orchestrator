@@ -183,7 +183,7 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   Metis, Oracle-warmed, answer in the overlay with open-in-app. Pairs with headless/tray mode
   (P10.5, shipped) - Metis as ambient OS infrastructure. Lachy: shortkey when you get an idea
   and it is done.
-  SHIPPED (agent + Fable toggle): Ctrl+Alt+Space behind quickAskEnabled (default OFF, restart
+  SHIPPED (agent + Fable toggle): Ctrl+Alt+M behind quickAskEnabled (default OFF, restart
   to apply, Settings > Window toggle says so); frameless 560x220 always-on-top overlay centered
   on the cursor's display, data:-URL page + dedicated quickask-preload (ask/openApp/hide),
   hides on hotkey/Escape/blur; ask runs runSessionTracked so answers land in normal

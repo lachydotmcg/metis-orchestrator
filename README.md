@@ -130,7 +130,7 @@ Metis speaks MCP in both directions. Chat runs can call the tools of MCP servers
 Settings > Usage breaks down token counts and cost estimates by provider, model, and the actual gateway route a call went out on, with daily/weekly windows and rolling limits you can set. When Oracle is on, a small ring by the composer fills as you use up the current 4-hour window, so you can see it coming instead of finding out after the fact. Limits are display-only for now: nothing throttles you yet, and the UI says so honestly.
 
 ### Global quick-ask
-A hotkey (Ctrl+Alt+Space) summons a tiny always-on-top prompt bar anywhere in Windows, routed through Metis the same as a normal chat turn, with an open-in-app link on the answer. Off by default; turning it on in Settings > Window needs a restart to take effect.
+A hotkey (Ctrl+Alt+M) summons a tiny always-on-top prompt bar anywhere in Windows, routed through Metis the same as a normal chat turn, with an open-in-app link on the answer. Off by default; turning it on in Settings > Window needs a restart to take effect.
 
 ### Headless / service mode
 Start Metis hidden in the system tray with no window, either via a Settings toggle or the `--headless` flag, while the Gateway and routines keep running in the background. "Open Metis" in the tray brings the window back whenever you need it.

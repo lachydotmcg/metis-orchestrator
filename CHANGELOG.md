@@ -61,7 +61,7 @@ engine referenced below.
 - **Headless / service mode.** Start Metis hidden in the tray with no
   window, via a Settings toggle or the `--headless` flag, while the
   Gateway and routines keep running.
-- **Global quick-ask.** A hotkey (Ctrl+Alt+Space, off by default) summons a
+- **Global quick-ask.** A hotkey (Ctrl+Alt+M, off by default) summons a
   tiny always-on-top prompt bar anywhere in Windows, routed through Metis,
   with an open-in-app link on the answer.
 - **Conversation forking.** Fork a conversation, optionally up to a

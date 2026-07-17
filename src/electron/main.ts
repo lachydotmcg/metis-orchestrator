@@ -11982,7 +11982,7 @@ app.whenReady().then(async () => {
   // startup down with it (requirement 6).
   try {
     if (await readStoreValue<boolean>("quickAskEnabled", false)) {
-      globalShortcut.register("Ctrl+Alt+Space", toggleQuickAskWindow);
+      globalShortcut.register("Ctrl+Alt+M", toggleQuickAskWindow);
     }
   } catch (error) {
     void appendAudit("error", "quickask.register-failed", "Failed to register the quick-ask global shortcut.", {

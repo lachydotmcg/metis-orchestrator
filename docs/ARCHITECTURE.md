@@ -260,7 +260,7 @@ ones that matter):
 | `preferenceLog` | `PreferenceLogEntry[]` (capped 5000) | Learned-router Phase A raw signal log: automatic run entries (`provider`, `model`, `pinned`, `oracleServed`, `depth`, `taskType`) plus explicit renderer-posted signals. No learning/routing changes read it yet. |
 | `globalInstructions` | `string` | Custom instructions from Settings > Chat, folded into every prompt assembly site via `globalInstructionsPromptBlock()`. |
 | `headlessStart` | `boolean` (default `false`) | Starts the app hidden in the tray on launch (also settable via the `--headless` CLI flag) with the Gateway autostart untouched. |
-| `quickAskEnabled` | `boolean` (default `false`) | Enables the global quick-ask hotkey (Ctrl+Alt+Space); takes effect after a restart. |
+| `quickAskEnabled` | `boolean` (default `false`) | Enables the global quick-ask hotkey (Ctrl+Alt+M); takes effect after a restart. |
 
 Renderer-only UI prefs (`permissionMode`, `managerChat`, `graphPhysics`,
 `lastSeenPulse`, manager-widget position, etc.) live in the same

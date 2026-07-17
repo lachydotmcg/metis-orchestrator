@@ -176,7 +176,7 @@ Settings > Providers.
 ## 14. Quick-ask + Metis as an MCP server (added 2026-07-17, gym drill)
 
 - [ ] **Quick-ask summon.** Settings > Window > "Global quick-ask" ON, restart Metis. From any
-  app (not Metis), press Ctrl+Alt+Space: a small dark prompt bar should appear centered on
+  app (not Metis), press Ctrl+Alt+M: a small dark prompt bar should appear centered on
   your current display. Type a question, Enter: the answer streams into the overlay area (v1
   is one-shot, so it appears when done). Escape or clicking elsewhere hides it; hotkey again
   toggles. "Open Metis" should focus the main window - and the Q&A should be sitting in your

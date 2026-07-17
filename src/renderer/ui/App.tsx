@@ -14903,7 +14903,7 @@ function SettingsWorkspace({
           </label>
           <p className="settings-hint">Metis launches hidden in the tray, with the Gateway serving if enabled. Click the tray icon to open the window. Also available as a --headless launch flag.</p>
           <label className="settings-field toggle-field">
-            <span>Global quick-ask (Ctrl+Alt+Space)</span>
+            <span>Global quick-ask (Ctrl+Alt+M)</span>
             <button
               type="button"
               className={`toggle-switch ${quickAskEnabled ? "on" : ""}`}
