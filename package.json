@@ -13,7 +13,8 @@
     "start": "npm run build && electron .",
     "preview": "vite preview --host 127.0.0.1 --port 4177",
     "pack": "electron-builder --dir",
-    "dist": "npm run build && electron-builder"
+    "dist": "npm run build && electron-builder",
+    "mcp": "node scripts/metis-mcp.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
