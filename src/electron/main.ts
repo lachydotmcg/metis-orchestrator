@@ -4570,11 +4570,22 @@ interface UsageLedgerEntry {
   outputTokens: number;
   estimated?: boolean;
   oracleServed?: boolean;
+  /** Wall-clock run duration (B12.2 follow-up): powers the local-inference
+   *  electricity estimate in the Usage tab. Capped at 30min so a stray clock
+   *  jump or suspended laptop can never poison the sum. */
+  durationMs?: number;
 }
+
+const USAGE_LEDGER_DURATION_CAP_MS = 30 * 60 * 1000;
 
 async function appendUsageLedgerEntry(run: SessionRun): Promise<void> {
   const result = run.providerResult;
   if (!result) return;
+  let durationMs: number | undefined;
+  if (run.createdAt && run.completedAt) {
+    const elapsed = Date.parse(run.completedAt) - Date.parse(run.createdAt);
+    if (Number.isFinite(elapsed) && elapsed > 0) durationMs = Math.min(elapsed, USAGE_LEDGER_DURATION_CAP_MS);
+  }
   const entry: UsageLedgerEntry = {
     at: run.completedAt || new Date().toISOString(),
     provider: result.provider,
@@ -4582,7 +4593,8 @@ async function appendUsageLedgerEntry(run: SessionRun): Promise<void> {
     inputTokens: result.usage?.inputTokens ?? 0,
     outputTokens: result.usage?.outputTokens ?? 0,
     estimated: result.usage?.estimated,
-    oracleServed: run.oracleServed
+    oracleServed: run.oracleServed,
+    durationMs
   };
   const current = await readStoreValue<UsageLedgerEntry[]>("usageLedger", []);
   const next = [...current, entry].slice(-5000);
@@ -4802,6 +4814,10 @@ interface UsageSummary {
   byModel: UsageModelRollup[];
   last4h: { runs: number; totalTokens: number };
   last7d: { runs: number; totalTokens: number };
+  /** Local (ollama) wall-clock generation time (B12.2 follow-up): the raw
+   *  seconds the renderer's electricity estimate multiplies by watts x rate.
+   *  Only entries that recorded a durationMs contribute. */
+  localRuntime: { last7dMs: number; totalMs: number };
   limits: UsageLimits;
   since: string | null;
 }
@@ -4827,6 +4843,8 @@ async function computeUsageSummary(): Promise<UsageSummary> {
   let last4hTokens = 0;
   let last7dRuns = 0;
   let last7dTokens = 0;
+  let local7dMs = 0;
+  let localTotalMs = 0;
 
   for (const entry of ledger) {
     if (since === null || entry.at < since) since = entry.at;
@@ -4870,6 +4888,10 @@ async function computeUsageSummary(): Promise<UsageSummary> {
         last7dRuns += 1;
         last7dTokens += entryTokens;
       }
+      if (entry.provider === "ollama" && typeof entry.durationMs === "number") {
+        localTotalMs += entry.durationMs;
+        if (entryMs >= sevenDaysAgo) local7dMs += entry.durationMs;
+      }
     }
   }
 
@@ -4885,6 +4907,7 @@ async function computeUsageSummary(): Promise<UsageSummary> {
     byModel,
     last4h: { runs: last4hRuns, totalTokens: last4hTokens },
     last7d: { runs: last7dRuns, totalTokens: last7dTokens },
+    localRuntime: { last7dMs: local7dMs, totalMs: localTotalMs },
     limits,
     since
   };

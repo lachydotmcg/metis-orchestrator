@@ -250,6 +250,17 @@ ones that matter):
 | `visionModel` | `string` | The Ollama model used for image captioning. |
 | `galleryBoards` / `styleCards` | gallery board + style-card records | The Gallery feature's mood-board data. |
 | `todoBoard` / `managerModel` | Manager tab board + model choice | The Manager assistant's to-do board and pinned model. |
+| `modelGateways` | `Record<string, ModelGatewayConfig>` keyed `provider\|model` | Global per-model gateway + ordered gateway fallbacks, set from the orchestration Library; applies everywhere that model appears, superseding the older per-node/per-slot gateway fields (which still apply as a fallback when a model has no global config). |
+| `depthRoutingEnabled` / `depthRoutes` | `boolean` (default `false`) / routing map | Opt-in for router-judged difficulty levels (L1-L3) per node; L3 defaults to the node's own primary model unless explicitly overridden. |
+| `mcpToolsEnabled` | `boolean` (default `false`) | Opt-in for chat runs to advertise and call installed MCP servers' tools mid-turn (max 4 calls/turn, 30s per call). |
+| `oracleCloudEnabled` | `boolean` (default `false`) | Opt-in for cloud Oracle drafting via the user's own DeepSeek key - separate from and additional to `prewarmEnabled`. See `docs/ORACLE.md`. |
+| `oracleSimilarityEnabled` | `boolean` (default `false`) | Opt-in for Oracle v0.4 near-match serving (embedding-gated with a lexical guard). See `docs/ORACLE.md`. |
+| `usageLedger` | `UsageLedgerEntry[]` (capped 5000) | The durable per-run token/cost record backing the Usage tab and the 4-hour ring; appended in `writeSessionRun` (separate from `sessionRuns`, which only keeps 100). |
+| `usageLimits` | `UsageLimits` | User-set 4-hour / weekly / wallet token limits, display-only - nothing throttles on them yet. |
+| `preferenceLog` | `PreferenceLogEntry[]` (capped 5000) | Learned-router Phase A raw signal log: automatic run entries (`provider`, `model`, `pinned`, `oracleServed`, `depth`, `taskType`) plus explicit renderer-posted signals. No learning/routing changes read it yet. |
+| `globalInstructions` | `string` | Custom instructions from Settings > Chat, folded into every prompt assembly site via `globalInstructionsPromptBlock()`. |
+| `headlessStart` | `boolean` (default `false`) | Starts the app hidden in the tray on launch (also settable via the `--headless` CLI flag) with the Gateway autostart untouched. |
+| `quickAskEnabled` | `boolean` (default `false`) | Enables the global quick-ask hotkey (Ctrl+Alt+Space); takes effect after a restart. |
 
 Renderer-only UI prefs (`permissionMode`, `managerChat`, `graphPhysics`,
 `lastSeenPulse`, manager-widget position, etc.) live in the same
@@ -312,6 +323,13 @@ registrations all live inline inside `app.whenReady().then(...)` in
 | `metisUpdates` | `check` | GitHub-releases update check. |
 | `metisGateway` | `getStatus`, `setEnabled` | The Metis Gateway's on/off state (`enabled`, `running`, `port`, `token`) and the live start/stop toggle (`getGatewayStatus`/`setGatewayEnabled`). |
 | `metisGallery` | `analyzeBoard`, `analyzeImage`, `cards`, `updateCard`, `deleteCard`, `importUrls`, `importPinterest` | The style Gallery - vision-tagged mood boards. |
+| `metisUsage` | `summary`, `setLimits` | Reads the `usageLedger`-derived rollup (`metis-usage:summary`, per-provider/model/route tokens + cost, last4h/last7d windows) and patches the `usageLimits` store (`metis-usage:set-limits`). Display-only - nothing enforces the limits yet. |
+| `metisPreference` | `signal`, `summary` | The learned-router preference log (DRILL_PLAN B12.1 Phase A). `signal` posts a whitelisted explicit event (`regenerate`/`model_switch`/`ab_pick`/`thumbs_up`/`thumbs_down`, silently rejected otherwise) into the `preferenceLog` store; `summary` returns a cheap rollup plus display-only plain-sentence observations. No learning or routing changes read this data yet. |
+| `metisRoutines.dryRun` | *(added method)* | `metis-routines:dry-run` runs a routine's exact prompt under `permissionMode: "plan"` into a fresh preview conversation, leaving the routine record (`lastRunAt`/`nextRunAt`/`conversationId`) untouched. |
+| `metisConversations.fork` | *(added method)* | `metis-conversations:fork` (`forkConversation(id, uptoRunId?)`) copies a conversation's turns (optionally only up to a given turn) into a new conversation, dropping `runId`s on the copies so deleting the fork can never delete the source's run records. |
+| `quickAsk` | `ask`, `openApp`, `hide` | A separate, minimal bridge (`quickask-preload.cts`) exposed only in the global quick-ask overlay window, not the main window - kept tiny on purpose so the overlay's attack surface stays small. `ask` invokes `quickask:ask`; `openApp`/`hide` are one-way `quickask:open-app`/`quickask:hide` sends. |
+
+**MCP, both directions**: chat runs can call installed MCP servers' tools mid-turn (behind the `mcpToolsEnabled` store key, default off - see `connectMcpToolsetsForRun()`), and separately, `scripts/metis-mcp.mjs` lets any external MCP client use Metis itself as a tool provider by bridging to the Metis Gateway over HTTP (`metis_route`/`metis_ask_model`/`metis_models`). See [`docs/MCP_SERVER.md`](./MCP_SERVER.md).
 
 ## The registry
 

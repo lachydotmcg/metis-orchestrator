@@ -323,3 +323,135 @@ Documented future directions, not yet built (from `docs/DRILL_PLAN.md`):
   exists in the codebase today; do not approximate one with a naive string
   distance without reading that constraint first, since a false-positive
   serve here would mean answering a different question than the one asked.
+
+## What changed since v0.3 (2026-07-15 to 2026-07-17)
+
+Everything above describes Oracle as of v0.3 (O4/O4.1). The batch-11/12 drill
+round (`docs/DRILL_PLAN.md`) shipped several extensions on top of that base.
+The assembled-prompt invariant and the lockstep warning still hold - every
+addition below either reuses `assembleChatPrewarmPrompt`/`sessionProviderPrompt`
+directly or is explicitly called out where it does not.
+
+### Instructions now ride the same assembled prompt
+
+`globalInstructionsPromptBlock()` (`main.ts:2073`) reads the `globalInstructions`
+store key (a plain string, edited from Settings > Chat) and folds it into
+`sessionProviderPrompt(...)` at all six prompt-assembly sites: chat, fan-out,
+staged builds, extraction recovery, extraction repair, and edit mode. Because
+Oracle's draft/warm path assembles through the exact same
+`sessionProviderPrompt` call as a real run, an empty `globalInstructions`
+string produces a byte-identical prompt to before it existed, and a non-empty
+one is present on both the speculative side and the real side without any
+separate wiring - the lockstep invariant absorbed it for free. If you add a
+seventh assembly site, it needs the same block or Oracle silently diverges
+from the real call again.
+
+### Open-prewarm: warming before the first keystroke
+
+Previously Oracle only fired from composer typing. A renderer effect now
+fires one warm per conversation+model pair the moment a conversation is
+opened (300ms switch debounce), with an **empty** draft. `prewarmModel` was
+extended to accept an empty draft when a `conversationId` is present in its
+`PrewarmContext`: it still assembles the full conversation prefix (system
+framing, project snapshot, METIS.md, conversation history so far) via
+`assembleChatPrewarmPrompt`, it just has no in-progress user text to append.
+If assembly fails or there's no conversation id, it falls back to a plain
+residency load of the model. Net effect: the first keystroke in a freshly
+opened conversation can already be warm, not cold.
+
+### Draft streaming into the popover
+
+`draftModel` is now `stream: true` against Ollama instead of a single
+blocking call, using the same accumulation and `done_reason`-gated
+servable-caching rules as before - only the transport changed, not the
+caching contract. An optional `onDelta` callback rides the streaming chunks
+back to the renderer over a new IPC push, `metis-prewarm:draft-delta`, with
+the first delta of a generation carrying `reset: true` so the renderer knows
+to clear the popover rather than append to a stale draft. The renderer
+subscribes via `onDraftDelta` (preload) and streams the deltas straight into
+the popover's `oracleDraft` state, so the guess now visibly forms token by
+token - including its `<think>` block - instead of appearing all at once.
+Cloud drafts (below) stay one-shot for now; only the local Ollama draft path
+streams.
+
+### O5: cloud Oracle via DeepSeek (paid, opt-in, off by default)
+
+A second, entirely separate function, `draftCloudModel(model, draft,
+context)`, drafts from an assembled prompt through `invokeCloudProvider(...)`
+using the user's own saved DeepSeek key, registered on its own IPC channel
+(`metis-prewarm:draft-cloud`). It is double-gated: the renderer only fires it
+when both `prewarmEnabled` **and** the new `oracleCloudEnabled` store key are
+on (Experiments toggle, with explicit cost copy - drafting from a cloud model
+spends real tokens on every fired draft, unlike a local warm), and `main.ts`
+re-checks `oracleCloudEnabled` independently before calling out
+(`main.ts:10285`) as the same defense-in-depth pattern as `prewarmEnabled`
+everywhere else. There is deliberately no cloud "warm" sibling to
+`prewarmModel` - a cloud warm-only call would just spend tokens for nothing,
+since there's no local KV cache to prefill; DeepSeek's own automatic context
+caching covers the assembled prefix instead. Cloud drafts land in the same
+`servableDraft` slot as local ones, keyed by the resolved model id, and share
+the abort/latest-wins behavior via `abortOracleSpeculativeWork`. The
+`runSession` serve gate now also accepts a pinned DeepSeek model as a valid
+serve source when `oracleCloudEnabled` is on, and attributes the source
+honestly (a served cloud draft is not reported as a local one). The renderer
+fires the cloud draft only on a harder 2-second pause (versus local's 800ms),
+sharing the same stale-guard request id as the local draft effect so a
+same-turn local and cloud draft never race each other into a stale state.
+
+### v0.4: near-match serving (embedding-gated, with a lexical guard)
+
+The exact-match-only design in "Safety and honesty" above still holds by
+default. v0.4 adds an *additional*, separately opt-in path
+(`oracleSimilarityEnabled` store key, Experiments toggle, default **off**)
+that can serve a draft when the sent prompt is not byte-identical to the
+drafted one but differs only cosmetically. It only runs after the exact
+sha256 match already missed - it never competes with or weakens the exact
+path.
+
+The design has two stages, in order:
+
+1. **Lexical guard (runs first, cheap).** Before any embedding call, the
+   diff between the drafted prompt and the sent prompt is scanned for words
+   unique to either side that match negation, undo, or number patterns
+   (think "don't", "not", "instead", digits). Any such word vetoes serving
+   outright, no matter how close the embedding similarity later comes out -
+   a prompt that flips a negation or changes a number is exactly the case
+   where a "95% similar" answer would be a wrong answer, not a close one.
+2. **Divergent-tail embedding (runs only if the guard passes).** Rather than
+   embedding the two full prompts, only the *divergent tails* are embedded -
+   the two prompts' shared prefix is stripped first, keeping a small ~200
+   character runway of shared context around the divergence point. This
+   matters because the full assembled prompts (system framing, snapshot,
+   history) share a huge common prefix; embedding the full strings would
+   report near-100% cosine similarity between almost any two prompts in the
+   same conversation, regardless of what the user actually changed. Embedding
+   only the part that differs makes the similarity score actually measure
+   the change, using the same local `nomic-embed` model already in the
+   stack. A cosine similarity of 0.97 or higher serves the draft, one-shot,
+   same as the exact-match path.
+
+Serving is **honestly labelled**, never presented as identical to a fresh
+exact-match serve: `run.oracleNearMatch` carries the similarity score through
+to the renderer, which shows "Oracle answered instantly, `{ttftMs}`ms - near
+match `{percentage}`%" instead of the plain "Oracle answered instantly" line,
+and the audit line records the same similarity figure. Fail-soft everywhere:
+if no embedding model is available, this path is simply skipped and the
+normal call proceeds, exactly as if `oracleSimilarityEnabled` were off.
+
+Known follow-ups, not yet built: a one-click "answer my exact prompt" re-run
+when a near-match was served instead of an exact one, and the originally
+envisioned endgame - serve the near-match instantly *and* verify with a real
+background call, appending a visible correction if the two answers diverge.
+
+### Warm-chain: prewarming the next build stage
+
+Separately from the pinned-chat-only Oracle described above, the staged
+build pipeline (Plan -> Frontend -> Functional) now fires a residency-only
+prewarm for the *next* stage's model as soon as the *current* stage starts,
+via `warmChainNextStage`. This is deliberately not the same as prefix
+warming: the next stage's prompt depends on the current stage's not-yet-known
+output, so there is no assembled prefix to send - it is `num_predict: 1` with
+`keep_alive: 5m` purely to get the model resident in memory ahead of time,
+skipped when the next stage would reuse the same model as the current one
+(already resident, so the extra request would only queue behind real work).
+Behind the same `prewarmEnabled` flag as the rest of Oracle.

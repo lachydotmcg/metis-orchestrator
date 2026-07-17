@@ -14315,6 +14315,12 @@ function maskGatewayToken(token: string): string {
  *  so the Usage tab and the ring never drift from what preload declares. */
 type UsageSummaryData = Awaited<ReturnType<NonNullable<Window["metisUsage"]>["summary"]>>;
 
+// Stable module-level fallback for useAppStoreState("localCostConfig", ...) —
+// see the EMPTY_CUSTOM_SKILLS comment for why inline object literals reset
+// persisted values. 350W is a typical gaming-GPU draw under load; 0.30 $/kWh
+// a plausible retail tariff. Both editable in the Usage tab.
+const DEFAULT_LOCAL_COST_CONFIG: { watts: number; perKwh: number } = { watts: 350, perKwh: 0.3 };
+
 /** Finds the $/Mtok pricing of the catalog route matching the SERVING
  *  provider + model id recorded on a ledger row (docs/DRILL_PLAN.md B12.2).
  *  Null when unknown - unknown never renders as $0, it renders as a dash. */
@@ -14447,6 +14453,10 @@ function SettingsWorkspace({
   // as raw material: no learning happens yet.
   const [preferenceSummary, setPreferenceSummary] = useState<{ total: number; byKind: Record<string, number>; since: string | null; observations?: string[] } | null>(null);
   const [usageLimitDrafts, setUsageLimitDrafts] = useState<{ fourHour: string; weekly: string; wallet: string }>({ fourHour: "", weekly: "", wallet: "" });
+  // Local electricity estimate config (B12.2 follow-up, Lachy: "maybe cost
+  // for local models even? of course power bills vary, baha"). Rough by
+  // design and labeled as such: GPU draw x generation wall-clock x tariff.
+  const [localCostConfig, setLocalCostConfig] = useAppStoreState<{ watts: number; perKwh: number }>("localCostConfig", DEFAULT_LOCAL_COST_CONFIG);
   useEffect(() => {
     if (section !== "usage" || !window.metisUsage) return;
     let alive = true;
@@ -15546,6 +15556,56 @@ function SettingsWorkspace({
           ) : (
             <p>No metered runs yet — usage appears here as you use Metis.</p>
           )}
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Local</small>
+              <h2>Local inference cost</h2>
+            </span>
+          </header>
+          {(() => {
+            const local7dMs = usageSummary?.localRuntime?.last7dMs ?? 0;
+            const hours = local7dMs / 3_600_000;
+            const cost = hours * (localCostConfig.watts / 1000) * localCostConfig.perKwh;
+            return (
+              <div className="usage-windows">
+                <div className="usage-window-card">
+                  <strong>{cost >= 0.01 ? `$${cost.toFixed(2)}` : local7dMs > 0 ? "<$0.01" : "$0.00"}</strong>
+                  <small>
+                    estimated electricity · last 7 days · {hours >= 1 ? `${hours.toFixed(1)}h` : `${Math.round(local7dMs / 60000)}min`} of local generation
+                  </small>
+                  <em>Rough by design: GPU draw × generation time × your tariff. Sits nicely next to a cloud bill.</em>
+                </div>
+              </div>
+            );
+          })()}
+          <label className="settings-field">
+            <span>GPU draw under load (watts)</span>
+            <input
+              type="text"
+              inputMode="numeric"
+              value={String(localCostConfig.watts)}
+              onChange={(event) => {
+                const watts = Number(event.target.value);
+                if (Number.isFinite(watts) && watts >= 0) setLocalCostConfig({ ...localCostConfig, watts });
+              }}
+            />
+          </label>
+          <label className="settings-field">
+            <span>Electricity price ($ per kWh)</span>
+            <input
+              type="text"
+              inputMode="decimal"
+              value={String(localCostConfig.perKwh)}
+              onChange={(event) => {
+                const perKwh = Number(event.target.value);
+                if (Number.isFinite(perKwh) && perKwh >= 0) setLocalCostConfig({ ...localCostConfig, perKwh });
+              }}
+            />
+          </label>
+          <p className="settings-hint">Only runs from this build onward carry timing data, so this starts counting now.</p>
         </article>
 
         <article className="settings-panel">

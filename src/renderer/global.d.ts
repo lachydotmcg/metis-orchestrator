@@ -173,6 +173,9 @@ declare global {
         }>;
         last4h: { runs: number; totalTokens: number };
         last7d: { runs: number; totalTokens: number };
+        // B12.2 follow-up: local (ollama) wall-clock generation time for the
+        // electricity estimate. Optional so older preloads stay compatible.
+        localRuntime?: { last7dMs: number; totalMs: number };
         limits: { fourHourTokens?: number; weeklyTokens?: number; walletTokens?: number };
         since: string | null;
       }>;

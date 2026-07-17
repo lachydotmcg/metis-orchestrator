@@ -12,6 +12,79 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Added (2026-07-17)
+
+- **Per-model gateways.** Click a model in the orchestration Library to set
+  its gateway and ordered fallback chain once, and that config now applies
+  everywhere the model is used, instead of being set per node.
+- **Depths.** Enable depths on a node and the router judges how hard each
+  turn actually is, routing it to a lighter or heavier model per level.
+  Level 3 defaults to the node's own model unless explicitly overridden.
+- **Cloud Oracle via DeepSeek.** A separate, explicit opt-in lets Oracle
+  draft/serve through DeepSeek using your own key when a DeepSeek model is
+  pinned, clearly cost-labelled and off by default; local Oracle is
+  unaffected either way.
+- **Oracle draft streaming.** The Oracle popover's draft now streams in
+  token-by-token as it generates, instead of appearing all at once.
+- **Oracle v0.4 near-match serving.** An opt-in, off-by-default mode serves
+  a draft when the sent prompt differs only cosmetically from the drafted
+  one, gated by a lexical guard (vetoes on negations/numbers) plus a local
+  embedding check on just the divergent part of the prompt. Served answers
+  are labelled with an honest match percentage, never presented as
+  identical to an exact-match serve.
+- **Oracle prewarm on conversation open.** Opening a conversation now warms
+  its remembered model immediately, before you type a single character.
+- **Warm-chain for the build pipeline.** Starting a build stage now
+  prewarms the next stage's model in the background, so stage-to-stage
+  time-to-first-token drops across a run.
+- **Usage tab in Settings.** Per-provider, per-model, and per-route (the
+  actual gateway a call went through) token counts and cost estimates,
+  pulled from real per-route pricing in the model catalog, with daily and
+  weekly windows.
+- **Usage limits and the 4-hour ring.** Set 4-hour, weekly, and wallet
+  token limits in Settings > Usage, and see the rolling 4-hour window fill
+  in a small ring next to the composer whenever Oracle is on. Display-only
+  for now - nothing throttles yet, and the UI says so.
+- **Learned-router preference log (Phase A).** Metis now keeps a private,
+  local log of how you actually use it (which model answered, regenerates,
+  model switches, task type), shown back to you in Settings > Usage as
+  plain-sentence observations. Nothing changes routing yet; this is a
+  record you can see, not a decision Metis is making for you.
+- **Custom instructions.** A global custom-instructions field in
+  Settings > Chat, applied to every prompt Metis assembles across chat and
+  builds.
+- **MCP, both directions.** Chat runs can now call the tools of MCP servers
+  you have installed, behind an explicit opt-in toggle. Separately, Metis
+  itself can be run as an MCP server (`scripts/metis-mcp.mjs`) so other MCP
+  clients like Claude Code or Cursor can use Metis's own routing as a tool.
+  See `docs/MCP_SERVER.md`.
+- **Headless / service mode.** Start Metis hidden in the tray with no
+  window, via a Settings toggle or the `--headless` flag, while the
+  Gateway and routines keep running.
+- **Global quick-ask.** A hotkey (Ctrl+Alt+Space, off by default) summons a
+  tiny always-on-top prompt bar anywhere in Windows, routed through Metis,
+  with an open-in-app link on the answer.
+- **Conversation forking.** Fork a conversation, optionally up to a
+  specific turn, into a new conversation with its own copy of the turns -
+  useful for trying a different model against the same context.
+- **Routine dry-runs.** Preview what a routine would do before turning it
+  on: it runs once under plan-only permissions into a fresh preview
+  conversation, without touching the routine's schedule state.
+- **Knowledge provenance.** The "grounded on N chunks" indicator on a chat
+  turn now expands to list exactly which file and chunk grounded the
+  answer, not just the count.
+- **/handoff.** A built-in slash command that generates a compact
+  continue-from-here brief (what happened, decisions, open threads) for
+  moving a conversation to a fresh context or a different model.
+
+### Fixed (2026-07-17)
+
+- **OpenRouter routes no longer display as Grok.** Models reached via
+  OpenRouter now show OpenRouter as the gateway/route, instead of being
+  mislabelled as Grok (a display-only bug from OpenRouter having no
+  dedicated brand entry; old persisted picks route correctly but display
+  stale until reselected).
+
 ### Added
 
 - **Metis Gateway.** A loopback-only (`127.0.0.1`), off-by-default

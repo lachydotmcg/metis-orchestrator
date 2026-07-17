@@ -12,10 +12,10 @@ Because no single model is best at everything. One plans better, another writes 
 
 ### What you get
 
-- **Oracle: answers before you finish asking.** Metis's speculative engine reads your prompt as you type, prewarms the model, and drafts the response during your natural pauses. In real-world testing on local models, Oracle cuts time-to-first-token by **4.1x to 9.5x**, and when your prompt is unchanged at send, the fully drafted answer is served instantly. Local-only by default, off by default, one toggle to try it.
-- **The best-suited model for every task.** Route by quality and let each stage go to whatever model excels at it, instead of forcing one model to do the whole job.
-- **A fraction of the token bill.** Run everything locally for free, or send the easy tasks to cheap models and save the expensive ones for when they earn it.
-- **No lock-in, ever.** Bring your own API keys, plug in the OpenRouter subscription you already pay for, or go fully local. Your keys, your models, your machine.
+- **Oracle: answers before you finish asking.** Metis's speculative engine reads your prompt as you type, prewarms the model, and drafts the response, streaming into view, during your natural pauses. In real-world testing on local models, Oracle cuts time-to-first-token by **4.1x to 9.5x**, and when your prompt is unchanged at send, the fully drafted answer is served instantly. Local-only and off by default, one toggle to try it. An opt-in cloud Oracle (currently DeepSeek) drafts the same way through your own key, clearly cost-labelled and separate from the local toggle. A near-match mode can also serve a draft when your final prompt only changed cosmetically, always labelled honestly with its match percentage, never presented as identical to a fresh answer.
+- **The best-suited model for every task.** Route by quality and let each stage go to whatever model excels at it, instead of forcing one model to do the whole job. Depths let the router judge how hard a turn actually is and pick a lighter or heavier model per level, with the node's own model as the honest default for the hardest level.
+- **A fraction of the token bill.** Run everything locally for free, or send the easy tasks to cheap models and save the expensive ones for when they earn it. A Usage tab in Settings breaks down token counts and cost estimates by provider, model, and the actual route a call went out on, with a 4-hour usage ring by the composer so you can see the current window filling up at a glance.
+- **No lock-in, ever.** Bring your own API keys, plug in the OpenRouter subscription you already pay for, or go fully local. Your keys, your models, your machine. Click any model in the orchestration Library to set its gateway and fallback chain once, and that choice applies everywhere the model is used.
 - **Free.** Metis itself costs nothing, and local-first is free forever. That is the whole point.
 
 ![Orchestration graph view with router, agent, and skill nodes wired into a pipeline](public/assets/readmeimages/Orchestration.png)
@@ -32,7 +32,10 @@ Metis is one story, layer by layer:
 ## Feature tour
 
 ### The orchestration graph and its router policy
-Build a pipeline visually with router, agent, and skill nodes. Each node gets its own model, gateway, and fallback chain, and you can swap the model on any node right in the UI. The router policy is the brain of the whole thing: per-task rules for quality, cost, and quota that decide where each step goes, so easy work lands on a cheap or local model and the hard prompts escalate to the cloud only when they truly need to. Save a policy as a preset, share it, or fire a quick Run Test without a full build.
+Build a pipeline visually with router, agent, and skill nodes. Each node gets its own model, gateway, and fallback chain, and you can swap the model on any node right in the UI. Gateways now live on the model itself: click a model in the Library and set its gateway plus ordered fallbacks once, and that config follows the model to every node it appears on, instead of being set per node. The router policy is the brain of the whole thing: per-task rules for quality, cost, and quota that decide where each step goes, so easy work lands on a cheap or local model and the hard prompts escalate to the cloud only when they truly need to. Save a policy as a preset, share it, or fire a quick Run Test without a full build.
+
+### Depths
+Turn on depths for a node and the router judges how hard each turn actually is, then routes it to a lighter or heavier model for that level. Level 3, the hardest, defaults to the node's own model unless you pick something else, so the model you dragged onto the node is always the honest fallback for the deep questions.
 
 ### The build pipeline
 Runs go plan, then frontend, then functional, writing real files into your project folder. Builds verify themselves and self-repair when something is off, and they edit an existing folder in place instead of clobbering it. Every model call gets its own visible side-chat, so you can watch exactly what each stage said.
@@ -120,6 +123,24 @@ Metis lives in the tray too: a native icon shows routing status, lets you pause 
 ### Metis Gateway
 Point any OpenAI-compatible app, script, or tool at `http://127.0.0.1:11500/v1` with your Metis bearer token, and it gets routed through Metis exactly like a chat composer turn: leave the model as `metis-auto` for the same Auto Router decision, or pin a specific model directly. Loopback-only and off by default, so nothing outside your machine can reach it, and no other local software can call it without your token.
 
+### Metis as an MCP server
+Metis speaks MCP in both directions. Chat runs can call the tools of MCP servers you have installed (behind its own opt-in toggle), and Metis itself can be run as an MCP server for other tools: `scripts/metis-mcp.mjs` bridges any MCP client (Claude Code, Cursor, or anything else that speaks MCP over stdio) to your running Metis Gateway, exposing `metis_route` (Auto Router), `metis_ask_model` (a specific model), and `metis_models` as tools. So an outside agent can lean on Metis's own routing instead of picking a model itself. See [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) for setup.
+
+### Usage tab and the 4-hour ring
+Settings > Usage breaks down token counts and cost estimates by provider, model, and the actual gateway route a call went out on, with daily/weekly windows and rolling limits you can set. When Oracle is on, a small ring by the composer fills as you use up the current 4-hour window, so you can see it coming instead of finding out after the fact. Limits are display-only for now: nothing throttles you yet, and the UI says so honestly.
+
+### Global quick-ask
+A hotkey (Ctrl+Alt+Space) summons a tiny always-on-top prompt bar anywhere in Windows, routed through Metis the same as a normal chat turn, with an open-in-app link on the answer. Off by default; turning it on in Settings > Window needs a restart to take effect.
+
+### Headless / service mode
+Start Metis hidden in the system tray with no window, either via a Settings toggle or the `--headless` flag, while the Gateway and routines keep running in the background. "Open Metis" in the tray brings the window back whenever you need it.
+
+### Custom instructions
+Settings > Chat gets a global custom-instructions editor: write it once and it is folded into every prompt Metis assembles, chat or build, the same way a project's METIS.md already is.
+
+### The router that learns from you (early)
+Metis keeps a private, local log of how you actually use it: which model answered, whether you regenerated, whether you switched models mid-conversation, per task type. Settings > Usage shows this back to you as a handful of plain-sentence observations. Nothing here changes routing yet, it is purely a record you can see; teaching the router from it is future work. Never leaves your machine.
+
 ## Getting started
 
 Prerequisites:
@@ -145,6 +166,7 @@ Provider API keys are entered in **Settings > Providers**. Local models come fro
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) - the contributor-facing map: process model, the run pipeline, the IPC bridge surface, and where to add things.
 - [`docs/ORACLE.md`](docs/ORACLE.md) - how the speculative prewarm/draft/serve engine actually works, end to end.
+- [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) - running Metis itself as an MCP server for other tools.
 - [`docs/SECURITY.md`](docs/SECURITY.md) - the threat model, permission system, secrets handling, and third-party risk.
 - [`docs/PRIVACY.md`](docs/PRIVACY.md) - the plain-language privacy summary.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) - dev setup, project layout, code style, and how a change lands.
