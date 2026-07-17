@@ -14103,3 +14103,21 @@ a:focus-visible,
   color: var(--soft);
   line-height: 1.45;
 }
+
+/* Near-match escape hatch (DRILL_PLAN B12.3 follow-up): a quiet text link
+   under a near-match-served answer offering the exact call one click away. */
+.near-match-exact {
+  align-self: flex-start;
+  margin: 2px 0 0 4px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 0;
+  color: var(--faint);
+  font-size: 11px;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.near-match-exact:hover {
+  color: var(--text);
+}

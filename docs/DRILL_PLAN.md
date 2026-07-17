@@ -174,8 +174,10 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   of runway - full prompts share a huge prefix that would fake ~99% similarity), cosine >= 0.97
   serves one-shot; run.oracleNearMatch carries the similarity, renderer labels "Oracle answered
   instantly, Xms - near match 98%", audit line carries it too; fail-soft everywhere (no embed
-  model = normal call). Follow-ups: one-click answer-my-exact-prompt re-run; the background-
-  verify + visible-correction endgame. NEEDS-LIVE-TEST.
+  model = normal call). Follow-ups: the background-verify + visible-correction endgame. NEEDS-LIVE-TEST.
+  UPDATE (gym drill): the one-click answer-my-exact-prompt escape hatch SHIPPED - a quiet
+  underlined link under every near-match-served answer re-asks via the regenerate plumbing
+  (so the redo is also a recorded preference signal).
 - [x] **B12.4 [P2] - Global quick-ask.** OS-level hotkey summons a tiny floating prompt bar
   anywhere in Windows (Electron globalShortcut + a slim always-on-top window), routed through
   Metis, Oracle-warmed, answer in the overlay with open-in-app. Pairs with headless/tray mode

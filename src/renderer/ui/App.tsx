@@ -6445,6 +6445,14 @@ const ConversationTurnCard = memo(function ConversationTurnCard({
           <PendingRun turn={turn} />
         )}
       </div>
+      {turn.run?.oracleNearMatch && onRegenerate ? (
+        // Oracle v0.4 escape hatch (DRILL_PLAN B12.3 follow-up): a near-match
+        // serve always offers the real thing one click away. Same plumbing as
+        // regenerate, so the redo is also recorded as a preference signal.
+        <button type="button" className="near-match-exact" onClick={onRegenerate}>
+          Answer my exact prompt instead
+        </button>
+      ) : null}
     </article>
   );
 });
