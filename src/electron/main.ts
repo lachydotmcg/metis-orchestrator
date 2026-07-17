@@ -8830,19 +8830,37 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // resolved model id, so the exact-hash claim below is provider-agnostic.
   const oracleCloudServe =
     provider === ORACLE_CLOUD_PROVIDER && (await readStoreValue<boolean>("oracleCloudEnabled", false));
-  const servedDraft =
-    override && (provider === "ollama" || oracleCloudServe) && !chatImages && (await readStoreValue<boolean>("prewarmEnabled", false))
-      ? takeServableDraft(model, sha256(sessionPrompt))
-      : null;
+  const oracleServeEligible =
+    Boolean(override) && (provider === "ollama" || oracleCloudServe) && !chatImages && (await readStoreValue<boolean>("prewarmEnabled", false));
+  let servedDraft = oracleServeEligible ? takeServableDraft(model, sha256(sessionPrompt)) : null;
+  // v0.4 (DRILL_PLAN B12.3): exact hash missed - if the SEPARATE similarity
+  // opt-in is on, check whether the sent prompt is a near-miss of the drafted
+  // one (cosmetic last edit) and serve with an honest near-match label.
+  let servedSimilarity: number | null = null;
+  if (!servedDraft && oracleServeEligible && (await readStoreValue<boolean>("oracleSimilarityEnabled", false))) {
+    const near = await takeSimilarServableDraft(model, sessionPrompt);
+    if (near) {
+      servedDraft = { text: near.text, thoughts: near.thoughts };
+      servedSimilarity = near.similarity;
+    }
+  }
   if (servedDraft) {
     oracleServed = true;
     if (servedDraft.thoughts) emitStream(stream, { kind: "thought_delta", delta: servedDraft.thoughts });
     emitStream(stream, { kind: "message_delta", delta: servedDraft.text });
-    const servedAudit = await appendAudit("info", "session.provider", "Oracle served the pre-drafted response for an exact prompt match.", {
-      provider,
-      model,
-      prompt_sha256: promptHash
-    });
+    const servedAudit = await appendAudit(
+      "info",
+      "session.provider",
+      servedSimilarity !== null
+        ? `Oracle served the pre-drafted response for a near-match prompt (${(servedSimilarity * 100).toFixed(1)}% similar).`
+        : "Oracle served the pre-drafted response for an exact prompt match.",
+      {
+        provider,
+        model,
+        prompt_sha256: promptHash,
+        ...(servedSimilarity !== null ? { similarity: Number(servedSimilarity.toFixed(4)) } : {})
+      }
+    );
     providerResult = {
       provider,
       model,
@@ -9043,6 +9061,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     modelThoughts: providerResult.thoughts,
     ttftMs: providerResult.ttftMs,
     oracleServed: oracleServed || undefined,
+    oracleNearMatch: servedSimilarity ?? undefined,
     depth: routeDepth,
     projectResult,
     operations: [...metisOperations, ...projectCommandOperations, ...(projectResult ? operationsForProject(projectResult) : [])],
@@ -9909,7 +9928,10 @@ function abortOracleSpeculativeWork(): void {
  *  be served instantly instead of re-generating. Only drafts that finished
  *  naturally (done_reason "stop", not the num_predict cap) are servable, and
  *  each is served at most once (one-shot) within a short TTL. */
-let servableDraft: { model: string; promptHash: string; text: string; thoughts?: string; at: number } | null = null;
+// v0.4 (DRILL_PLAN B12.3): `prompt` keeps the exact assembled prompt the
+// draft was generated from, so a near-miss send can be similarity-checked
+// against it. Memory cost is one assembled prompt string - fine.
+let servableDraft: { model: string; promptHash: string; prompt?: string; text: string; thoughts?: string; at: number } | null = null;
 
 /** One-shot claim of a cached servable draft for an exact (model, prompt
  *  hash) match. Clears the cache on claim so a stale draft can never be
@@ -9924,6 +9946,62 @@ function takeServableDraft(model: string, promptHash: string): { text: string; t
   const claimed = { text: servableDraft.text, thoughts: servableDraft.thoughts };
   servableDraft = null;
   return claimed;
+}
+
+// --- Oracle v0.4: similarity serving (DRILL_PLAN B12.3) ---
+// NOT a response cache: the draft was generated seconds ago in this
+// conversation from the near-final prompt; the only delta is the user's last
+// edit. When the exact hash misses, compare ONLY the divergent tails of the
+// two prompts (the shared assembled prefix would make everything look ~99%
+// similar) and serve above a conservative bar - with a lexical guard that
+// refuses whenever the edit introduces/removes negations, numbers, or other
+// meaning-flippers that embeddings under-punish.
+const ORACLE_SIMILARITY_THRESHOLD = 0.97;
+const ORACLE_SIMILARITY_TAIL_CONTEXT = 200; // shared chars kept before the divergence so short tails embed stably
+// Words whose appearance in EITHER side's unique set vetoes serving: cheap
+// three-character edits ("now WITHOUT react") can flip meaning while barely
+// moving an embedding.
+const ORACLE_SIMILARITY_GUARD_RE = /^(no|not|never|none|without|don'?t|doesn'?t|isn'?t|aren'?t|won'?t|can'?t|cannot|except|instead|remove|delete|drop|stop|undo|opposite|un\w{2,})$/i;
+
+/** One-shot claim of the servable draft for a NEAR-MISS prompt: same model,
+ *  fresh, lexical guard clean, and the divergent tails embed above the
+ *  threshold. Resolves null (and never throws) on any miss/guard/embedding
+ *  failure - the caller just makes the normal call. */
+async function takeSimilarServableDraft(model: string, sentPrompt: string): Promise<{ text: string; thoughts?: string; similarity: number } | null> {
+  try {
+    if (!servableDraft || !servableDraft.prompt) return null;
+    if (Date.now() - servableDraft.at > SERVABLE_DRAFT_TTL_MS) return null;
+    if (servableDraft.model !== model) return null;
+    const draftPrompt = servableDraft.prompt;
+
+    // Lexical guard on the words unique to either prompt.
+    const wordsOf = (text: string): Set<string> => new Set(text.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean));
+    const draftWords = wordsOf(draftPrompt);
+    const sentWords = wordsOf(sentPrompt);
+    const uniques: string[] = [];
+    for (const word of draftWords) if (!sentWords.has(word)) uniques.push(word);
+    for (const word of sentWords) if (!draftWords.has(word)) uniques.push(word);
+    for (const word of uniques) {
+      if (ORACLE_SIMILARITY_GUARD_RE.test(word) || /\d/.test(word)) return null;
+    }
+
+    // Embed only the divergent tails (plus a little shared runway).
+    let divergeAt = 0;
+    const shorter = Math.min(draftPrompt.length, sentPrompt.length);
+    while (divergeAt < shorter && draftPrompt[divergeAt] === sentPrompt[divergeAt]) divergeAt += 1;
+    const from = Math.max(0, divergeAt - ORACLE_SIMILARITY_TAIL_CONTEXT);
+    const vectors = await embedTexts([draftPrompt.slice(from), sentPrompt.slice(from)]);
+    if (!vectors || vectors.length !== 2) return null;
+    const similarity = cosineSimilarity(vectors[0], vectors[1]);
+    if (similarity < ORACLE_SIMILARITY_THRESHOLD) return null;
+
+    const claimed = { text: servableDraft.text, thoughts: servableDraft.thoughts, similarity };
+    servableDraft = null;
+    return claimed;
+  } catch {
+    // Embedding model missing / Ollama down / anything - never block a send.
+    return null;
+  }
 }
 
 /** Speculatively drafts a short continuation from the in-progress prompt
@@ -10059,7 +10137,7 @@ async function draftModel(
       // prompt (raw-draft prompts can never hash-match a real run) and the
       // model finished on its own rather than being truncated by the cap.
       if (assembled && doneReason === "stop") {
-        servableDraft = { model: trimmedModel, promptHash: sha256(assembled), text: trimmedOutput, thoughts: trimmedThoughts, at: Date.now() };
+        servableDraft = { model: trimmedModel, promptHash: sha256(assembled), prompt: assembled, text: trimmedOutput, thoughts: trimmedThoughts, at: Date.now() };
       }
       return trimmedThoughts ? { text: trimmedOutput, thoughts: trimmedThoughts } : { text: trimmedOutput };
     } finally {
@@ -10162,7 +10240,7 @@ async function draftCloudModel(model: string, draft: string, context?: PrewarmCo
       const { output, thoughts } = splitThinkTaggedOutput(text ?? "");
       if (!output.trim()) return null;
       // Cloud responses are always complete (no num_predict cap) - servable.
-      servableDraft = { model: resolved, promptHash: sha256(assembled), text: output, thoughts, at: Date.now() };
+      servableDraft = { model: resolved, promptHash: sha256(assembled), prompt: assembled, text: output, thoughts, at: Date.now() };
       return thoughts ? { text: output, thoughts } : { text: output };
     } finally {
       clearTimeout(timeout);

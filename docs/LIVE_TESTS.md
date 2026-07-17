@@ -159,3 +159,16 @@ Settings > Providers.
 - [ ] **Preference log is recording.** No UI yet by design - after a few chats run this in
   the app's devtools console: `await window.metisPreference.summary()` - expect a total > 0
   with byKind.run counting your runs. This is the learned router's raw data faucet.
+
+## 13. Oracle v0.4 near-match serving (added 2026-07-17)
+
+- [ ] **The cosmetic-edit serve.** Prewarm ON + the new "Oracle near-match serving" toggle ON
+  (Settings > Chat > Experiments), nomic-embed-text pulled, local model pinned. Type a real
+  question, pause until the guess lands, then ADD A TRAILING "please" (or fix a typo) and
+  send. Expect "Oracle answered instantly, Xms - near match ~98%" - the label must show the
+  percentage, never disguise it as exact.
+- [ ] **The meaning-flip refusal.** Same setup, but edit the prompt to add "without React" or
+  change a number before sending. It must do a NORMAL call every time - the lexical guard
+  vetoes negations and numbers no matter what the embeddings say.
+- [ ] **Toggle off = old behavior.** With the near-match toggle OFF, any edit (even one space)
+  falls back to a normal call, exactly like v0.3.

@@ -154,13 +154,22 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   stay on the picker rows). Oracle chip is plain "Oracle" with its OWN inline SVG mark (compass
   star, spins slowly while warming, glows when warm - no model logos, no ms; details live in
   the popover). NEEDS-LIVE-TEST: whole composer bottom row.
-- [ ] **B12.3 [P2] - Oracle v0.4 similarity serving.** NOT a response cache: serve the draft
+- [x] **B12.3 [P2] - Oracle v0.4 similarity serving.** NOT a response cache: serve the draft
   generated seconds ago from the 95%-final prompt when the sent prompt differs only
   cosmetically. Embed draft-prompt vs sent-prompt locally (nomic-embed already in the stack),
   serve above ~0.97 with an honest "near-match (98%)" label + one-click answer-my-exact-prompt;
   lexical guard vetoes serving when the diff contains negations/numbers/model names. Endgame =
   Lachy's confidence idea: serve instantly AND verify with the real call in the background,
   append a visible correction if it diverges.
+  SHIPPED (Fable direct): behind its own oracleSimilarityEnabled opt-in (Experiments toggle,
+  default OFF); servableDraft keeps the assembled prompt; takeSimilarServableDraft runs only
+  after the exact hash misses - lexical guard first (words unique to either side matching
+  negation/undo/number patterns veto), then embeds ONLY the divergent tails (+200 shared chars
+  of runway - full prompts share a huge prefix that would fake ~99% similarity), cosine >= 0.97
+  serves one-shot; run.oracleNearMatch carries the similarity, renderer labels "Oracle answered
+  instantly, Xms - near match 98%", audit line carries it too; fail-soft everywhere (no embed
+  model = normal call). Follow-ups: one-click answer-my-exact-prompt re-run; the background-
+  verify + visible-correction endgame. NEEDS-LIVE-TEST.
 - [ ] **B12.4 [P2] - Global quick-ask.** OS-level hotkey summons a tiny floating prompt bar
   anywhere in Windows (Electron globalShortcut + a slim always-on-top window), routed through
   Metis, Oracle-warmed, answer in the overlay with open-in-app. Pairs with headless/tray mode

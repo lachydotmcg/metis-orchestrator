@@ -870,6 +870,11 @@ export interface SessionRun {
    *  (same pinned local model, same default sampling) instead of a fresh
    *  generation. The renderer labels these honestly. */
   oracleServed?: boolean;
+  /** Oracle v0.4 (DRILL_PLAN B12.3): set alongside oracleServed when the
+   *  serve was a SIMILARITY match rather than an exact hash match - the
+   *  cosine similarity (0..1) of the drafted prompt's divergent tail vs the
+   *  sent prompt's, so the renderer can label "near match (98%)" honestly. */
+  oracleNearMatch?: number;
   /** Depth routing (DRILL_PLAN B11): how heavy this chat turn was judged.
    *  1 = trivial (routed straight to the cheapest local tier, minimal
    *  ceremony), 2 = standard (normal policy routing), 3 = deep (routed

@@ -6759,7 +6759,10 @@ function ttftSuffix(run: SessionRun): JSX.Element | null {
   // was pre-drafted while typing and served on an exact prompt match, so the
   // ms shown is the serve time, not a fresh generation's first token.
   if (run.oracleServed) {
-    return <em>{typeof run.ttftMs === "number" ? `Oracle answered instantly, ${run.ttftMs}ms` : "Oracle answered instantly"}</em>;
+    // v0.4 (DRILL_PLAN B12.3): near-match serves are labeled with their
+    // similarity so a served near-miss is never disguised as an exact match.
+    const nearMatch = typeof run.oracleNearMatch === "number" ? ` · near match ${(run.oracleNearMatch * 100).toFixed(0)}%` : "";
+    return <em>{typeof run.ttftMs === "number" ? `Oracle answered instantly, ${run.ttftMs}ms${nearMatch}` : `Oracle answered instantly${nearMatch}`}</em>;
   }
   return typeof run.ttftMs === "number" ? <em>first token {run.ttftMs}ms</em> : null;
 }
@@ -14365,6 +14368,10 @@ function SettingsWorkspace({
   // prewarm flag; main.ts double-gates on both keys plus a saved DeepSeek
   // key, so this toggle alone never spends anything. OFF by default.
   const [oracleCloudEnabled, setOracleCloudEnabled] = useAppStoreState("oracleCloudEnabled", false);
+  // Oracle v0.4 similarity serving opt-in (docs/DRILL_PLAN.md B12.3) — lets a
+  // near-miss send (cosmetic last edit) serve the draft, honestly labeled
+  // with its similarity. OFF by default; needs nomic-embed-text locally.
+  const [oracleSimilarityEnabled, setOracleSimilarityEnabled] = useAppStoreState("oracleSimilarityEnabled", false);
   // Global custom instructions (docs/DRILL_PLAN.md B12.1 Phase C, Lachy's
   // "system prompts like Claude Code" ask) — main.ts injects this string
   // into every prompt assembly next to the per-project METIS.md block.
@@ -15225,6 +15232,21 @@ function SettingsWorkspace({
           </label>
           <p className="settings-hint">
             When a DeepSeek model is pinned, Oracle drafts your answer through your own DeepSeek key while you pause typing. This sends your in-progress prompt to DeepSeek and costs tokens on every draft. Needs the prewarm toggle on and a saved DeepSeek key.
+          </p>
+          <label className="settings-field toggle-field">
+            <span>Oracle near-match serving (experimental)</span>
+            <button
+              type="button"
+              className={`toggle-switch ${oracleSimilarityEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={oracleSimilarityEnabled}
+              onClick={() => setOracleSimilarityEnabled(!oracleSimilarityEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">
+            If your final edit before sending was cosmetic (a typo fix, a please), Oracle serves the already-drafted answer instantly, labeled with its match percentage. Edits that change meaning (negations, numbers) always fall back to a real call. Needs nomic-embed-text pulled locally.
           </p>
         </article>
         <article className="settings-panel">
