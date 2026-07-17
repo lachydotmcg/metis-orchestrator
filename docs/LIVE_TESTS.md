@@ -202,3 +202,6 @@ Settings > Providers.
 - [ ] **Local electricity card.** Usage tab > Local inference cost: set your GPU watts and
   tariff, run some local chats, and the 7-day estimate should tick up from $0.00. Only runs
   from this build onward carry timing.
+- [ ] **Thumbs + escape hatch.** Every completed answer has thumbs up/down next to copy - one
+  vote per turn, counted in the noticing panel's signal table. And a near-match-served answer
+  shows a quiet "Answer my exact prompt instead" link underneath; clicking re-asks for real.

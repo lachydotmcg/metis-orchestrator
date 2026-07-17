@@ -14121,3 +14121,9 @@ a:focus-visible,
 .near-match-exact:hover {
   color: var(--text);
 }
+
+/* Thumbs vote state (DRILL_PLAN B12.1): the picked thumb stays lit. */
+.turn-copy.voted {
+  color: var(--text);
+  opacity: 1;
+}

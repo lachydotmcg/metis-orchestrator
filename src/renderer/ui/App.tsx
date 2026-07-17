@@ -98,6 +98,8 @@ import {
   Square,
   Star,
   Terminal,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   Upload,
   Wand2,
@@ -6363,6 +6365,49 @@ function turnToMarkdown(run: SessionRun): string {
   return parts.join("\n\n").trim();
 }
 
+/** Thumbs signals (DRILL_PLAN B12.1): the two explicit preference kinds that
+ *  had no UI. One vote per turn per session (local state only - the vote
+ *  itself lands in the preference log via metisPreference.signal). Hidden
+ *  entirely when the bridge is absent - never a dead control. */
+function TurnThumbs({ run, conversationId }: { run: SessionRun; conversationId?: string }): JSX.Element | null {
+  const [voted, setVoted] = useState<"up" | "down" | null>(null);
+  if (!window.metisPreference || !run.providerResult) return null;
+  function vote(kind: "thumbs_up" | "thumbs_down", direction: "up" | "down"): void {
+    if (voted) return;
+    setVoted(direction);
+    void window.metisPreference?.signal({
+      kind,
+      provider: run.providerResult?.provider,
+      model: run.providerResult?.model,
+      conversationId
+    });
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className={`turn-copy ${voted === "up" ? "voted" : ""}`}
+        title={voted ? "Recorded" : "Good answer (recorded as a routing signal)"}
+        aria-label="Good answer"
+        disabled={voted !== null}
+        onClick={() => vote("thumbs_up", "up")}
+      >
+        <ThumbsUp size={13} />
+      </button>
+      <button
+        type="button"
+        className={`turn-copy ${voted === "down" ? "voted" : ""}`}
+        title={voted ? "Recorded" : "Bad answer (recorded as a routing signal)"}
+        aria-label="Bad answer"
+        disabled={voted !== null}
+        onClick={() => vote("thumbs_down", "down")}
+      >
+        <ThumbsDown size={13} />
+      </button>
+    </>
+  );
+}
+
 function TurnCopyButton({ run }: { run: SessionRun }): JSX.Element | null {
   const [copied, setCopied] = useState(false);
   const text = turnToMarkdown(run);
@@ -6440,6 +6485,7 @@ const ConversationTurnCard = memo(function ConversationTurnCard({
                 <RotateCcw size={13} />
               </button>
             ) : null}
+            <TurnThumbs run={turn.run} />
           </>
         ) : (
           <PendingRun turn={turn} />
