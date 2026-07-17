@@ -170,15 +170,26 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   instantly, Xms - near match 98%", audit line carries it too; fail-soft everywhere (no embed
   model = normal call). Follow-ups: one-click answer-my-exact-prompt re-run; the background-
   verify + visible-correction endgame. NEEDS-LIVE-TEST.
-- [ ] **B12.4 [P2] - Global quick-ask.** OS-level hotkey summons a tiny floating prompt bar
+- [x] **B12.4 [P2] - Global quick-ask.** OS-level hotkey summons a tiny floating prompt bar
   anywhere in Windows (Electron globalShortcut + a slim always-on-top window), routed through
   Metis, Oracle-warmed, answer in the overlay with open-in-app. Pairs with headless/tray mode
   (P10.5, shipped) - Metis as ambient OS infrastructure. Lachy: shortkey when you get an idea
   and it is done.
-- [ ] **B12.5 [P3] - Metis AS an MCP server.** Expose route_task / ask_local / search_knowledge
+  SHIPPED (agent + Fable toggle): Ctrl+Alt+Space behind quickAskEnabled (default OFF, restart
+  to apply, Settings > Window toggle says so); frameless 560x220 always-on-top overlay centered
+  on the cursor's display, data:-URL page + dedicated quickask-preload (ask/openApp/hide),
+  hides on hotkey/Escape/blur; ask runs runSessionTracked so answers land in normal
+  conversation history; hotkey fully try/catch-wrapped, unregistered on quit. Follow-ups:
+  toggle without restart, configurable hotkey, streaming into the overlay. NEEDS-LIVE-TEST.
+- [x] **B12.5 [P3] - Metis AS an MCP server.** Expose route_task / ask_local / search_knowledge
   over MCP so Claude Code, Cursor, any agent uses Metis as its quality/cost/quota brain - the
   inverse of P10.2, riding the apps-as-MCP-servers wave. Pairs with the Gateway: infrastructure
   from both directions.
+  SHIPPED (agent): scripts/metis-mcp.mjs - zero-dependency stdio JSON-RPC bridge to the
+  Gateway (newline framing mirroring McpStdioClient); tools metis_route (metis-auto sentinel),
+  metis_ask_model, metis_models; METIS_GATEWAY_TOKEN env required, clean isError results when
+  Metis is not running; npm run mcp script; docs/MCP_SERVER.md client setup. Handshake +
+  tools/list + error paths smoke-tested. NEEDS-LIVE-TEST against a running Gateway.
 - [ ] **B12.6 [P3] - A/B answer mode (design pass with Lachy first).** Ask once, two models
   side by side, click the winner; the pick lands in B12.1's preference log (A/B is the labeled
   data faucet for the learned router - build after B12.1 phase A exists). Needs: second-model

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, safeStorage, shell, Tray } from "electron";
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage, safeStorage, screen, shell, Tray } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
@@ -83,6 +83,7 @@ import type {
   UserProfile,
   GatewayStatus
 } from "../shared/runtime-contracts.js";
+import { QUICKASK_HTML } from "./quickask-page.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const storeKeyPattern = /^[a-zA-Z0-9_-]+$/;
@@ -11050,6 +11051,85 @@ async function openOrFocusMainWindow(): Promise<void> {
   await createWindow();
 }
 
+// --- Global quick-ask overlay (DRILL_PLAN B12.4) --------------------------
+// A small always-on-top prompt bar summoned by a global OS hotkey ("shortkey
+// when you get an idea and it'll be done" — Lachy) so a stray thought can be
+// routed through Metis without switching to the main window at all. Created
+// lazily on first summon and reused thereafter (mirrors the mainWindow
+// pattern above). Its content is a self-contained data: URL page
+// (quickask-page.ts) rather than a Vite-served file, so it works identically
+// in dev and in a packaged build with zero extra build-output wiring. It has
+// its own tiny preload (quickask-preload.cts) exposing only ask/openApp/hide.
+let quickAskWindow: BrowserWindow | null = null;
+
+const QUICKASK_WIDTH = 560;
+const QUICKASK_HEIGHT = 220;
+
+function createQuickAskWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: QUICKASK_WIDTH,
+    height: QUICKASK_HEIGHT,
+    resizable: false,
+    frame: false,
+    show: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    backgroundColor: "#202020",
+    webPreferences: {
+      preload: join(__dirname, "quickask-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  // Hide (rather than destroy) when the window loses focus, per B12.4's
+  // toggle spec: hotkey again, Escape (handled in the page itself via the
+  // quickAsk.hide() bridge call), or a blur all dismiss it the same way.
+  win.on("blur", () => {
+    if (!win.isDestroyed()) win.hide();
+  });
+  win.on("closed", () => {
+    if (quickAskWindow === win) quickAskWindow = null;
+  });
+  void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(QUICKASK_HTML)}`);
+  return win;
+}
+
+/** Centers the overlay on whichever display currently has the cursor, so it
+ *  always appears on the monitor the user is actually looking at rather than
+ *  wherever the main window happens to live. */
+function positionQuickAskWindow(win: BrowserWindow): void {
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const { x, y, width, height } = display.workArea;
+  win.setBounds({
+    x: Math.round(x + (width - QUICKASK_WIDTH) / 2),
+    y: Math.round(y + (height - QUICKASK_HEIGHT) / 2),
+    width: QUICKASK_WIDTH,
+    height: QUICKASK_HEIGHT
+  });
+}
+
+/** The hotkey handler: toggles the overlay open/closed. Wrapped so a bug here
+ *  can never crash the whole app via the globalShortcut callback (requirement
+ *  6 — the hotkey must never crash the app). */
+function toggleQuickAskWindow(): void {
+  try {
+    if (quickAskWindow && !quickAskWindow.isDestroyed() && quickAskWindow.isVisible()) {
+      quickAskWindow.hide();
+      return;
+    }
+    if (!quickAskWindow || quickAskWindow.isDestroyed()) {
+      quickAskWindow = createQuickAskWindow();
+    }
+    positionQuickAskWindow(quickAskWindow);
+    quickAskWindow.show();
+    quickAskWindow.focus();
+  } catch (error) {
+    void appendAudit("error", "quickask.toggle-failed", "Failed to toggle the quick-ask overlay.", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
 // --- System tray (DRILL_PLAN F1) ------------------------------------------
 // A small always-available control surface: current status, pause/resume for
 // background routines, the last few completed runs, close-to-tray, and quit.
@@ -11750,6 +11830,29 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-gallery:import-pinterest", (_event, boardUrl: string) => importFromPinterestBoard(typeof boardUrl === "string" ? boardUrl : ""));
   ipcMain.handle("metis-gateway:get-status", () => getGatewayStatus());
   ipcMain.handle("metis-gateway:set-enabled", (_event, enabled: boolean) => setGatewayEnabled(Boolean(enabled)));
+  // DRILL_PLAN B12.4 — quick-ask overlay bridge. `ask` runs the prompt through
+  // the exact same runSessionTracked pipeline as a normal chat turn (so it
+  // lands in a real conversation, Oracle/prewarm/routing all apply, and a
+  // missing-Ollama failure produces the same honest error text a chat run
+  // would show) and resolves the assistant's final text; any failure is
+  // caught here so the overlay always gets a result object, never a thrown
+  // IPC rejection. `open-app`/`hide` are fire-and-forget (ipcMain.on), same
+  // as the existing metis-window:* channels above.
+  ipcMain.handle("quickask:ask", async (_event, prompt: string) => {
+    try {
+      const run = await runSessionTracked({ prompt, rawPromptStorage: "local-only" });
+      return { text: run.assistantText };
+    } catch (error) {
+      return { text: "", error: error instanceof Error ? error.message : String(error) };
+    }
+  });
+  ipcMain.on("quickask:open-app", () => {
+    void openOrFocusMainWindow();
+    if (quickAskWindow && !quickAskWindow.isDestroyed()) quickAskWindow.hide();
+  });
+  ipcMain.on("quickask:hide", () => {
+    if (quickAskWindow && !quickAskWindow.isDestroyed()) quickAskWindow.hide();
+  });
   // Headless / service mode (docs/DRILL_PLAN.md P10.5): opt-in via the
   // `headlessStart` store key or a `--headless` CLI flag; OFF by default so
   // nothing changes unless the owner asks for it. The tray is created FIRST
@@ -11778,6 +11881,24 @@ app.whenReady().then(async () => {
     void startGateway();
   }
 
+  // DRILL_PLAN B12.4 — global quick-ask hotkey. Off by default (readStoreValue
+  // fallback false); the Settings toggle the coordinator is adding will note
+  // that flipping this requires an app restart in this v1, since the
+  // shortcut is only (un)registered here at startup, not on every store
+  // write. globalShortcut.register itself never throws on failure (it just
+  // returns false, e.g. another app already owns the combo) but the whole
+  // block is still wrapped so a future change here can never take app
+  // startup down with it (requirement 6).
+  try {
+    if (await readStoreValue<boolean>("quickAskEnabled", false)) {
+      globalShortcut.register("Ctrl+Alt+Space", toggleQuickAskWindow);
+    }
+  } catch (error) {
+    void appendAudit("error", "quickask.register-failed", "Failed to register the quick-ask global shortcut.", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
+
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       void createWindow();
@@ -11801,4 +11922,7 @@ app.on("before-quit", () => {
     tray = null;
   }
   void stopGateway();
+  // DRILL_PLAN B12.4 — release the global hotkey so it doesn't linger bound
+  // to a dead process if the OS is slow to reclaim it.
+  globalShortcut.unregisterAll();
 });

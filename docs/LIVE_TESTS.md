@@ -172,3 +172,19 @@ Settings > Providers.
   vetoes negations and numbers no matter what the embeddings say.
 - [ ] **Toggle off = old behavior.** With the near-match toggle OFF, any edit (even one space)
   falls back to a normal call, exactly like v0.3.
+
+## 14. Quick-ask + Metis as an MCP server (added 2026-07-17, gym drill)
+
+- [ ] **Quick-ask summon.** Settings > Window > "Global quick-ask" ON, restart Metis. From any
+  app (not Metis), press Ctrl+Alt+Space: a small dark prompt bar should appear centered on
+  your current display. Type a question, Enter: the answer streams into the overlay area (v1
+  is one-shot, so it appears when done). Escape or clicking elsewhere hides it; hotkey again
+  toggles. "Open Metis" should focus the main window - and the Q&A should be sitting in your
+  conversation list like a normal chat.
+- [ ] **Quick-ask fail-soft.** Stop Ollama, summon, ask: expect the same honest Ollama-down
+  message a chat run shows, never a frozen overlay.
+- [ ] **Metis as MCP server.** Gateway ON with a token. In Claude Code:
+  `claude mcp add metis -e METIS_GATEWAY_TOKEN=<token> -- node <repo>\scripts\metis-mcp.mjs`
+  then ask Claude to "use the metis_route tool to ask what 2+2 is". Expect the call to route
+  through YOUR Metis (check the run appears in Metis's own history via the Gateway) and the
+  answer to come back. metis_models should list your catalog.
