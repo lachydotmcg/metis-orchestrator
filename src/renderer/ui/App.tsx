@@ -3910,6 +3910,20 @@ function NewSessionWorkspace({
   // its pick is copied over once the draft becomes real, in submitPrompt's
   // draft->real migration.
   function pickModel(model: ModelRef | null): void {
+    // B12.1: switching away from a model mid-conversation is a preference
+    // signal - record the model being ABANDONED (fire-and-forget, local).
+    if (
+      activeConversationId &&
+      selectedModel &&
+      (model === null || model.provider !== selectedModel.provider || model.model !== selectedModel.model)
+    ) {
+      void window.metisPreference?.signal({
+        kind: "model_switch",
+        provider: PROVIDER_CONNECTIONS[selectedModel.provider],
+        model: selectedModel.model,
+        conversationId: activeConversationId
+      });
+    }
     setSelectedModel(model);
     void setLastSelectedModel(model);
     if (activeConversationId) rememberConversationModel(activeConversationId, model);
@@ -4696,7 +4710,28 @@ function NewSessionWorkspace({
               )
             )}
             {conversation.map((turn) => (
-              <ConversationTurnCard key={turn.id} anchorId={`sec-c-${turn.id}`} turn={turn} onNavigate={onNavigate} />
+              <ConversationTurnCard
+                key={turn.id}
+                anchorId={`sec-c-${turn.id}`}
+                turn={turn}
+                onNavigate={onNavigate}
+                onRegenerate={
+                  turn.prompt && turn.run && !sessionBusy
+                    ? () => {
+                        // B12.1: a regenerate is the clearest "that answer
+                        // wasn't it" signal - record which model produced it,
+                        // then genuinely re-ask the same prompt.
+                        void window.metisPreference?.signal({
+                          kind: "regenerate",
+                          provider: turn.run?.providerResult?.provider,
+                          model: turn.run?.providerResult?.model,
+                          conversationId: activeConversationId ?? undefined
+                        });
+                        void submitPrompt(turn.prompt);
+                      }
+                    : undefined
+                }
+              />
             ))}
           </section>
         ) : null}
@@ -6347,11 +6382,15 @@ function TurnCopyButton({ run }: { run: SessionRun }): JSX.Element | null {
 const ConversationTurnCard = memo(function ConversationTurnCard({
   anchorId,
   turn,
-  onNavigate
+  onNavigate,
+  onRegenerate
 }: {
   anchorId?: string;
   turn: ConversationTurn;
   onNavigate?: (nav: NavKey) => void;
+  /** Re-asks this turn's prompt AND records a regenerate preference signal
+   *  (DRILL_PLAN B12.1 - the clearest dissatisfaction data we collect). */
+  onRegenerate?: () => void;
 }): JSX.Element {
   if (turn.directive) {
     return (
@@ -6396,6 +6435,11 @@ const ConversationTurnCard = memo(function ConversationTurnCard({
           <>
             <CompletedRun run={turn.run} onNavigate={onNavigate} />
             <TurnCopyButton run={turn.run} />
+            {onRegenerate ? (
+              <button type="button" className="turn-copy" title="Regenerate - ask this again (recorded as a routing signal)" aria-label="Regenerate" onClick={onRegenerate}>
+                <RotateCcw size={13} />
+              </button>
+            ) : null}
           </>
         ) : (
           <PendingRun turn={turn} />
