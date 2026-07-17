@@ -14384,6 +14384,9 @@ function SettingsWorkspace({
   // Headless/service start (docs/DRILL_PLAN.md P10.5) — same store key main.ts
   // reads at app-ready to start minimized to tray. OFF by default.
   const [headlessStart, setHeadlessStart] = useAppStoreState("headlessStart", false);
+  // Global quick-ask (docs/DRILL_PLAN.md B12.4) — main.ts registers the OS
+  // hotkey at app-ready when this is on; v1 needs a restart to apply.
+  const [quickAskEnabled, setQuickAskEnabled] = useAppStoreState("quickAskEnabled", false);
   // MCP tools in the chat pipeline (docs/DRILL_PLAN.md P10.2) — main.ts reads
   // this to decide whether installed MCP servers' tools are exposed to runs.
   // OFF by default.
@@ -14395,6 +14398,10 @@ function SettingsWorkspace({
   // prices, clearly marked, never billing.
   const [usageSummary, setUsageSummary] = useState<UsageSummaryData | null>(null);
   const [usageCatalog, setUsageCatalog] = useState<CatalogModel[]>([]);
+  // Learned-router data faucet readout (docs/DRILL_PLAN.md B12.1 Phase A) —
+  // shows THAT the preference log is filling and with what, honestly framed
+  // as raw material: no learning happens yet.
+  const [preferenceSummary, setPreferenceSummary] = useState<{ total: number; byKind: Record<string, number>; since: string | null } | null>(null);
   const [usageLimitDrafts, setUsageLimitDrafts] = useState<{ fourHour: string; weekly: string; wallet: string }>({ fourHour: "", weekly: "", wallet: "" });
   useEffect(() => {
     if (section !== "usage" || !window.metisUsage) return;
@@ -14412,6 +14419,12 @@ function SettingsWorkspace({
       ?.models()
       .then((state) => {
         if (alive) setUsageCatalog(state.models);
+      })
+      .catch(() => undefined);
+    void window.metisPreference
+      ?.summary()
+      .then((summary) => {
+        if (alive) setPreferenceSummary(summary);
       })
       .catch(() => undefined);
     return () => {
@@ -14781,6 +14794,19 @@ function SettingsWorkspace({
             </button>
           </label>
           <p className="settings-hint">Metis launches hidden in the tray, with the Gateway serving if enabled. Click the tray icon to open the window. Also available as a --headless launch flag.</p>
+          <label className="settings-field toggle-field">
+            <span>Global quick-ask (Ctrl+Alt+Space)</span>
+            <button
+              type="button"
+              className={`toggle-switch ${quickAskEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={quickAskEnabled}
+              onClick={() => setQuickAskEnabled(!quickAskEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">Summon a small Metis prompt bar from anywhere in Windows. The answer routes through Metis and lands in your history like any chat. Takes effect after a restart.</p>
         </article>
 
         <article className="settings-panel">
@@ -15475,6 +15501,38 @@ function SettingsWorkspace({
             </>
           ) : (
             <p>No metered runs yet — usage appears here as you use Metis.</p>
+          )}
+        </article>
+
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Learning</small>
+              <h2>What Metis is noticing</h2>
+            </span>
+            {preferenceSummary ? <span className="status-pill">{preferenceSummary.total} signals</span> : null}
+          </header>
+          <p className="settings-hint">
+            The raw material for the learned router: every run's model and route, plus explicit signals as they arrive. Nothing is acted on yet — routing only changes when the learning phase ships, and this data never leaves your machine.
+          </p>
+          {preferenceSummary && preferenceSummary.total > 0 ? (
+            <table className="usage-table">
+              <thead>
+                <tr><th>Signal</th><th>Count</th></tr>
+              </thead>
+              <tbody>
+                {Object.entries(preferenceSummary.byKind)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([kind, count]) => (
+                    <tr key={kind}>
+                      <td>{kind}</td>
+                      <td>{count}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          ) : (
+            <p>No signals recorded yet — they accumulate as you chat.</p>
           )}
         </article>
       </section>
