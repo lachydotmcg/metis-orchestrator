@@ -4679,7 +4679,7 @@ async function recordPreferenceSignal(rawInput: unknown): Promise<void> {
 
 /** Deliberately terse — the renderer only needs to know the log exists and
  *  roughly what's in it, not a dump of every row (DRILL_PLAN B12.1 Phase A). */
-async function computePreferenceSummary(): Promise<{ total: number; byKind: Record<string, number>; since: string | null }> {
+async function computePreferenceSummary(): Promise<{ total: number; byKind: Record<string, number>; since: string | null; observations: string[] }> {
   const log = await readStoreValue<PreferenceLogEntry[]>("preferenceLog", []);
   const byKind: Record<string, number> = {};
   let since: string | null = null;
@@ -4687,7 +4687,75 @@ async function computePreferenceSummary(): Promise<{ total: number; byKind: Reco
     byKind[entry.kind] = (byKind[entry.kind] ?? 0) + 1;
     if (since === null || entry.at < since) since = entry.at;
   }
-  return { total: log.length, byKind, since };
+  return { total: log.length, byKind, since, observations: distillPreferenceObservations(log) };
+}
+
+/** Learned router Phase B v1 (docs/DRILL_PLAN.md B12.1): distills the raw
+ *  preference log into plain-sentence OBSERVATIONS - what your usage actually
+ *  looks like - shown in the Usage tab's noticing panel. Deliberately
+ *  display-only: nothing here changes routing; that step (applying learned
+ *  affinities to Metis Policy) is a separate consented round. Observations
+ *  only emit once there is enough data to mean something (whole-log and
+ *  per-bucket minimums), so a fresh install says nothing rather than noise. */
+function distillPreferenceObservations(log: PreferenceLogEntry[]): string[] {
+  const observations: string[] = [];
+  const runs = log.filter((entry): entry is RunPreferenceEntry => entry.kind === "run");
+  if (runs.length < 10) return observations;
+
+  const percent = (part: number, whole: number): string => `${Math.round((part / whole) * 100)}%`;
+
+  // Overall model spread: which model actually answers for you.
+  const byModel = new Map<string, number>();
+  for (const run of runs) byModel.set(run.model, (byModel.get(run.model) ?? 0) + 1);
+  const topModel = [...byModel.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (topModel && topModel[1] >= 5) {
+    observations.push(`${topModel[0]} answers ${percent(topModel[1], runs.length)} of your runs (${topModel[1]} of ${runs.length}).`);
+  }
+
+  // Pinned vs Auto: how much room the router is actually given.
+  const pinnedCount = runs.filter((run) => run.pinned).length;
+  if (pinnedCount > 0 && pinnedCount < runs.length) {
+    observations.push(`You pin a model on ${percent(pinnedCount, runs.length)} of runs; the rest go through the Auto Router.`);
+  }
+
+  // Per-task-type favorite (only for buckets with real volume).
+  const byTask = new Map<string, Map<string, number>>();
+  for (const run of runs) {
+    if (!run.taskType) continue;
+    const bucket = byTask.get(run.taskType) ?? new Map<string, number>();
+    bucket.set(run.model, (bucket.get(run.model) ?? 0) + 1);
+    byTask.set(run.taskType, bucket);
+  }
+  for (const [taskType, bucket] of byTask) {
+    const bucketTotal = [...bucket.values()].reduce((sum, count) => sum + count, 0);
+    if (bucketTotal < 5) continue;
+    const favorite = [...bucket.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (favorite && favorite[1] / bucketTotal >= 0.6) {
+      observations.push(`${taskType} work lands on ${favorite[0]} ${percent(favorite[1], bucketTotal)} of the time.`);
+    }
+  }
+
+  // Oracle instant-serve hit rate across pinned runs (where it can apply).
+  const servedCount = runs.filter((run) => run.oracleServed).length;
+  if (servedCount > 0 && pinnedCount >= 5) {
+    observations.push(`Oracle served ${servedCount} answer${servedCount === 1 ? "" : "s"} instantly (${percent(servedCount, pinnedCount)} of pinned runs).`);
+  }
+
+  // Regenerates per model: the clearest dissatisfaction signal we collect.
+  const regenerates = log.filter((entry) => entry.kind === "regenerate" && typeof (entry as SignalPreferenceEntry).model === "string");
+  if (regenerates.length >= 3) {
+    const byRegenModel = new Map<string, number>();
+    for (const entry of regenerates) {
+      const model = (entry as SignalPreferenceEntry).model as string;
+      byRegenModel.set(model, (byRegenModel.get(model) ?? 0) + 1);
+    }
+    const worst = [...byRegenModel.entries()].sort((a, b) => b[1] - a[1])[0];
+    if (worst && worst[1] >= 3) {
+      observations.push(`Answers get re-asked most after ${worst[0]} (${worst[1]} times) - a signal it may be the wrong pick for those prompts.`);
+    }
+  }
+
+  return observations.slice(0, 6);
 }
 
 /** DRILL_PLAN B12.7 — usage limits are stored/exposed here for display only

@@ -190,6 +190,9 @@ contextBridge.exposeInMainWorld("metisPreference", {
   summary: () =>
     ipcRenderer.invoke("metis-preference:summary") as Promise<{
       total: number;
+      // Phase B v1 (DRILL_PLAN B12.1): plain-sentence usage observations,
+      // display-only - routing is never changed by these.
+      observations: string[];
       byKind: Record<string, number>;
       since: string | null;
     }>

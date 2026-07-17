@@ -14401,7 +14401,7 @@ function SettingsWorkspace({
   // Learned-router data faucet readout (docs/DRILL_PLAN.md B12.1 Phase A) —
   // shows THAT the preference log is filling and with what, honestly framed
   // as raw material: no learning happens yet.
-  const [preferenceSummary, setPreferenceSummary] = useState<{ total: number; byKind: Record<string, number>; since: string | null } | null>(null);
+  const [preferenceSummary, setPreferenceSummary] = useState<{ total: number; byKind: Record<string, number>; since: string | null; observations?: string[] } | null>(null);
   const [usageLimitDrafts, setUsageLimitDrafts] = useState<{ fourHour: string; weekly: string; wallet: string }>({ fourHour: "", weekly: "", wallet: "" });
   useEffect(() => {
     if (section !== "usage" || !window.metisUsage) return;
@@ -15515,6 +15515,13 @@ function SettingsWorkspace({
           <p className="settings-hint">
             The raw material for the learned router: every run's model and route, plus explicit signals as they arrive. Nothing is acted on yet — routing only changes when the learning phase ships, and this data never leaves your machine.
           </p>
+          {preferenceSummary?.observations && preferenceSummary.observations.length > 0 ? (
+            <ul className="usage-observations">
+              {preferenceSummary.observations.map((observation, index) => (
+                <li key={index}>{observation}</li>
+              ))}
+            </ul>
+          ) : null}
           {preferenceSummary && preferenceSummary.total > 0 ? (
             <table className="usage-table">
               <thead>

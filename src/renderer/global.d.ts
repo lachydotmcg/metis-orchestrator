@@ -200,6 +200,9 @@ declare global {
         total: number;
         byKind: Record<string, number>;
         since: string | null;
+        // Phase B v1 (DRILL_PLAN B12.1): plain-sentence usage observations,
+        // display-only. Optional so older preloads stay compatible.
+        observations?: string[];
       }>;
     };
     metisRoutines?: {

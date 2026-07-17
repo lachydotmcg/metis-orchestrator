@@ -14088,3 +14088,18 @@ a:focus-visible,
   font: inherit;
   font-size: 12.5px;
 }
+
+/* Usage observations (DRILL_PLAN B12.1 Phase B v1) - the learned router's
+   plain-sentence readouts. Display-only by design. */
+.settings-panel > .usage-observations {
+  margin-inline: 12px;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.usage-observations li {
+  font-size: 12.5px;
+  color: var(--soft);
+  line-height: 1.45;
+}
