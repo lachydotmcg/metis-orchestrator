@@ -14555,3 +14555,85 @@ a:focus-visible,
 .loop-notice button:hover {
   color: var(--text);
 }
+
+/* Per-turn loop history. Collapsed by default: the row stays scannable, but the
+   detail is one click away, because "it ran 4 turns" is not the same as being
+   able to see what it did while you were not watching. */
+.loop-history {
+  grid-column: 1 / -1;
+  margin-top: 4px;
+}
+.loop-history > summary {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+.loop-history > summary::-webkit-details-marker {
+  display: none;
+}
+.loop-history > summary::before {
+  content: "▸ ";
+  color: var(--faint);
+}
+.loop-history[open] > summary::before {
+  content: "▾ ";
+}
+.loop-history > summary:hover {
+  color: var(--text);
+}
+.loop-history ol {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+  counter-reset: loopturn;
+}
+.loop-turn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.loop-turn-badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.loop-turn-continue {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.loop-turn-stop {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+/* "no answer" is the silence-stops-the-loop case. Deliberately not styled as an
+   error: it is correct, designed behaviour, just worth being able to spot. */
+.loop-turn-silent {
+  color: #ffd8a3;
+  background: rgba(255, 216, 163, 0.12);
+}
+.loop-turn.failed .loop-turn-badge {
+  color: #ff8a8a;
+  background: rgba(255, 138, 138, 0.12);
+}
+.loop-turn-text {
+  color: var(--text);
+}
+.loop-turn.failed .loop-turn-text {
+  color: #ffb3b3;
+}
+.loop-turn-reason {
+  color: var(--faint);
+  font-style: italic;
+}

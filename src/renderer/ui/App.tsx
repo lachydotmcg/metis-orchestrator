@@ -16571,6 +16571,30 @@ function ActiveLoopsPanel(): JSX.Element | null {
               </div>
               {loop.lastReason && isLive ? <p className="loop-reason">“{loop.lastReason}”</p> : null}
               {loop.stoppedReason && !isLive ? <p className="loop-reason loop-reason-final">{loop.stoppedReason}</p> : null}
+              {/* What it ACTUALLY did, turn by turn. Collapsed by default so a
+                  row stays scannable, but present at all because the safety
+                  story for this feature is that you can see what ran while you
+                  were not watching, and "it did 4 turns" is not seeing. The
+                  summaries are already on the record: the loop replays them into
+                  each next prompt, so showing them costs nothing. */}
+              {loop.history.length ? (
+                <details className="loop-history">
+                  <summary>
+                    {loop.history.length} turn{loop.history.length === 1 ? "" : "s"} so far
+                  </summary>
+                  <ol>
+                    {loop.history.map((entry) => (
+                      <li key={entry.index} className={entry.error ? "loop-turn failed" : "loop-turn"}>
+                        <span className={`loop-turn-badge loop-turn-${entry.decision}`}>
+                          {entry.error ? "failed" : entry.decision === "silent" ? "no answer" : entry.decision}
+                        </span>
+                        <span className="loop-turn-text">{entry.error ?? entry.summary}</span>
+                        {entry.reason && !entry.error ? <em className="loop-turn-reason">{entry.reason}</em> : null}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              ) : null}
               {isLive ? (
                 <button type="button" className="ghost danger" disabled={busyId === loop.id} onClick={() => void stopLoop(loop.id)}>
                   {busyId === loop.id ? "Stopping…" : "Stop"}
