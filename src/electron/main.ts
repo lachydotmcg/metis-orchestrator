@@ -5880,7 +5880,17 @@ function wantsFreshBuild(prompt: string): boolean {
 // files, and shouldRunBuildPipeline's opt-out/question guards run first, so a
 // plain question like "what does the header do?" never trips it.
 function isEditIntent(prompt: string): boolean {
-  return /\b(fix|repair|change|update|tweak|adjust|edit|modify|revise|rework|restyle|refactor|rename|resize|reposition|realign|recolou?r|re-?colour|move|replace|swap|add|remove|delete|insert|improve|polish|clean\s?up|shorten|expand|space\s?out|align|cent(er|re)|make\s+(it|the|them)|give\s+(it|the))\b/i.test(prompt);
+  // CORE.13: this list decides whether a request reaches the edit pipeline at
+  // all, and it was missing most refactoring vocabulary. A CLI sweep proved
+  // the cost: "Extract the repeated localStorage key into a constant" matched
+  // NOTHING, stayed in plain chat, never read the file, and the model
+  // HALLUCINATED a plausible-but-wrong key name. Reworded as "FIX the
+  // duplicated key..." it matched, routed correctly, and did a flawless
+  // surgical edit. Same intent, different verb, opposite outcome - and the
+  // failure mode was inventing rather than erroring, which is the worst kind.
+  // Verb-anchored on purpose (a bare noun like "the button" must not trigger
+  // an edit), just no longer blind to how engineers actually phrase changes.
+  return /\b(fix|repair|change|update|tweak|adjust|edit|modify|revise|rework|restyle|refactor|rename|resize|reposition|realign|recolou?r|re-?colour|move|replace|swap|add|remove|delete|insert|improve|polish|clean\s?up|shorten|expand|space\s?out|align|cent(er|re)|make\s+(it|the|them)|give\s+(it|the)|extract|consolidat(e|ing)|dedupe|deduplicat(e|ing)|simplify|streamline|tidy|rewrite|convert|migrat(e|ing)|split|merge|combine|unify|standardi[sz]e|normali[sz]e|rearrange|reorder|reorgani[sz]e|restructure|wrap|inline|hoist|pull\s+(it|the|this)?\s*(out|up)|factor\s+out|use\s+(a|an|one|the)\s+\w+\s+(instead|constant|variable|helper)|turn\s+(it|the|this)\s+into|implement|handle|support|ensure|prevent|disable|enable)\b/i.test(prompt);
 }
 
 const EDIT_CONTEXT_MAX_FILES = 12;
