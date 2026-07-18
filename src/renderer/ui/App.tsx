@@ -1588,12 +1588,19 @@ async function writeAppStore<T>(key: string, value: T): Promise<void> {
 function useAppStoreState<T>(key: string, fallback: T): [T, (next: T | ((current: T) => T)) => void, boolean] {
   const [value, setValue] = useState<T>(fallback);
   const [loaded, setLoaded] = useState(false);
+  // Set the moment the USER writes through `update` - closes a race Lachy hit
+  // live (quick-ask/headless toggles "not sticking"): a click landing before
+  // the initial store read resolved was (a) dropped by the write effect's
+  // !loaded guard and then (b) clobbered back to the stored value by the
+  // read resolving. With the flag: user intent always wins the race and
+  // always writes.
+  const dirtyRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
     void readAppStore(key, fallback).then((stored) => {
       if (!alive) return;
-      setValue(stored);
+      if (!dirtyRef.current) setValue(stored);
       setLoaded(true);
     });
     return () => {
@@ -1602,11 +1609,14 @@ function useAppStoreState<T>(key: string, fallback: T): [T, (next: T | ((current
   }, [fallback, key]);
 
   useEffect(() => {
-    if (!loaded) return;
+    // Never persist the untouched fallback over a stored value; DO persist a
+    // user write even when it beat the initial load.
+    if (!loaded && !dirtyRef.current) return;
     void writeAppStore(key, value);
   }, [key, loaded, value]);
 
   const update = useCallback((next: T | ((current: T) => T)) => {
+    dirtyRef.current = true;
     setValue((current) => (typeof next === "function" ? (next as (current: T) => T)(current) : next));
   }, []);
 
@@ -6479,13 +6489,17 @@ const ConversationTurnCard = memo(function ConversationTurnCard({
         {turn.run ? (
           <>
             <CompletedRun run={turn.run} onNavigate={onNavigate} />
-            <TurnCopyButton run={turn.run} />
-            {onRegenerate ? (
-              <button type="button" className="turn-copy" title="Regenerate - ask this again (recorded as a routing signal)" aria-label="Regenerate" onClick={onRegenerate}>
-                <RotateCcw size={13} />
-              </button>
-            ) : null}
-            <TurnThumbs run={turn.run} />
+            {/* One horizontal row for all per-turn actions (Lachy: the
+                buttons were stacking vertically) - copy, regenerate, thumbs. */}
+            <div className="turn-actions">
+              <TurnCopyButton run={turn.run} />
+              {onRegenerate ? (
+                <button type="button" className="turn-copy" title="Regenerate - ask this again (recorded as a routing signal)" aria-label="Regenerate" onClick={onRegenerate}>
+                  <RotateCcw size={13} />
+                </button>
+              ) : null}
+              <TurnThumbs run={turn.run} />
+            </div>
           </>
         ) : (
           <PendingRun turn={turn} />

@@ -14127,3 +14127,14 @@ a:focus-visible,
   color: var(--text);
   opacity: 1;
 }
+
+/* Per-turn action row (Lachy: copy/regenerate/thumbs were stacking
+   vertically) - one slim horizontal strip under the answer, buttons still
+   hover-revealed via the existing .assistant-message:hover .turn-copy rule. */
+.turn-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  align-self: flex-start;
+}
