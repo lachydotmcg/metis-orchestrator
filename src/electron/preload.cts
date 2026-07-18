@@ -114,6 +114,9 @@ contextBridge.exposeInMainWorld("metisProject", {
   addFolder: (key?: string) => ipcRenderer.invoke("metis-project:add-folder", key),
   removeResource: (id: string, key?: string) => ipcRenderer.invoke("metis-project:remove-resource", id, key),
   claimPendingResources: (conversationId: string) => ipcRenderer.invoke("metis-project:claim-pending", conversationId),
+  // CORE.5 safety net: what the last generated write backed up, and the undo.
+  lastSnapshot: () => ipcRenderer.invoke("metis-project:last-snapshot"),
+  revertSnapshot: () => ipcRenderer.invoke("metis-project:revert-snapshot"),
   bindConversation: (conversationId: string | null) => ipcRenderer.invoke("metis-project:bind-conversation", conversationId),
   setConversationProject: (id: string, projectPath: string) => ipcRenderer.invoke("metis-conversations:set-project", id, projectPath)
 });

@@ -14671,6 +14671,47 @@ function SettingsWorkspace({
   // OFF by default.
   const [mcpToolsEnabled, setMcpToolsEnabled] = useAppStoreState("mcpToolsEnabled", false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
+  // CORE.5 safety net surface: what the last generated write backed up, and
+  // the undo. Arm-then-confirm, same pattern as the destructive controls
+  // elsewhere, because reverting is itself a destructive act on newer work.
+  type LastSnapshot = Awaited<ReturnType<NonNullable<NonNullable<Window["metisProject"]>["lastSnapshot"]>>>;
+  const [lastSnapshot, setLastSnapshot] = useState<LastSnapshot>(null);
+  const [revertArmed, setRevertArmed] = useState(false);
+  const [revertBusy, setRevertBusy] = useState(false);
+  const [revertNote, setRevertNote] = useState<string | null>(null);
+  useEffect(() => {
+    if (section !== "privacy") return;
+    let alive = true;
+    void window.metisProject?.lastSnapshot?.().then((snapshot) => {
+      if (alive) setLastSnapshot(snapshot);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [section]);
+  async function revertLastSnapshot(): Promise<void> {
+    if (!revertArmed) {
+      setRevertArmed(true);
+      setRevertNote("This overwrites those files with the backup. Click again to confirm.");
+      window.setTimeout(() => setRevertArmed(false), 5000);
+      return;
+    }
+    setRevertArmed(false);
+    setRevertBusy(true);
+    try {
+      const result = await window.metisProject?.revertSnapshot?.();
+      if (result?.ok) {
+        const created = result.createdNotDeleted ?? [];
+        setRevertNote(
+          `Restored ${result.restored?.length ?? 0} file(s).${created.length > 0 ? ` ${created.length} file(s) the run created were left in place: ${created.join(", ")}.` : ""}`
+        );
+      } else {
+        setRevertNote(result?.error ?? "Revert failed.");
+      }
+    } finally {
+      setRevertBusy(false);
+    }
+  }
   // --- Usage tab (docs/DRILL_PLAN.md B12.2/B12.7) ---
   // Summary comes from the local usage ledger via metisUsage; catalog is only
   // for per-route $/Mtok rates. Cost figures are DISPLAY estimates from list
@@ -15980,6 +16021,46 @@ function SettingsWorkspace({
 
       {section === "privacy" ? (
       <section className="settings-grid">
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Safety net</small>
+              <h2>Undo the last AI write</h2>
+            </span>
+          </header>
+          <p className="settings-hint">
+            Before Metis writes into a project it backs up every file it is about to change. If an edit went wrong, put those files back exactly as they were.
+          </p>
+          {!window.metisProject?.lastSnapshot ? (
+            <p>Needs the desktop app.</p>
+          ) : !lastSnapshot ? (
+            <p>No AI writes yet. Once Metis edits a project, the backup shows here.</p>
+          ) : (
+            <>
+              <div className="usage-window-card">
+                <strong>
+                  {lastSnapshot.entries.filter((entry) => !entry.createdByRun).length} file
+                  {lastSnapshot.entries.filter((entry) => !entry.createdByRun).length === 1 ? "" : "s"} backed up
+                </strong>
+                <small>
+                  {lastSnapshot.projectRoot.split(/[\\/]/).pop()} · {new Date(lastSnapshot.createdAt).toLocaleString()}
+                </small>
+                <em>
+                  {lastSnapshot.entries.filter((entry) => entry.createdByRun).length > 0
+                    ? `${lastSnapshot.entries.filter((entry) => entry.createdByRun).length} new file(s) were created and will NOT be deleted by a revert.`
+                    : "Every file this run touched already existed, so a revert restores all of them."}
+                  {lastSnapshot.gitRef ? ` A git snapshot was also recorded at ${lastSnapshot.gitRef}.` : ""}
+                </em>
+              </div>
+              <div className="panel-actions">
+                <button type="button" disabled={revertBusy} onClick={() => void revertLastSnapshot()}>
+                  {revertBusy ? "Reverting…" : revertArmed ? "Confirm revert" : "Revert those files"}
+                </button>
+                {revertNote ? <small className="mcp-probe-note">{revertNote}</small> : null}
+              </div>
+            </>
+          )}
+        </article>
         <article className="settings-panel">
           <header>
             <span>

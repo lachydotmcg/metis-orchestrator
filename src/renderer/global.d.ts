@@ -122,6 +122,22 @@ declare global {
       addFolder: (key?: string) => Promise<ProjectWorkspaceResource[]>;
       removeResource: (id: string, key?: string) => Promise<ProjectWorkspaceResource[]>;
       claimPendingResources?: (conversationId: string) => Promise<ProjectWorkspaceResource[]>;
+      /** CORE.5: the backup taken before the last generated write, and the
+       *  undo for it. Optional so older preloads stay compatible. */
+      lastSnapshot?: () => Promise<{
+        id: string;
+        createdAt: string;
+        projectRoot: string;
+        entries: Array<{ relativePath: string; createdByRun: boolean }>;
+        gitRef?: string;
+      } | null>;
+      revertSnapshot?: () => Promise<{
+        ok: boolean;
+        error?: string;
+        restored?: string[];
+        createdNotDeleted?: string[];
+        projectRoot?: string;
+      }>;
       bindConversation?: (conversationId: string | null) => Promise<ProjectWorkspace | null>;
       setConversationProject?: (id: string, projectPath: string) => Promise<ConversationRecord | null>;
     };
