@@ -87,6 +87,7 @@ import { QUICKASK_HTML } from "./quickask-page.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
+import { describeSnapshot, revertSnapshot, snapshotBeforeWrite, type ProjectSnapshot as MetisProjectSnapshot } from "./projectSnapshot.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const storeKeyPattern = /^[a-zA-Z0-9_-]+$/;
@@ -4072,6 +4073,37 @@ async function writeTextArtifact(path: string, value: string): Promise<ProjectAr
 
 async function writeGeneratedFileSet(root: string, files: GeneratedFile[]): Promise<ProjectArtifact[]> {
   await mkdir(root, { recursive: true });
+
+  // CORE.5: every generated write in the app funnels through here, so this is
+  // the one place a safety net belongs. Back up the CURRENT contents of every
+  // file about to be overwritten (plus a git stash-object when the folder is
+  // a repo) BEFORE touching anything, so an edit that goes wrong is one
+  // revert away. Failing to snapshot must never silently proceed to write:
+  // the whole point is that the write is recoverable.
+  const safePaths = files
+    .map((file) => safeRelativeFilePath(file.path))
+    .filter((path): path is string => Boolean(path));
+  if (safePaths.length > 0) {
+    try {
+      const snapshot = await snapshotBeforeWrite(root, safePaths, dataPath("snapshots"));
+      await writeStoreValue("lastProjectSnapshot", snapshot);
+      await appendAudit("info", "project.snapshot", describeSnapshot(snapshot), {
+        snapshotId: snapshot.id,
+        projectPath: root,
+        files: safePaths.length,
+        gitRef: snapshot.gitRef
+      });
+    } catch (error) {
+      await appendAudit("error", "project.snapshot.failed", "Could not snapshot the project before writing; the write was skipped.", {
+        projectPath: root,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      throw new Error(
+        `Metis could not back up ${root} before writing, so it did not write anything. Check the folder is readable and try again.`
+      );
+    }
+  }
+
   const fileArtifacts: ProjectArtifact[] = [];
   for (const file of files) {
     const safePath = safeRelativeFilePath(file.path);
@@ -12100,6 +12132,27 @@ app.whenReady().then(async () => {
   // Per-conversation folders (Lachy): claim the new-session pending bucket
   // onto a real conversation, and re-bind the active workspace to whatever
   // folder a conversation carries when it is opened.
+  // CORE.5: the undo half of the safety net. Reports what the last generated
+  // write backed up, and puts it back on request. Files the run CREATED are
+  // listed but never auto-deleted - reverting content is safe, deleting a
+  // file the owner may have since edited is not, so that stays a human call.
+  ipcMain.handle("metis-project:last-snapshot", () => readStoreValue<MetisProjectSnapshot | null>("lastProjectSnapshot", null));
+  ipcMain.handle("metis-project:revert-snapshot", async () => {
+    const snapshot = await readStoreValue<MetisProjectSnapshot | null>("lastProjectSnapshot", null);
+    if (!snapshot) return { ok: false, error: "There is no snapshot to revert." };
+    try {
+      const restored = await revertSnapshot(snapshot);
+      const created = snapshot.entries.filter((entry) => entry.createdByRun).map((entry) => entry.relativePath);
+      await appendAudit("info", "project.snapshot.revert", `Reverted ${restored.length} file(s) in ${snapshot.projectRoot}.`, {
+        snapshotId: snapshot.id,
+        restored: restored.length,
+        createdNotDeleted: created.length
+      });
+      return { ok: true, restored, createdNotDeleted: created, projectRoot: snapshot.projectRoot };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  });
   ipcMain.handle("metis-project:claim-pending", (_event, conversationId: string) => claimPendingResources(conversationId));
   ipcMain.handle("metis-project:bind-conversation", async (_event, conversationId: string | null) => {
     if (!conversationId) {
