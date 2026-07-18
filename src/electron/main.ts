@@ -86,6 +86,7 @@ import type {
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
+import { builtinRouteDecision } from "./builtinRouter.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const storeKeyPattern = /^[a-zA-Z0-9_-]+$/;
@@ -3211,6 +3212,24 @@ async function getPolicyStatus(profilePath?: string): Promise<PolicyStatus> {
 // appendAudit calls so a speculative decision that never becomes a real
 // send leaves no trace in audit-log.jsonl (matching prewarmModel/draftModel's
 // "toggling the flag off leaves zero trace" guarantee).
+/** Gathers this machine's real availability and asks the built-in router for
+ *  a decision (CORE.10). Every lookup fails soft to "nothing available", so a
+ *  decision is always produced and the caller can surface an honest error
+ *  rather than routing to a model that does not exist. */
+async function composeBuiltinDecision(prompt: string): Promise<RouteDecision> {
+  const [ollama, profile] = await Promise.all([
+    listOllamaModels().catch(() => ({ reachable: false, installed: [] as string[] })),
+    readUserProfile().catch(() => null)
+  ]);
+  const cloudKeys: ProviderKey[] = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
+  const configuredFlags = await Promise.all(cloudKeys.map((key) => isProviderConfigured(key).catch(() => false)));
+  return builtinRouteDecision(prompt, sha256(prompt), {
+    installedLocalModels: ollama.installed,
+    configuredCloudProviders: cloudKeys.filter((_, index) => configuredFlags[index]),
+    modelPreference: profile?.modelPreference
+  });
+}
+
 async function decidePolicy(input: PolicyDecisionInput, options?: { signal?: AbortSignal; silent?: boolean }): Promise<PolicyDecisionResult> {
   const prompt = input.prompt.trim();
   if (!prompt) {
@@ -3224,9 +3243,15 @@ async function decidePolicy(input: PolicyDecisionInput, options?: { signal?: Abo
         prompt_sha256: sha256(prompt)
       });
     }
+    // CORE.10: the metis-policy CLI is absent on every machine that is not a
+    // dev box with the sibling repo checked out, which is to say every
+    // INSTALLED copy. This used to return sampleDecision, a hardcoded object
+    // answering qwen3:8b for every prompt whether or not it was installed -
+    // the headline feature silently dead for real users. Route for real
+    // in-process instead, from what this machine actually has.
     return {
       source: "sample",
-      decision: sampleDecision,
+      decision: await composeBuiltinDecision(prompt),
       warnings: [status.detail]
     };
   }
@@ -3267,7 +3292,7 @@ async function decidePolicy(input: PolicyDecisionInput, options?: { signal?: Abo
     }
     return {
       source: "sample",
-      decision: sampleDecision,
+      decision: await composeBuiltinDecision(prompt),
       warnings: [message]
     };
   }
