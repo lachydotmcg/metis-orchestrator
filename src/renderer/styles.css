@@ -14240,14 +14240,10 @@ a:focus-visible,
   font-weight: 500;
 }
 
-/* Squared-off sidebar rows (Lachy: no pill corners). Applies to the project
-   rows, the conversations under them, pinned rows, and the row action
-   buttons so hover/active states read as clean bands, not lozenges. */
-.project-row,
-.project-conversation-row,
-.project-conversation-rename-input,
-.sidebar-section .tiny-row,
-.project-row-wrap .row-menu-btn,
-.project-conversation-wrap .row-menu-btn {
-  border-radius: 0;
+
+/* The pill stays (Lachy) - what goes is the grey/accent bar on its LEFT
+   edge: .project-row.active carried an inset 3px left stripe as its selected
+   marker. The background tint alone marks the active row now. */
+.project-row.active {
+  box-shadow: none;
 }
