@@ -667,6 +667,18 @@ export interface SessionRunInput {
    *  (restricted -> ask, standard -> auto, trusted -> auto). */
   permissionLevel?: "restricted" | "standard" | "trusted";
   permissionMode?: PermissionMode;
+  /** Classify the run on THIS text instead of `prompt`, while still sending
+   *  `prompt` to the model. Undefined for every ordinary caller, which is why
+   *  adding it changed nothing: routing falls back to `prompt` exactly as
+   *  before. It exists because a Loop wake prompt has to carry its
+   *  continue-or-stop protocol - a fenced JSON block - and Metis classifies
+   *  chat-vs-build from the prompt text, so every loop turn read as
+   *  task_type "coding" no matter what the goal was. A loop asked "how many
+   *  functions does app.js define?" routed to the edit pipeline and rewrote
+   *  the file from 171 lines down to 10. There is no way to write a machine
+   *  protocol that does not look like code, so the loop passes its bare goal
+   *  here and routing judges the intent rather than the scaffolding. */
+  routingPrompt?: string;
   rawPromptStorage?: "local-only" | "hash-only";
   /** When set, bypass Metis Policy routing and call this model directly. */
   modelOverride?: SessionModelOverride;

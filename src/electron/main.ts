@@ -84,6 +84,17 @@ import type {
   GatewayStatus
 } from "../shared/runtime-contracts.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
+import {
+  LOOP_MAX_AGE_HOURS,
+  LOOP_MAX_ITERATIONS_CEILING,
+  LOOP_MIN_DELAY_SECONDS,
+  composeWakePrompt,
+  extractLoopDecision,
+  loopTerminalReason,
+  summariseTurn,
+  type LoopIterationRecord,
+  type LoopRecord
+} from "./loops.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
@@ -8600,6 +8611,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const orchestrationCommandWithoutTarget = orchestrationCommand !== null && orchestrationCommand.remainder.length === 0;
   const prompt = orchestrationCommand ? orchestrationCommand.remainder || originalPrompt : originalPrompt;
 
+  // What ROUTING judges, which is not always what the model is sent. See
+  // SessionRunInput.routingPrompt: a Loop wake prompt carries a fenced JSON
+  // protocol block that made every loop turn classify as "coding", so a loop
+  // passes its bare goal here. Undefined for every other caller, so this is
+  // literally `prompt` everywhere else and the change is inert.
+  const classifyPrompt = input.routingPrompt?.trim() || prompt;
+
   // Reference-image attachments (backend half only — composer attach UI is a
   // separate follow-up round). Normalisation never throws and is capped, so
   // this line can never affect a run that has no attachments: `images` is
@@ -8655,30 +8673,30 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // or pinned) falls through to that exact same call.
   const cachedRouteResult =
     !input.modelOverride && (await readStoreValue<boolean>("prewarmEnabled", false))
-      ? takeCachedRouteDecision(routeDecisionCacheKey(prompt, input.preset))
+      ? takeCachedRouteDecision(routeDecisionCacheKey(classifyPrompt, input.preset))
       : null;
   if (cachedRouteResult) emitTimeline(stream, timelineText("Route decided ahead of time."));
   const decision =
     cachedRouteResult ??
     (await decidePolicy({
-      prompt,
+      prompt: classifyPrompt,
       preset: input.preset
     }));
   const policyMs = Date.now() - policyStart;
-  const previousRun = isAttributionQuestion(prompt) ? await previousConversationRun(input.conversationId) : null;
-  const routeContext = shouldReusePreviousPipeline(prompt) ? await previousConversationTaskType(input.conversationId) : null;
-  const routeLabel = routeLabelFromPrompt(prompt) ?? (shouldReusePreviousPipeline(prompt) ? await previousConversationRouteLabel(input.conversationId) : undefined);
+  const previousRun = isAttributionQuestion(classifyPrompt) ? await previousConversationRun(input.conversationId) : null;
+  const routeContext = shouldReusePreviousPipeline(classifyPrompt) ? await previousConversationTaskType(input.conversationId) : null;
+  const routeLabel = routeLabelFromPrompt(classifyPrompt) ?? (shouldReusePreviousPipeline(classifyPrompt) ? await previousConversationRouteLabel(input.conversationId) : undefined);
   // A cached result already carries prewarmRoute's own
   // applySessionRouteOverrides output (it ran the identical Auto-path
   // override logic speculatively) — re-applying it here would double-apply
   // overrides, so the live override call only runs on a miss.
-  const effectiveDecision = cachedRouteResult ? cachedRouteResult.decision : applySessionRouteOverrides(prompt, decision.decision, routeContext);
+  const effectiveDecision = cachedRouteResult ? cachedRouteResult.decision : applySessionRouteOverrides(classifyPrompt, decision.decision, routeContext);
   const effectiveDecisionResult: PolicyDecisionResult = { ...decision, decision: effectiveDecision };
 
   // "Set up a preview" is an OPERATION on the existing project, not a build —
   // serve the selected folder and open the rail instead of running the pipeline.
   // An explicit /orchestration command always wins over the preview pre-gate.
-  if (!forceBuildPipeline && wantsProjectPreview(prompt)) {
+  if (!forceBuildPipeline && wantsProjectPreview(classifyPrompt)) {
     return runPreviewRequest({ input, prompt, conversationId, createdAt, promptHash, decision: effectiveDecisionResult, stream });
   }
 
@@ -8706,9 +8724,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // which prefers this over the keyword classifier when present.
   let modelJudgedDepth: RouteDepth | null = null;
   if (!forceBuildPipeline && !input.modelOverride && (await readStoreValue<boolean>("modelDrivenRoutingEnabled", false))) {
-    const modelRouteDecision = await classifyRouteWithModel(prompt, editableProject);
+    const modelRouteDecision = await classifyRouteWithModel(classifyPrompt, editableProject);
     if (modelRouteDecision) {
-      modelBuildPipelineDecision = modelRouteDecision.mode !== "chat" && !isBuildOptOut(prompt);
+      modelBuildPipelineDecision = modelRouteDecision.mode !== "chat" && !isBuildOptOut(classifyPrompt);
       modelJudgedDepth = modelRouteDecision.depth ?? null;
       emitTimeline(stream, timelineText(`Router model chose: ${modelRouteDecision.mode}${modelRouteDecision.depth ? `, depth ${modelRouteDecision.depth}` : ""}.`));
     }
@@ -8721,9 +8739,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // (forceBuildPipeline) still runs the pipeline with a pinned model leading the stages.
   if (
     forceBuildPipeline ||
-    (!input.modelOverride && (modelBuildPipelineDecision ?? shouldRunBuildPipeline(prompt, effectiveDecision, decision.source, editableProject)))
+    (!input.modelOverride && (modelBuildPipelineDecision ?? shouldRunBuildPipeline(classifyPrompt, effectiveDecision, decision.source, editableProject)))
   ) {
-    const singleFile = wantsSingleFileFrontend(prompt);
+    const singleFile = wantsSingleFileFrontend(classifyPrompt);
     emitTimeline(stream, timelineText("I’ll run this through the build pipeline and turn the model output into real project files."));
     if (forceBuildPipeline) {
       emitTimeline(stream, timelineText("Build pipeline invoked manually via /orchestration."));
@@ -9997,6 +10015,426 @@ async function startRoutineScheduler(): Promise<void> {
     await fireRoutine(routine.id);
   }
   scheduleNextRoutineTick();
+}
+
+// ---------------------------------------------------------------------------
+// Metis Loops, phase 1 (docs/LOOPS.md) — a loop is a goal Metis works on
+// across several turns, deciding at the end of each turn whether to wake
+// again. The decision half lives in ./loops.ts, where silence parses as stop;
+// everything below is the plumbing around it.
+//
+// The scheduler is a deliberate copy of the routine chain above rather than a
+// new design: that chain already re-evaluates in 60s slices so a laptop that
+// slept through a wake time self-corrects within a minute instead of
+// oversleeping by however long the machine was off. An autonomous run that
+// happens while nobody is watching is the last place in this app where a
+// clever new timer should be invented.
+let loopTimer: ReturnType<typeof setTimeout> | undefined;
+let loopTickRunning = false;
+// The background chain only exists once startLoopScheduler has deliberately
+// started it. Without this flag, --cli mode (which returns from whenReady long
+// before the scheduler is started) would still arm a timer the moment it
+// created its own loop, and 60s later that timer would fire the USER'S sleeping
+// app loops inside a headless CLI process with no window to show them.
+let loopSchedulerStarted = false;
+
+/** Default iteration cap when a caller does not name one. Deliberately far
+ *  under LOOP_MAX_ITERATIONS_CEILING: the cost of this being too low is a loop
+ *  that stops early and gets restarted, which is the cheap direction to be
+ *  wrong in. */
+const LOOP_DEFAULT_MAX_ITERATIONS = 8;
+
+async function readLoops(): Promise<LoopRecord[]> {
+  return readStoreValue<LoopRecord[]>("loops", []);
+}
+
+async function writeLoops(next: LoopRecord[]): Promise<void> {
+  await writeStoreValue("loops", next);
+}
+
+/** Short one-line label for audit summaries. A goal is free text and can be a
+ *  paragraph; the audit log is read as a list of one-liners. */
+function loopLabel(loop: LoopRecord): string {
+  const oneLine = loop.goal.replace(/\s+/g, " ").trim();
+  return oneLine.length > 60 ? `${oneLine.slice(0, 59)}...` : oneLine;
+}
+
+/** True only for the five real permission modes. A loop stores its mode as a
+ *  plain string and hands it straight to a session run, and gatePermission's
+ *  if/else chain treats anything it does not recognise as "auto" — so an
+ *  unvalidated value would silently run LOOSER than a caller who asked for
+ *  "plan". Unknown values are rejected at creation instead. */
+function isPermissionMode(value: unknown): value is PermissionMode {
+  return value === "ask" || value === "edits" || value === "plan" || value === "auto" || value === "bypass";
+}
+
+/** Read-modify-write of a single loop. Always re-reads first: a tick can take
+ *  minutes, and the user stopping a different loop from the UI meanwhile must
+ *  not be clobbered by a stale in-memory list. Silently does nothing when the
+ *  record has since been deleted, rather than resurrecting it. */
+async function persistLoop(loop: LoopRecord): Promise<void> {
+  const current = await readLoops();
+  if (!current.some((item) => item.id === loop.id)) return;
+  await writeLoops(current.map((item) => (item.id === loop.id ? loop : item)));
+}
+
+async function listLoops(): Promise<LoopRecord[]> {
+  return readLoops();
+}
+
+/** Creates a loop and arms it for an immediate first tick. Two fields are
+ *  frozen onto the record here and never re-read: `permissionMode`, so a loop
+ *  cannot gain permissions it did not start with by the user changing the
+ *  global setting while it sleeps, and `origin`, which decides who is allowed
+ *  to resume it after a restart (see LoopRecord.origin). */
+async function createLoop(input: {
+  goal: string;
+  projectPath?: string;
+  maxIterations?: number;
+  permissionMode?: string;
+  origin?: LoopRecord["origin"];
+}): Promise<LoopRecord> {
+  const goal = typeof input.goal === "string" ? input.goal.trim() : "";
+  if (!goal) throw new Error("A loop needs a goal.");
+
+  // The ceiling is the only thing standing between a caller-supplied number
+  // and an unbounded autonomous run, so it is applied to whatever actually
+  // arrives here rather than trusted to have been applied upstream.
+  const requested = Number.isFinite(input.maxIterations) ? Math.floor(Number(input.maxIterations)) : LOOP_DEFAULT_MAX_ITERATIONS;
+  const maxIterations = Math.min(LOOP_MAX_ITERATIONS_CEILING, Math.max(1, requested));
+
+  const permissionMode = isPermissionMode(input.permissionMode)
+    ? input.permissionMode
+    : await readStoreValue<PermissionMode>("permissionMode", "auto");
+
+  const now = new Date();
+  const loop: LoopRecord = {
+    id: randomUUID(),
+    goal,
+    projectPath: input.projectPath,
+    origin: input.origin ?? "app",
+    permissionMode,
+    status: "sleeping",
+    iterations: 0,
+    maxIterations,
+    createdAt: now.toISOString(),
+    expiresAt: new Date(now.getTime() + LOOP_MAX_AGE_HOURS * 3_600_000).toISOString(),
+    // Due now, so a loop the user just created starts on the next slice
+    // instead of appearing to do nothing for its first minute.
+    nextWakeAt: now.toISOString(),
+    history: []
+  };
+
+  await writeLoops([loop, ...(await readLoops())]);
+  await appendAudit("info", "loop.create", `Created ${loop.origin} loop "${loopLabel(loop)}".`, {
+    id: loop.id,
+    maxIterations,
+    permissionMode,
+    origin: loop.origin
+  });
+  scheduleNextLoopTick();
+  return loop;
+}
+
+/** Stops a loop immediately and unconditionally: the record is terminal from
+ *  this moment and no further wake is armed. Any turn already in flight is
+ *  left to finish rather than torn apart mid-write — fireLoopTick re-reads the
+ *  record before its final write and honours a stop that landed during the
+ *  run. */
+async function stopLoop(id: string, reason?: string): Promise<LoopRecord | undefined> {
+  const current = await readLoops();
+  const loop = current.find((item) => item.id === id);
+  if (!loop) return undefined;
+  const stopped: LoopRecord = {
+    ...loop,
+    status: "stopped",
+    stoppedReason: reason?.trim() || "stopped by the user",
+    nextWakeAt: undefined
+  };
+  await writeLoops(current.map((item) => (item.id === id ? stopped : item)));
+  await appendAudit("info", "loop.stop", `Stopped loop "${loopLabel(stopped)}".`, {
+    id,
+    iterations: stopped.iterations,
+    reason: stopped.stoppedReason
+  });
+  scheduleNextLoopTick();
+  return stopped;
+}
+
+async function deleteLoop(id: string): Promise<LoopRecord[]> {
+  const current = await readLoops();
+  const loop = current.find((item) => item.id === id);
+  const next = current.filter((item) => item.id !== id);
+  await writeLoops(next);
+  if (loop) {
+    await appendAudit("info", "loop.delete", `Deleted loop "${loopLabel(loop)}".`, { id, iterations: loop.iterations });
+  }
+  scheduleNextLoopTick();
+  return next;
+}
+
+/** Fires one iteration: composes the wake prompt from the record's own
+ *  history, runs it through the normal session pipeline, and lets the model's
+ *  parsed decision choose whether there is another iteration. Mirrors
+ *  fireRoutine's error discipline — nothing in here throws, because one bad
+ *  loop must never wedge the tick chain for every other loop. */
+async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
+  const loaded = (await readLoops()).find((item) => item.id === id);
+  if (!loaded) return undefined;
+
+  // Checked before anything is spent: the cheapest place to stop a loop that
+  // has run out of iterations or wall-clock is before it costs a model call.
+  const terminalBefore = loopTerminalReason(loaded, new Date());
+  if (terminalBefore) {
+    const alreadyTerminal = loaded.status === "stopped" || loaded.status === "exhausted" || loaded.status === "failed";
+    const settled: LoopRecord = {
+      ...loaded,
+      status: alreadyTerminal ? loaded.status : "exhausted",
+      stoppedReason: alreadyTerminal ? loaded.stoppedReason : `the loop ${terminalBefore}`,
+      nextWakeAt: undefined
+    };
+    await persistLoop(settled);
+    // Only audited when the status actually changed here; a scheduler catching
+    // up on an already-terminal record should not write a fresh log line every
+    // time it looks at it.
+    if (!alreadyTerminal) {
+      await appendAudit("info", "loop.exhausted", `Loop "${loopLabel(settled)}" ${terminalBefore}.`, {
+        id: settled.id,
+        iterations: settled.iterations,
+        maxIterations: settled.maxIterations
+      });
+    }
+    return settled;
+  }
+
+  // Marked running and persisted BEFORE the call, so the UI can show a loop
+  // that is genuinely working, and so a next launch can tell a mid-iteration
+  // crash apart from a loop that was merely asleep (startLoopScheduler).
+  const startedAt = new Date().toISOString();
+  await persistLoop({ ...loaded, status: "running" });
+
+  const index = loaded.iterations + 1;
+  let assistantText = "";
+  let conversationId = loaded.conversationId;
+  let runError: string | undefined;
+  try {
+    const run = await runSessionTracked({
+      prompt: composeWakePrompt(loaded),
+      // Route on the GOAL, not the wake prompt. The wake prompt has to carry
+      // the metis-loop protocol block, and a fenced JSON block classifies as
+      // "coding" whatever the goal actually asks for - which is how a loop
+      // asked to COUNT the functions in app.js ended up rewriting it from 171
+      // lines to 10. The user's intent lives in the goal; the rest is
+      // scaffolding Metis wrote to itself and must not be judged on.
+      routingPrompt: loaded.goal,
+      conversationId: loaded.conversationId,
+      projectPath: loaded.projectPath,
+      // The mode captured at creation, never the current global — see
+      // createLoop. Cast because LoopRecord stores it as a plain string;
+      // createLoop is what guarantees the value is a real mode.
+      permissionMode: loaded.permissionMode as PermissionMode,
+      rawPromptStorage: "local-only"
+    });
+    assistantText = run.assistantText ?? "";
+    conversationId = run.conversationId ?? loaded.conversationId;
+  } catch (error) {
+    runError = error instanceof Error ? error.message : String(error);
+  }
+
+  // A failed turn produced no reply to read a decision out of, so it is never
+  // parsed as one: an error is its own outcome, not a silent stop.
+  const decision = runError ? null : extractLoopDecision(assistantText);
+  const entry: LoopIterationRecord = {
+    index,
+    at: startedAt,
+    summary: summariseTurn(assistantText),
+    decision: decision ? decision.decision : "silent",
+    reason: decision?.reason,
+    error: runError
+  };
+
+  const finishedAt = new Date();
+  const advanced: LoopRecord = {
+    ...loaded,
+    conversationId,
+    iterations: index,
+    history: [...loaded.history, entry],
+    // Every branch below either leaves this cleared or sets a real wake, so a
+    // terminal loop can never keep a wake time the scheduler would act on.
+    nextWakeAt: undefined
+  };
+
+  let settled: LoopRecord;
+  if (runError) {
+    // Deliberately no retry. A loop that re-runs a failing turn every slice is
+    // exactly the unattended runaway this feature has to design out, and a
+    // failure the user can see and restart is better than one that hides
+    // itself by eventually succeeding.
+    settled = { ...advanced, status: "failed", stoppedReason: runError };
+    await appendAudit("error", "loop.error", `Loop "${loopLabel(advanced)}" failed on iteration ${index}.`, {
+      id,
+      iteration: index,
+      error: runError
+    });
+  } else if (!decision) {
+    // The governing rule from loops.ts: continuing is an explicit act, so a
+    // reply with no parseable decision block ends the loop.
+    settled = { ...advanced, status: "stopped", stoppedReason: "the model did not ask to continue" };
+    await appendAudit("info", "loop.stop", `Loop "${loopLabel(advanced)}" stopped: no continue was requested on iteration ${index}.`, {
+      id,
+      iteration: index
+    });
+  } else if (decision.decision === "stop") {
+    settled = {
+      ...advanced,
+      status: "stopped",
+      stoppedReason: `the model chose to stop: ${decision.reason ?? "no reason given"}`
+    };
+    await appendAudit("info", "loop.stop", `Loop "${loopLabel(advanced)}" stopped itself on iteration ${index}.`, {
+      id,
+      iteration: index,
+      reason: decision.reason
+    });
+  } else {
+    // Re-checked against the INCREMENTED record, not the one loaded at the
+    // top: the iteration just spent may have been the last one the cap
+    // allows, and honouring the model's wakeup here would arm a tick that can
+    // only ever bounce straight back off the terminal check.
+    const terminalAfter = loopTerminalReason(advanced, finishedAt);
+    if (terminalAfter) {
+      settled = { ...advanced, status: "exhausted", stoppedReason: `the loop ${terminalAfter}` };
+      await appendAudit("info", "loop.exhausted", `Loop "${loopLabel(advanced)}" ${terminalAfter}.`, {
+        id,
+        iterations: index,
+        maxIterations: advanced.maxIterations
+      });
+    } else {
+      // Already clamped to [LOOP_MIN_DELAY_SECONDS, LOOP_MAX_DELAY_SECONDS] by
+      // extractLoopDecision; the fallback only covers the type being optional.
+      const delaySeconds = decision.delaySeconds ?? LOOP_MIN_DELAY_SECONDS;
+      settled = {
+        ...advanced,
+        status: "sleeping",
+        lastReason: decision.reason,
+        nextWakeAt: new Date(finishedAt.getTime() + delaySeconds * 1000).toISOString()
+      };
+      await appendAudit("info", "loop.tick", `Loop "${loopLabel(advanced)}" continues after iteration ${index}.`, {
+        id,
+        iteration: index,
+        delaySeconds,
+        reason: decision.reason
+      });
+    }
+  }
+
+  // Re-read before the final write: a turn can take minutes and the stored
+  // record may have moved under us. A Stop the user clicked mid-run has to
+  // win over whatever the model decided during that same run, otherwise the
+  // click silently re-arms the loop it was meant to kill.
+  const afterRun = await readLoops();
+  const stored = afterRun.find((item) => item.id === id);
+  if (!stored) return undefined;
+  const finalRecord: LoopRecord =
+    stored.status === "stopped"
+      ? // Keep the user's stop and its reason, but keep the work too: the
+        // iteration really happened and its history is what stops a restart
+        // from repeating it.
+        { ...stored, conversationId, iterations: index, history: advanced.history, nextWakeAt: undefined }
+      : settled;
+  await writeLoops(afterRun.map((item) => (item.id === id ? finalRecord : item)));
+  return finalRecord;
+}
+
+/** The scheduler chain, same shape and same 60s slice as the routine chain
+ *  above: one live timer at a time, re-evaluated at least once a minute so
+ *  system sleep or a clock change self-corrects rather than oversleeping. */
+function scheduleNextLoopTick(): void {
+  if (loopTimer) {
+    clearTimeout(loopTimer);
+    loopTimer = undefined;
+  }
+  // See loopSchedulerStarted: in --cli mode the chain is never started, and
+  // arming it here would let a CLI run fire the user's app loops.
+  if (!loopSchedulerStarted) return;
+  loopTimer = setTimeout(() => {
+    void runLoopTick();
+  }, 60_000);
+}
+
+async function runLoopTick(): Promise<void> {
+  if (loopTickRunning) return;
+  loopTickRunning = true;
+  try {
+    const loops = await readLoops();
+    const now = new Date();
+    const due = loops.filter(
+      (loop) =>
+        // cli loops are driven in the foreground by the process that made
+        // them. Firing one here as well would put two model runs into the
+        // same conversation at once.
+        loop.origin !== "cli" && loop.status === "sleeping" && loop.nextWakeAt && new Date(loop.nextWakeAt) <= now
+    );
+    for (const loop of due) {
+      await fireLoopTick(loop.id);
+    }
+  } finally {
+    loopTickRunning = false;
+    scheduleNextLoopTick();
+  }
+}
+
+/** Called once on app.whenReady, next to startRoutineScheduler. Settles every
+ *  loop the last process left behind before arming the chain, so nothing is
+ *  ever resumed by a surface that cannot also show it. */
+async function startLoopScheduler(): Promise<void> {
+  const loops = await readLoops();
+
+  // A loop is resumed only by a surface that can also SHOW it and stop it.
+  // The app has the Loops panel; the CLI has nothing once its process exits.
+  // So a cli loop still sleeping (or still marked running) is the residue of a
+  // Ctrl-C, a timeout or a crash, and is closed out here. Without this, killing
+  // the CLI mid-loop plants an autonomous run that fires inside the desktop app
+  // hours later, which the user never created and would not think to look for.
+  // Applied BEFORE the interrupted-app rule below, so a cli loop stuck in
+  // "running" reads as a dead CLI session rather than an app crash.
+  const orphanedCli = loops.filter((loop) => loop.origin === "cli" && (loop.status === "sleeping" || loop.status === "running"));
+  // An app loop left "running" is one whose iteration was cut off when the app
+  // died. It is marked failed, never resumed: Metis cannot know whether that
+  // turn had already written anything, and re-running it blind could repeat a
+  // half-applied change.
+  const interrupted = loops.filter((loop) => loop.origin !== "cli" && loop.status === "running");
+
+  if (orphanedCli.length || interrupted.length) {
+    const orphanIds = new Set(orphanedCli.map((loop) => loop.id));
+    const interruptedIds = new Set(interrupted.map((loop) => loop.id));
+    await writeLoops(
+      loops.map((loop) => {
+        if (orphanIds.has(loop.id)) {
+          return { ...loop, status: "stopped" as const, stoppedReason: "the CLI session that owned this loop ended", nextWakeAt: undefined };
+        }
+        if (interruptedIds.has(loop.id)) {
+          return { ...loop, status: "failed" as const, stoppedReason: "the app closed during this iteration", nextWakeAt: undefined };
+        }
+        return loop;
+      })
+    );
+    for (const loop of orphanedCli) {
+      await appendAudit("info", "loop.stop", `Closed out CLI loop "${loopLabel(loop)}" whose session had ended.`, {
+        id: loop.id,
+        iterations: loop.iterations,
+        origin: loop.origin
+      });
+    }
+    for (const loop of interrupted) {
+      await appendAudit("warning", "loop.error", `Loop "${loopLabel(loop)}" was interrupted by the app closing.`, {
+        id: loop.id,
+        iterations: loop.iterations
+      });
+    }
+  }
+
+  loopSchedulerStarted = true;
+  scheduleNextLoopTick();
 }
 
 // --- Gallery visual RAG (docs/FABLE_PLANS.md section 4) ---
@@ -12143,6 +12581,10 @@ app.whenReady().then(async () => {
     try {
       const runtime: CliRuntime = {
         runSessionTracked,
+        // The CLI drives its own ticks in the foreground rather than waiting on
+        // the 60s chain, which is never started in this mode.
+        createLoop,
+        fireLoopTick,
         establishWritableWorkspace,
         readProjectWorkspace,
         respondToPermissionPrompt,
@@ -12357,6 +12799,16 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-routines:run-now", (_event, id: string) => runRoutineNow(id));
   // I9.4: plan-only preview of what a routine would do - never mutates the routine.
   ipcMain.handle("metis-routines:dry-run", (_event, id: string) => dryRunRoutine(id));
+  // Metis Loops phase 1 (docs/LOOPS.md). Origin is forced to "app" here rather
+  // than taken from the renderer: these loops are the ones the Loops panel can
+  // show and stop, which is exactly what earns a loop the right to be resumed
+  // after a restart (see LoopRecord.origin).
+  ipcMain.handle("metis-loops:list", () => listLoops());
+  ipcMain.handle("metis-loops:create", (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string }) =>
+    createLoop({ ...input, origin: "app" })
+  );
+  ipcMain.handle("metis-loops:stop", (_event, id: string, reason?: string) => stopLoop(id, reason));
+  ipcMain.handle("metis-loops:delete", (_event, id: string) => deleteLoop(id));
   // DRILL_PLAN B12.2/B12.7 — usage metering + limits. summary is read-only
   // (computed from the usageLedger store key on every call, cheap even at the
   // 5000-entry cap); set-limits is a partial patch, display-only in this pass
@@ -12447,6 +12899,9 @@ app.whenReady().then(async () => {
   void refreshModelCatalog();
   void refreshPulseFeed();
   void startRoutineScheduler();
+  // Settles anything the last process left mid-flight (a crashed app loop, an
+  // orphaned CLI loop) before arming the chain — see startLoopScheduler.
+  void startLoopScheduler();
   // Metis Gateway (DRILL_PLAN P10.1): OFF by default — only autostarts here
   // when the owner previously flipped the `gatewayEnabled` store flag on
   // (via metis-gateway:set-enabled). startGateway is fail-soft (bind failure

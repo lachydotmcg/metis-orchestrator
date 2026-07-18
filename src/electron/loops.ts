@@ -91,27 +91,26 @@ export interface LoopDecision {
 /** The instruction block appended to every wake prompt. Written to make
  *  stopping the easy path: the model is told plainly that saying nothing ends
  *  the loop, so the lazy failure is the safe one. */
+/** Deliberately terse, and deliberately free of words like "build", "make" or
+ *  "create". Metis classifies chat-vs-build from the prompt text, and the first
+ *  live loop proved how badly that interacts with a chatty scaffold: a
+ *  read-only goal ("how many functions does app.js define?") wrapped in an
+ *  earlier, longer version of this block routed to the BUILD pipeline and
+ *  rewrote the file down from 171 lines to 10. The example reason said
+ *  "waiting for the build to finish", and that one word was enough. Every line
+ *  here is therefore both short, so the goal stays the dominant signal, and
+ *  neutral, so it cannot be read as a request to write anything. */
 export function loopDecisionPromptBlock(): string {
   return [
-    "## Ending your turn",
-    "",
-    "When you have finished this turn's work, decide whether the loop should continue.",
-    "Answer with a fenced block, exactly one JSON object, as the LAST thing in your reply:",
+    "---",
+    "End your reply with this fenced block, and nothing after it:",
     "",
     "```metis-loop",
-    '{ "decision": "continue", "delaySeconds": 900, "reason": "waiting for the build to finish" }',
+    '{ "decision": "continue", "delaySeconds": 900, "reason": "why you need another turn" }',
     "```",
     "",
-    "or",
-    "",
-    "```metis-loop",
-    '{ "decision": "stop", "reason": "the goal is met" }',
-    "```",
-    "",
-    "Rules:",
-    `- delaySeconds is clamped to between ${LOOP_MIN_DELAY_SECONDS} and ${LOOP_MAX_DELAY_SECONDS}. Pick it from what you are actually waiting for.`,
-    "- Stop as soon as the goal is met, or as soon as you can tell that continuing cannot make progress. Stopping early is correct behaviour, not giving up.",
-    "- If you omit the block, or it does not parse, THE LOOP STOPS. Continuing is something you have to ask for."
+    `Use "stop" instead of "continue" once the goal is met or once another turn cannot help. delaySeconds is clamped to ${LOOP_MIN_DELAY_SECONDS}-${LOOP_MAX_DELAY_SECONDS}.`,
+    "No block means the loop ends. Continuing is something you have to ask for."
   ].join("\n");
 }
 
@@ -175,37 +174,24 @@ export function loopTerminalReason(loop: LoopRecord, now: Date): string | null {
  *  iteration 4 from redoing iteration 2 - without it a woken run is a prompt
  *  with amnesia. */
 export function composeWakePrompt(loop: LoopRecord): string {
-  const iteration = loop.iterations + 1;
-  const lines: string[] = [
-    `You are iteration ${iteration} of ${loop.maxIterations} in an autonomous Metis loop.`,
-    "",
-    "## The goal, as originally given",
-    loop.goal,
-    ""
-  ];
+  // THE GOAL COMES FIRST AND ALONE. Routing classifies chat-vs-build from the
+  // prompt text, so whatever leads it decides what Metis thinks it was asked
+  // to do. An earlier version opened with "You are iteration 1 of 3 in an
+  // autonomous Metis loop" and buried the goal below it; a question about the
+  // code routed as a build and rewrote the file. Scaffolding goes underneath,
+  // kept short so the goal stays the dominant signal.
+  const lines: string[] = [loop.goal, ""];
 
   if (loop.history.length) {
-    lines.push("## What earlier iterations did");
+    lines.push(`(Loop turn ${loop.iterations + 1} of ${loop.maxIterations}. Already done, do not redo:`);
     for (const entry of loop.history.slice(-6)) {
-      const outcome = entry.error ? `failed: ${entry.error}` : entry.summary || "(no summary recorded)";
-      lines.push(`- Iteration ${entry.index}: ${outcome}`);
+      lines.push(`- ${entry.error ? `turn ${entry.index} failed: ${entry.error}` : entry.summary || "(nothing recorded)"}`);
     }
-    lines.push("");
-    lines.push("Do not repeat work that is already done. Build on it or verify it.");
-    lines.push("");
+    lines.push(")", "");
   } else {
-    lines.push("This is the first iteration. Start the work.");
-    lines.push("");
+    lines.push(`(Loop turn 1 of ${loop.maxIterations}.)`, "");
   }
 
-  if (loop.projectPath) {
-    lines.push(`## Project`, loop.projectPath, "");
-  }
-
-  lines.push(
-    `You have ${loop.maxIterations - loop.iterations} iteration(s) left including this one. Do real work this turn rather than only planning, because a plan with no iterations left to execute it is worth nothing.`,
-    ""
-  );
   lines.push(loopDecisionPromptBlock());
   return lines.join("\n");
 }

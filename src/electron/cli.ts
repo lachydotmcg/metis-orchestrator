@@ -51,6 +51,7 @@ import type {
   SessionTimelineEvent,
   UserQuestionAnswer
 } from "../shared/runtime-contracts.js";
+import { LOOP_MAX_ITERATIONS_CEILING, type LoopRecord } from "./loops.js";
 
 /** Structural twin of main.ts's private `SessionStreamController` type
  *  ({ emit(event) => void }). main.ts never exports that type — it doesn't
@@ -66,6 +67,18 @@ export type CliStreamEmitter = { emit: (event: SessionStreamEvent) => void };
  *  than imported. */
 export interface CliRuntime {
   runSessionTracked(input: SessionRunInput, stream?: CliStreamEmitter): Promise<SessionRun>;
+  /** Metis Loops phase 1 (docs/LOOPS.md). `loop` drives these two directly,
+   *  in the foreground: main.ts's 60s background chain is never started in
+   *  --cli mode, so a 3-iteration loop takes three model calls rather than
+   *  three minutes. */
+  createLoop(input: {
+    goal: string;
+    projectPath?: string;
+    maxIterations?: number;
+    permissionMode?: string;
+    origin?: LoopRecord["origin"];
+  }): Promise<LoopRecord>;
+  fireLoopTick(id: string): Promise<LoopRecord | undefined>;
   establishWritableWorkspace(path: string): Promise<ProjectWorkspace>;
   readProjectWorkspace(): Promise<ProjectWorkspace | null>;
   respondToPermissionPrompt(id: string, verdict: PermissionVerdict): void;
@@ -107,12 +120,14 @@ const FEATURE_FLAGS: ReadonlyArray<{ key: string; label: string; default: boolea
 class CliUsageError extends Error {}
 
 interface ParsedArgs {
-  subcommand: "chat" | "build" | "doctor" | "help";
+  subcommand: "chat" | "build" | "doctor" | "loop" | "help";
   prompt?: string;
   projectPath?: string;
   model?: string;
   json: boolean;
   timeoutSeconds: number;
+  maxIterations?: number;
+  respectDelays: boolean;
 }
 
 function usageText(): string {
@@ -123,6 +138,7 @@ function usageText(): string {
     '  npm run cli -- doctor [--json]',
     '  npm run cli -- chat "<prompt>" [--project <path>] [--model <provider/model>] [--json] [--timeout <seconds>]',
     '  npm run cli -- build "<prompt>" --project <path> [--model <provider/model>] [--json] [--timeout <seconds>]',
+    '  npm run cli -- loop "<goal>" [--max-iterations <n>] [--project <path>] [--respect-delays] [--json]',
     "",
     "Flags:",
     "  --project <path>          Establishes <path> as the writable project workspace for this run",
@@ -131,11 +147,20 @@ function usageText(): string {
     "                             Metis's own app-managed workspace folder instead of a real project.",
     "  --model <provider/model>  Pins a model instead of Auto Router, e.g. ollama/qwen3:8b or",
     "                             anthropic/claude-sonnet-5. Maps onto SessionRunInput.modelOverride.",
+    "                             chat/build only.",
+    "  --max-iterations <n>      loop only. Hard cap on how many times the loop may wake. Default 8,",
+    `                             clamped to at most ${LOOP_MAX_ITERATIONS_CEILING} (src/electron/loops.ts). The loop can still stop`,
+    "                             itself earlier, and usually should.",
+    "  --respect-delays          loop only. Actually sleep the delay the model asked for between",
+    "                             iterations. Off by default: a loop that asks for 900s three times",
+    "                             would otherwise take 45 minutes to exercise three ticks.",
     "  --json                    Print one machine-readable JSON blob instead of the human stream —",
-    "                             the SessionRun object for chat/build, the report object for doctor —",
-    "                             and nothing else to stdout, for assertions in tests.",
+    "                             the SessionRun object for chat/build, the final LoopRecord for loop,",
+    "                             the report object for doctor — and nothing else to stdout, for",
+    "                             assertions in tests.",
     "  --timeout <seconds>       Overall wall-clock budget before the run is cancelled and the process",
-    "                             exits non-zero. Default 300.",
+    "                             exits non-zero. Default 300. For loop this covers every iteration",
+    "                             together, not each one.",
     "",
     'Permissions: every run uses permissionMode "auto" — there is no human in CLI mode to answer a',
     "permission prompt or an <ask_user> question, so both are auto-resolved the instant they fire",
@@ -143,14 +168,19 @@ function usageText(): string {
     "grant --project itself creates; questions: answered with their first offered option) and printed",
     "as they happen instead of silently blocking for 5 minutes and then defaulting.",
     "",
+    "A loop is an autonomous run: each iteration decides for itself whether there is another one, and",
+    "silence stops it. Loops created here are recorded with origin \"cli\" and are NEVER resumed by the",
+    "desktop app on a later launch - a Ctrl-C partway through leaves a stopped record, not a background",
+    "run the app picks up hours later with nowhere to show it.",
+    "",
     "Exit codes:",
     "  0    success - a real provider answered (chat) or the build wrote and verified cleanly (build),",
-    "       or doctor ran.",
+    "       or doctor ran, or the loop ended on its own terms (stopped or exhausted).",
     "  1    the run threw (unexpected internal error).",
     "  2    CLI usage error (bad flags/arguments) - nothing was run.",
     "  3    the run completed but did not get a real answer - e.g. Ollama unreachable and no cloud key",
-    "       configured, every build stage failed, or build verification failed. See stderr / warnings",
-    "       for the honest reason.",
+    "       configured, every build stage failed, build verification failed, or a loop iteration errored",
+    "       (status \"failed\"). See stderr / warnings for the honest reason.",
     "  124  timed out (see --timeout)."
   ].join("\n");
 }
@@ -163,6 +193,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
   let projectPath: string | undefined;
   let model: string | undefined;
+  let maxIterations: number | undefined;
+  let respectDelays = false;
   let helpRequested = false;
   const positionals: string[] = [];
 
@@ -170,6 +202,19 @@ function parseArgs(argv: string[]): ParsedArgs {
     const token = rest[i];
     if (token === "--json") {
       json = true;
+      continue;
+    }
+    if (token === "--respect-delays") {
+      respectDelays = true;
+      continue;
+    }
+    if (token === "--max-iterations") {
+      const value = rest[++i];
+      const parsedIterations = value ? Number(value) : NaN;
+      if (!Number.isInteger(parsedIterations) || parsedIterations <= 0) {
+        throw new CliUsageError(`--max-iterations requires a positive whole number, got "${value ?? ""}".`);
+      }
+      maxIterations = parsedIterations;
       continue;
     }
     if (token === "--help" || token === "-h") {
@@ -204,20 +249,21 @@ function parseArgs(argv: string[]): ParsedArgs {
   }
 
   if (helpRequested) {
-    return { subcommand: "help", json, timeoutSeconds };
+    return { subcommand: "help", json, timeoutSeconds, respectDelays };
   }
 
   const subcommand = positionals.shift();
-  if (!subcommand) throw new CliUsageError("Missing subcommand. Expected one of: chat, build, doctor.");
-  if (subcommand !== "chat" && subcommand !== "build" && subcommand !== "doctor") {
-    throw new CliUsageError(`Unknown subcommand "${subcommand}". Expected one of: chat, build, doctor.`);
+  if (!subcommand) throw new CliUsageError("Missing subcommand. Expected one of: chat, build, doctor, loop.");
+  if (subcommand !== "chat" && subcommand !== "build" && subcommand !== "doctor" && subcommand !== "loop") {
+    throw new CliUsageError(`Unknown subcommand "${subcommand}". Expected one of: chat, build, doctor, loop.`);
   }
 
   let prompt: string | undefined;
-  if (subcommand === "chat" || subcommand === "build") {
+  if (subcommand === "chat" || subcommand === "build" || subcommand === "loop") {
     prompt = positionals.shift();
+    const label = subcommand === "loop" ? "goal" : "prompt";
     if (!prompt || !prompt.trim()) {
-      throw new CliUsageError(`"${subcommand}" requires a prompt argument, e.g. npm run cli -- ${subcommand} "hello"`);
+      throw new CliUsageError(`"${subcommand}" requires a ${label} argument, e.g. npm run cli -- ${subcommand} "hello"`);
     }
   }
 
@@ -225,7 +271,18 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new CliUsageError(`Unexpected extra argument(s): ${positionals.join(" ")}`);
   }
 
-  return { subcommand, prompt, projectPath, model, json, timeoutSeconds };
+  // Rejected rather than ignored: a flag that silently does nothing is worse
+  // than one that fails, because the user believes it took effect. --model in
+  // particular would look like it pinned the loop's model when loop ticks go
+  // through the Auto Router regardless.
+  if (subcommand === "loop" && model) {
+    throw new CliUsageError('"loop" does not support --model: every loop iteration routes through the Auto Router.');
+  }
+  if (subcommand !== "loop" && (maxIterations !== undefined || respectDelays)) {
+    throw new CliUsageError(`--max-iterations and --respect-delays only apply to "loop", not "${subcommand}".`);
+  }
+
+  return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays };
 }
 
 function parseModelOverride(raw: string, providerInfo: CliRuntime["providerInfo"]): SessionModelOverride {
@@ -502,7 +559,27 @@ async function runDoctor(deps: CliRuntime, json: boolean): Promise<number> {
   return 0;
 }
 
-// --- chat / build ------------------------------------------------------
+// --- chat / build / loop ---------------------------------------------------
+
+/** Establishes --project as this run's writable workspace, the same grant the
+ *  GUI's "Choose folder" writes. Resolves to the absolute path, `undefined`
+ *  when no --project was given, or `null` when the grant could not be
+ *  established — the caller exits 1 on null rather than continuing, because
+ *  running on without the grant only defers the failure to the first write,
+ *  deep inside a pipeline, where the reason is much harder to read. */
+async function establishCliWorkspace(parsed: ParsedArgs, deps: CliRuntime): Promise<string | undefined | null> {
+  if (!parsed.projectPath) return undefined;
+  const resolved = resolvePath(parsed.projectPath);
+  try {
+    await mkdir(resolved, { recursive: true });
+    await deps.establishWritableWorkspace(resolved);
+  } catch (error) {
+    errout(`Could not establish "${resolved}" as the writable project workspace: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+  if (!parsed.json) out(`Project workspace: ${resolved} (writable - established for this run; permissionMode "auto")`);
+  return resolved;
+}
 
 function assessOutcome(run: SessionRun): { ok: boolean; reason?: string } {
   if (run.providerResult?.source === "placeholder") {
@@ -582,18 +659,9 @@ async function runTurn(parsed: ParsedArgs, deps: CliRuntime): Promise<number> {
     modelOverride = parseModelOverride(parsed.model, deps.providerInfo);
   }
 
-  let resolvedProjectPath: string | undefined;
-  if (parsed.projectPath) {
-    resolvedProjectPath = resolvePath(parsed.projectPath);
-    try {
-      await mkdir(resolvedProjectPath, { recursive: true });
-      await deps.establishWritableWorkspace(resolvedProjectPath);
-    } catch (error) {
-      errout(`Could not establish "${resolvedProjectPath}" as the writable project workspace: ${error instanceof Error ? error.message : String(error)}`);
-      return 1;
-    }
-    if (!json) out(`Project workspace: ${resolvedProjectPath} (writable - established for this run; permissionMode "auto")`);
-  } else if (subcommand === "build" && !json) {
+  const resolvedProjectPath = await establishCliWorkspace(parsed, deps);
+  if (resolvedProjectPath === null) return 1;
+  if (!resolvedProjectPath && subcommand === "build" && !json) {
     out("No --project given - the build pipeline will write into Metis's own app-managed workspace folder instead of a real project.");
   }
 
@@ -668,6 +736,157 @@ async function runTurn(parsed: ParsedArgs, deps: CliRuntime): Promise<number> {
   return 0;
 }
 
+// --- loop ------------------------------------------------------------------
+
+/** Seconds until the loop's next wake, which is also the delay the model asked
+ *  for. LoopIterationRecord deliberately does not carry the number (loops.ts
+ *  is a fixed interface) and nextWakeAt is the only place the clamped value
+ *  survives. Undefined when the loop was not re-armed. */
+function secondsUntilWake(loop: LoopRecord): number | undefined {
+  if (!loop.nextWakeAt) return undefined;
+  const ms = new Date(loop.nextWakeAt).getTime() - Date.now();
+  return Number.isFinite(ms) ? Math.max(0, Math.round(ms / 1000)) : undefined;
+}
+
+/** One line per iteration: what the model decided, and why it said it decided
+ *  that. Reads the last history entry rather than a return value so the line
+ *  is built from what was actually persisted. */
+function describeLoopIteration(loop: LoopRecord): string {
+  const entry = loop.history[loop.history.length - 1];
+  if (!entry) return `iteration ${loop.iterations}: (no history entry was written)`;
+  const head = `iteration ${entry.index}`;
+  if (entry.error) return `${head}: failed - ${truncate(entry.error, 200)}`;
+  if (entry.decision === "silent") return `${head}: no decision block - stopping, because continuing has to be asked for`;
+  if (entry.decision === "stop") return `${head}: stop - ${entry.reason ?? "no reason given"}`;
+  const seconds = secondsUntilWake(loop);
+  const delay = seconds === undefined ? "not re-armed" : `${seconds}s requested`;
+  return `${head}: continue (${delay}) - ${entry.reason ?? loop.lastReason ?? "no reason given"}`;
+}
+
+/** Drives a loop to its terminal state in the foreground. main.ts's 60s chain
+ *  is never started in --cli mode (see the cliMode branch of app.whenReady),
+ *  so every tick here is fired directly and back to back — the point of the
+ *  harness is that `--max-iterations 3` finishes in three model calls, not
+ *  three minutes. --respect-delays opts back into real waits. */
+async function runLoop(parsed: ParsedArgs, deps: CliRuntime): Promise<number> {
+  const json = parsed.json;
+
+  const resolvedProjectPath = await establishCliWorkspace(parsed, deps);
+  if (resolvedProjectPath === null) return 1;
+
+  let loop: LoopRecord;
+  try {
+    loop = await deps.createLoop({
+      goal: parsed.prompt as string,
+      projectPath: resolvedProjectPath,
+      maxIterations: parsed.maxIterations,
+      // Pinned for the same reason chat/build pin it (see the module doc
+      // comment): the loop freezes this mode onto its record at creation, and
+      // there is no human here to answer what "ask" would raise every wakeup.
+      permissionMode: "auto",
+      // Marks the record as belonging to this process. The app closes cli
+      // loops out on its next launch instead of resuming them, because once
+      // this process exits nothing is left that can show one or stop it.
+      origin: "cli"
+    });
+  } catch (error) {
+    errout(`Could not create the loop: ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+
+  if (!json) {
+    out(`Loop ${loop.id}`);
+    out(`Goal:        ${loop.goal}`);
+    out(`Iterations:  up to ${loop.maxIterations}`);
+    out(`Permissions: ${loop.permissionMode} (no human in CLI mode - an ungranted action is denied outright, not queued)`);
+    out(`Delays:      ${parsed.respectDelays ? "honoured as the model asks for them" : "skipped - pass --respect-delays for a realistic run"}`);
+    out("");
+  }
+
+  const timeoutMs = parsed.timeoutSeconds * 1000;
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      // Same graceful-then-hard shape as runTurn: abort the live provider
+      // calls for this scope, then let main.ts's app.exit end the process.
+      deps.requestSessionCancel(resolvedProjectPath);
+      reject(new Error(`Timed out after ${parsed.timeoutSeconds}s (see --timeout).`));
+    }, timeoutMs);
+  });
+
+  const drive = async (): Promise<LoopRecord> => {
+    let current = loop;
+    // Bounded by the same ceiling the record itself is clamped to, plus the
+    // one extra pass that turns a capped loop terminal. A harness whose whole
+    // purpose is a bounded run must not be able to spin here even if a future
+    // fireLoopTick ever stops advancing the record.
+    for (let guard = 0; guard <= LOOP_MAX_ITERATIONS_CEILING; guard++) {
+      const ticked = await deps.fireLoopTick(current.id);
+      if (!ticked) throw new Error(`Loop ${current.id} vanished from the store mid-run.`);
+      current = ticked;
+      if (!json) out(describeLoopIteration(current));
+      if (current.status !== "sleeping") return current;
+      if (parsed.respectDelays) {
+        const seconds = secondsUntilWake(current) ?? 0;
+        if (seconds > 0) {
+          if (!json) out(`             sleeping ${seconds}s before the next iteration (--respect-delays)`);
+          await new Promise((resolveSleep) => setTimeout(resolveSleep, seconds * 1000));
+        }
+      }
+    }
+    return current;
+  };
+
+  const startedAt = Date.now();
+  let finalLoop: LoopRecord;
+  try {
+    finalLoop = await Promise.race([drive(), timeoutPromise]);
+  } catch (error) {
+    if (timedOut) {
+      errout(`Timed out after ${parsed.timeoutSeconds}s - cancelling the in-flight iteration and exiting.`);
+      errout(`Loop ${loop.id} is left as it stands; the app closes cli loops out on its next launch rather than resuming them.`);
+      return 124;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    if (json) {
+      out(JSON.stringify({ error: message, loopId: loop.id }, null, 2));
+    } else {
+      errout(`Loop failed after ${Date.now() - startedAt}ms: ${message}`);
+    }
+    return 1;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+
+  const totalMs = Date.now() - startedAt;
+  if (json) {
+    out(JSON.stringify(finalLoop, null, 2));
+  } else {
+    out("");
+    out("----------------------------------------");
+    out(`Status:       ${finalLoop.status}`);
+    out(`Iterations:   ${finalLoop.iterations} of ${finalLoop.maxIterations}`);
+    out(`Reason:       ${finalLoop.stoppedReason ?? "(none recorded)"}`);
+    out(`Conversation: ${finalLoop.conversationId ?? "(none - no iteration produced a run)"}`);
+    out(`Timing:       total=${totalMs}ms`);
+    out("----------------------------------------");
+  }
+
+  if (finalLoop.status === "failed") {
+    errout(`Exiting 3 - the loop failed: ${finalLoop.stoppedReason ?? "unknown reason"}`);
+    return 3;
+  }
+  // "stopped" and "exhausted" are both clean endings: a loop that stops itself
+  // early is the behaviour this feature wants, not a failure.
+  if (finalLoop.status !== "stopped" && finalLoop.status !== "exhausted") {
+    errout(`Exiting 3 - the loop is still "${finalLoop.status}" after ${finalLoop.iterations} iteration(s) and never reached a terminal state.`);
+    return 3;
+  }
+  return 0;
+}
+
 // --- entry point -----------------------------------------------------------
 
 /**
@@ -687,6 +906,9 @@ export async function runCliMode(argv: string[], deps: CliRuntime): Promise<numb
     }
     if (parsed.subcommand === "doctor") {
       return await runDoctor(deps, parsed.json);
+    }
+    if (parsed.subcommand === "loop") {
+      return await runLoop(parsed, deps);
     }
     return await runTurn(parsed, deps);
   } catch (error) {

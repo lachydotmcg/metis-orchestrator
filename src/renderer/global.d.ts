@@ -46,6 +46,11 @@ import type {
   UserProfile,
   UserQuestionAnswer
 } from "../shared/runtime-contracts";
+// Metis Loops phase 1. LoopRecord lives in the electron module rather than
+// shared/runtime-contracts because the parsing and clamping rules that give it
+// meaning live next to it (src/electron/loops.ts); this is a type-only import,
+// so nothing from the main process is pulled into the renderer bundle.
+import type { LoopRecord } from "../electron/loops";
 
 declare global {
   /** Just the slice of Vite's HMR API the sound engine needs to close its
@@ -249,6 +254,18 @@ declare global {
       // permissionMode "plan" into a fresh conversation and resolves its id,
       // never mutating the routine record. Optional: older preloads lack it.
       dryRun?: (id: string) => Promise<{ ok: boolean; conversationId?: string; error?: string }>;
+    };
+    // Metis Loops phase 1 (docs/LOOPS.md) — a goal Metis works on across
+    // several turns, choosing for itself whether to wake again. Optional as a
+    // whole: an older preload has no bridge at all. `create` takes no origin;
+    // everything made here is an "app" loop, which is what earns it the right
+    // to be resumed after a restart (the Loops panel can show and stop it).
+    // `stop` resolves undefined when the id is already gone.
+    metisLoops?: {
+      list: () => Promise<LoopRecord[]>;
+      create: (input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string }) => Promise<LoopRecord>;
+      stop: (id: string, reason?: string) => Promise<LoopRecord | undefined>;
+      delete: (id: string) => Promise<LoopRecord[]>;
     };
     metisOllama?: {
       list(): Promise<OllamaListResult>;

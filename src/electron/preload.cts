@@ -26,6 +26,7 @@ import type {
   UserProfile,
   UserQuestionAnswer
 } from "../shared/runtime-contracts";
+import type { LoopRecord } from "./loops";
 
 contextBridge.exposeInMainWorld("metisPolicy", {
   getSampleDecision: () => ipcRenderer.invoke("metis-policy:get-sample-decision"),
@@ -214,6 +215,19 @@ contextBridge.exposeInMainWorld("metisRoutines", {
   runNow: (id: string) => ipcRenderer.invoke("metis-routines:run-now", id) as Promise<Routine | undefined>,
   // DRILL_PLAN I9.4 — plan-only dry run; resolves the preview conversation id.
   dryRun: (id: string) => ipcRenderer.invoke("metis-routines:dry-run", id) as Promise<{ ok: boolean; conversationId?: string; error?: string }>
+});
+
+// Metis Loops phase 1 (docs/LOOPS.md). No `origin` on create: loops made
+// through this bridge are always "app" loops, because the panel that calls it
+// is what can show them and stop them later. maxIterations is clamped in the
+// main process, never here — a renderer must not be the thing that bounds an
+// autonomous run.
+contextBridge.exposeInMainWorld("metisLoops", {
+  list: () => ipcRenderer.invoke("metis-loops:list") as Promise<LoopRecord[]>,
+  create: (input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string }) =>
+    ipcRenderer.invoke("metis-loops:create", input) as Promise<LoopRecord>,
+  stop: (id: string, reason?: string) => ipcRenderer.invoke("metis-loops:stop", id, reason) as Promise<LoopRecord | undefined>,
+  delete: (id: string) => ipcRenderer.invoke("metis-loops:delete", id) as Promise<LoopRecord[]>
 });
 
 contextBridge.exposeInMainWorld("metisOllama", {
