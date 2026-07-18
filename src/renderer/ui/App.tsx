@@ -4512,6 +4512,10 @@ function NewSessionWorkspace({
     <main className={`product-workspace session-home ${hasConversation ? "has-result" : ""}`} aria-label="New session">
     <div className="session-home-main">
       <div className="workspace-header">
+        {/* B12 revisions (Lachy): the context 3-dots only exists once a
+            conversation has actually started - pre-conversation, folder
+            controls live in the row above the composer instead. */}
+        {hasConversation ? (
         <div className="workspace-context-wrap">
           <button
             className={`workspace-context-btn ${workspaceContextOpen ? "active" : ""}`}
@@ -4608,6 +4612,7 @@ function NewSessionWorkspace({
             </>
           ) : null}
         </div>
+        ) : null}
       </div>
       <div className="home-scroll" ref={homeScrollRef}>
         {hasConversation ? (
@@ -4785,6 +4790,8 @@ function NewSessionWorkspace({
         <SessionComposer
           sessionBusy={sessionBusy}
           projectWorkspace={projectWorkspace}
+          hasConversation={hasConversation}
+          onChooseProjectFolder={chooseProjectFolder}
           activeConversationId={activeConversationId}
           suggestion={composerSuggestion}
           suggestionResetKey={`${lastRun?.id ?? "none"}::${activeConversationId ?? "none"}`}
@@ -4851,6 +4858,8 @@ type SessionComposerModelGroups = { tier: "cloud" | "local"; label: string; bran
 function SessionComposer({
   sessionBusy,
   projectWorkspace,
+  hasConversation,
+  onChooseProjectFolder,
   activeConversationId,
   suggestion,
   suggestionResetKey,
@@ -4883,6 +4892,11 @@ function SessionComposer({
 }: {
   sessionBusy: boolean;
   projectWorkspace: ProjectWorkspace | null;
+  /** B12 revisions (Lachy): true once the conversation has turns - the
+   *  pre-conversation folder row above the box only renders before that. */
+  hasConversation: boolean;
+  /** Opens the project-folder picker (same handler the context popover uses). */
+  onChooseProjectFolder: () => void;
   /** Active conversation id, passed to Oracle warm/draft as context so the
    *  backend can assemble the same prompt the real run will send (O3). */
   activeConversationId?: string;
@@ -5360,6 +5374,31 @@ function SessionComposer({
   }
 
   return (
+    <>
+    {!hasConversation ? (
+      // B12 revisions (Lachy): on the NEW SESSION page only, the conversation
+      // folder sits right above the prompt box, with a + to its right to add
+      // the project folder when none exists yet. Once a conversation starts,
+      // folder management moves to the context 3-dots.
+      <div className="composer-folder-row">
+        <span className="composer-folder-chip" title={projectWorkspace?.path ?? "No project folder yet - builds need one to write into"}>
+          <Folder size={13} />
+          {projectWorkspace ? projectWorkspace.path.split(/[\\/]/).pop() : "No project folder"}
+        </span>
+        {!projectWorkspace ? (
+          <button
+            type="button"
+            className="composer-folder-add"
+            aria-label="Add project folder"
+            title="Choose the folder this conversation's builds and edits write into"
+            disabled={projectPickerBusy || !window.metisProject}
+            onClick={onChooseProjectFolder}
+          >
+            {projectPickerBusy ? <Loader2 size={13} className="spin" /> : <Plus size={13} />}
+          </button>
+        ) : null}
+      </div>
+    ) : null}
     <form className="home-composer" onSubmit={handleSubmit}>
       {/* B12 declutter (Lachy): the BOX holds only the input + send; every
           other control lives on the bare row below it. */}
@@ -5917,6 +5956,7 @@ function SessionComposer({
         </div>
       </div>
     </form>
+    </>
   );
 }
 
