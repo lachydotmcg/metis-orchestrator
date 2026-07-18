@@ -3619,19 +3619,50 @@ function slugify(value: string): string {
 
 type GeneratedFile = { path: string; content: string };
 
+/** Extensions the build/edit pipeline is willing to write. CORE.12b: this
+ *  list was web-stack only, which silently ate entire languages. A CLI test
+ *  asked for a Python function; the model returned a perfect
+ *  `reverse_linked_list.py` fence three times (initial plus two recovery
+ *  passes) and safeRelativeFilePath rejected all three because ".py" was not
+ *  here, so the run reported success having written nothing. inferFilename
+ *  even had a dead "py"/"python" branch whose output this set then threw
+ *  away. Metis routes to models that write far more than websites, so the
+ *  writer has to accept what they produce. Still an ALLOWLIST on purpose:
+ *  executables, archives, and dotfile-style secrets stay unwritable. */
 const generatedFileExtensions = new Set([
+  // Web
   ".css",
-  ".cjs",
+  ".scss",
   ".html",
+  ".svelte",
+  ".vue",
+  // JavaScript and TypeScript
+  ".cjs",
   ".js",
-  ".json",
   ".jsx",
-  ".md",
   ".mjs",
-  ".svg",
-  ".toml",
   ".ts",
   ".tsx",
+  // Other languages the router genuinely reaches for
+  ".c",
+  ".cpp",
+  ".cs",
+  ".go",
+  ".h",
+  ".java",
+  ".kt",
+  ".php",
+  ".py",
+  ".rb",
+  ".rs",
+  ".sh",
+  ".sql",
+  ".swift",
+  // Data, config and docs
+  ".json",
+  ".md",
+  ".svg",
+  ".toml",
   ".txt",
   ".webmanifest",
   ".xml",
