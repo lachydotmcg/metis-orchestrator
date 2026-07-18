@@ -171,6 +171,11 @@ gets done.
   (assertMetisFilePathAllowed / isPathInside / this one) and none resolve symlinks. Fix: ONE
   shared containment function with a trailing-separator check and symlink resolution, used by all
   three call sites, before any agentic tool ever takes a path argument. Blocks CORE.4.
+- [x] **CORE.8 - LOOPS phase 1 SHIPPED + LIVE-VERIFIED 2026-07-19.** Proof run: "count upward
+  from 1, three new numbers each turn, stop at 9" produced 1,2,3 / 4,5,6 / 7,8,9 and then STOPPED
+  ITSELF at iteration 3 of a possible 5. History replay, the decision protocol, self-termination
+  before the cap, and nextWakeAt clearing are all demonstrated by that one run. Phase 2 (spawning
+  workers, event wakeups) and phase 3 (token ceilings, tray presence) remain.
 - [ ] **CORE.8 - LOOPS: self-directed runs (Lachy, high want).** "You wake yourself up, spawn
   subagents, spend time checking on things, schedule yourself to wake up again. I really want the
   infrastructure for that to be possible in Metis too." Design shipped: docs/LOOPS.md. The finding
