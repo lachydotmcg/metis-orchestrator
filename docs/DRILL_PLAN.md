@@ -125,6 +125,23 @@ gets done.
   Nothing in CORE.4 ships without this.
 - [ ] **CORE.6 - A real sandbox + test prompts.** A genuine small project outside the repo with
   planted imperfections, plus prompts that each state what pass and fail look like.
+- [ ] **CORE.12 - SHIP BLOCKER: the build pipeline generates correct files and fails to write
+  them. VERIFIED THREE TIMES.** Found the moment the CLI harness existed, which is exactly why it
+  was worth building. Evidence: (a) the CLI agent ran two independent builds where the frontend
+  stage AND both recovery passes produced well-formed index.html in ```html fences and
+  extractProjectFiles extracted NOTHING, exiting 3 with "no complete project files were extracted
+  or written"; (b) Fable ran an edit against metis-sandbox ("add an aria-label to the delete
+  button") where routing was perfect (correctly chose edit over rebuild, read 5 files, routed to
+  claude-fable-5, model returned a correct fix in an `app.js` ```javascript fence, write permission
+  auto-approved for "Write 1 file") and the file on disk was NEVER MODIFIED.
+  Suspects in extractGeneratedFilesFromText (main.ts ~3735): the 320-character lookback for a
+  filename hint loses the name when the model explains at length before the fence; fenceLangMatches
+  Path rejects a legitimate hint whose fence language disagrees; and isCompletePreviewHtml silently
+  DROPS any index.html lacking full html/body tags, which is precisely the shape an EDIT returns.
+  Every one of those paths `continue`s with no signal, so the pipeline reports success having
+  written nothing. THE REAL SIN IS THE SILENCE: when extraction yields zero files from non-empty
+  model output, that must be a loud, specific error naming what was seen, not a quiet no-op.
+  This is the single biggest "work actually gets done" failure in the app.
 - [ ] **CORE.10 - SHIP BLOCKER: Auto Router does not run in a packaged build. VERIFIED.** Found by
   the SHIP_V1 audit, then confirmed directly. decidePolicy (main.ts ~3190) needs a metis-policy CLI
   plus profile resolved from env vars or SIBLING paths (../metis-policy/). electron-builder.yml's
