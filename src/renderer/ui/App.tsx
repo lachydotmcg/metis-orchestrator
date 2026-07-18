@@ -155,6 +155,11 @@ import type {
   UserProfile,
   UserQuestionAnswer
 } from "../../shared/runtime-contracts";
+// Type-only, so nothing from the electron module is pulled into the renderer
+// bundle. LoopRecord lives there rather than in shared/ because loops.ts owns
+// the governance constants the record is validated against; global.d.ts
+// imports it the same way.
+import type { LoopRecord } from "../../electron/loops";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
 
@@ -13586,6 +13591,8 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
           <p className="routines-demo-note">Preview mode — showing demo routines (read-only). Run inside the desktop app to create and manage real routines.</p>
         ) : null}
 
+        <ActiveLoopsPanel />
+
         {editingDraft ? (
           <RoutineEditor
             draft={editingDraft}
@@ -16276,6 +16283,129 @@ function SettingsNavGroup({
       ))}
     </section>
   );
+}
+
+/** Active loops surface (docs/LOOPS.md "Visibility and control").
+ *  A loop runs when nobody is watching, so the one rule that matters here is
+ *  that it can always be SEEN and always be killed in one click. Renders
+ *  nothing when no loop has ever run, because an empty panel for a feature you
+ *  are not using is just noise. */
+function ActiveLoopsPanel(): JSX.Element | null {
+  const hasBridge = typeof window !== "undefined" && Boolean(window.metisLoops);
+  const [loops, setLoops] = useState<LoopRecord[]>([]);
+  const [now, setNow] = useState(() => Date.now());
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!hasBridge) return;
+    let cancelled = false;
+    const pull = () => {
+      void window.metisLoops?.list().then((next) => {
+        if (!cancelled) setLoops(next);
+      });
+    };
+    pull();
+    // Faster than the routines poll: a loop can change state every minute, and
+    // a stale "running" badge is exactly the kind of dishonest UI to avoid.
+    const timer = window.setInterval(() => {
+      setNow(Date.now());
+      pull();
+    }, 10_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [hasBridge]);
+
+  async function stopLoop(id: string): Promise<void> {
+    if (!window.metisLoops) return;
+    setBusyId(id);
+    try {
+      // stop() returns the single updated record; re-list so a loop that
+      // settled on its own during the same beat is not left showing stale.
+      await window.metisLoops.stop(id, "stopped from the Loops panel");
+      setLoops(await window.metisLoops.list());
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function clearFinished(): Promise<void> {
+    if (!window.metisLoops) return;
+    const finished = loops.filter((loop) => loop.status !== "sleeping" && loop.status !== "running");
+    let next = loops;
+    for (const loop of finished) next = await window.metisLoops.delete(loop.id);
+    setLoops(next);
+  }
+
+  if (!hasBridge || loops.length === 0) return null;
+
+  const live = loops.filter((loop) => loop.status === "sleeping" || loop.status === "running");
+  const finished = loops.filter((loop) => loop.status !== "sleeping" && loop.status !== "running");
+
+  return (
+    <section className="loops-panel" aria-label="Active loops">
+      <header className="loops-panel-header">
+        <div>
+          <small>Goals Metis is working on by itself, deciding each turn whether to keep going</small>
+          <h2>Loops {live.length ? <span className="loops-live-count">{live.length} active</span> : null}</h2>
+        </div>
+        {finished.length ? (
+          <button type="button" className="ghost" onClick={() => void clearFinished()}>
+            Clear {finished.length} finished
+          </button>
+        ) : null}
+      </header>
+
+      <ul className="loops-list">
+        {loops.map((loop) => {
+          const wakeMs = loop.nextWakeAt ? new Date(loop.nextWakeAt).getTime() - now : 0;
+          const isLive = loop.status === "sleeping" || loop.status === "running";
+          return (
+            <li key={loop.id} className={`loop-row loop-${loop.status}`}>
+              <div className="loop-main">
+                <span className={`loop-badge loop-badge-${loop.status}`}>{LOOP_STATUS_LABEL[loop.status] ?? loop.status}</span>
+                <p className="loop-goal">{loop.goal}</p>
+              </div>
+              <div className="loop-meta">
+                <span>
+                  Iteration {loop.iterations} of {loop.maxIterations}
+                </span>
+                {loop.status === "sleeping" && loop.nextWakeAt ? (
+                  <span>{wakeMs > 0 ? `wakes in ${formatLoopDelay(Math.round(wakeMs / 1000))}` : "waking now"}</span>
+                ) : null}
+                {loop.projectPath ? <span className="loop-project">{loop.projectPath}</span> : null}
+              </div>
+              {loop.lastReason && isLive ? <p className="loop-reason">“{loop.lastReason}”</p> : null}
+              {loop.stoppedReason && !isLive ? <p className="loop-reason loop-reason-final">{loop.stoppedReason}</p> : null}
+              {isLive ? (
+                <button type="button" className="ghost danger" disabled={busyId === loop.id} onClick={() => void stopLoop(loop.id)}>
+                  {busyId === loop.id ? "Stopping…" : "Stop"}
+                </button>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
+
+/** Honest labels. "Exhausted" in particular must not read as success: the loop
+ *  ran out of iterations, it did not necessarily finish the job. */
+const LOOP_STATUS_LABEL: Record<string, string> = {
+  running: "Working now",
+  sleeping: "Waiting",
+  stopped: "Stopped",
+  exhausted: "Hit its limit",
+  failed: "Failed"
+};
+
+function formatLoopDelay(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.round(minutes / 6) / 10}h`;
 }
 
 function RoutinesPanel(): JSX.Element {

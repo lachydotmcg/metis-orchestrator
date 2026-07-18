@@ -94,6 +94,8 @@ export interface CliRuntime {
 }
 
 const DEFAULT_TIMEOUT_SECONDS = 300;
+/** Loops spend this across EVERY iteration, not per iteration. */
+const DEFAULT_LOOP_TIMEOUT_SECONDS = 1800;
 
 /** Every boolean feature-flag store key read anywhere in main.ts, with the
  *  same fallback each call site uses. Kept as an explicit list (rather than
@@ -191,6 +193,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 
   let json = false;
   let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;
+  let timeoutExplicit = false;
   let projectPath: string | undefined;
   let model: string | undefined;
   let maxIterations: number | undefined;
@@ -240,6 +243,7 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new CliUsageError(`--timeout requires a positive number of seconds, got "${value ?? ""}".`);
       }
       timeoutSeconds = parsedSeconds;
+      timeoutExplicit = true;
       continue;
     }
     if (token.startsWith("--")) {
@@ -282,6 +286,14 @@ function parseArgs(argv: string[]): ParsedArgs {
     throw new CliUsageError(`--max-iterations and --respect-delays only apply to "loop", not "${subcommand}".`);
   }
 
+  // A loop's budget covers EVERY iteration together, so the single-run default
+  // is the wrong scale for it: a legitimate 3-iteration loop on the Auto Router
+  // measured ~450s and was killed at 300s mid-flight, reporting a timeout for a
+  // loop that was working correctly. Only raised when the caller did not ask
+  // for a specific budget, so an explicit --timeout still wins.
+  if (subcommand === "loop" && !timeoutExplicit) {
+    timeoutSeconds = DEFAULT_LOOP_TIMEOUT_SECONDS;
+  }
   return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays };
 }
 
