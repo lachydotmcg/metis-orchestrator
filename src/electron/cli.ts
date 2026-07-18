@@ -52,6 +52,12 @@ import type {
   UserQuestionAnswer
 } from "../shared/runtime-contracts.js";
 import { LOOP_MAX_ITERATIONS_CEILING, type LoopRecord } from "./loops.js";
+import {
+  LOOP_COMMAND_MAX_INTERVAL_SECONDS,
+  LOOP_COMMAND_MIN_INTERVAL_SECONDS,
+  formatLoopDuration,
+  parseLoopDuration
+} from "../shared/loop-command.js";
 
 /** Structural twin of main.ts's private `SessionStreamController` type
  *  ({ emit(event) => void }). main.ts never exports that type — it doesn't
@@ -77,6 +83,7 @@ export interface CliRuntime {
     maxIterations?: number;
     permissionMode?: string;
     origin?: LoopRecord["origin"];
+    fixedIntervalSeconds?: number;
   }): Promise<LoopRecord>;
   fireLoopTick(id: string): Promise<LoopRecord | undefined>;
   establishWritableWorkspace(path: string): Promise<ProjectWorkspace>;
@@ -130,6 +137,7 @@ interface ParsedArgs {
   timeoutSeconds: number;
   maxIterations?: number;
   respectDelays: boolean;
+  everySeconds?: number;
 }
 
 function usageText(): string {
@@ -140,7 +148,7 @@ function usageText(): string {
     '  npm run cli -- doctor [--json]',
     '  npm run cli -- chat "<prompt>" [--project <path>] [--model <provider/model>] [--json] [--timeout <seconds>]',
     '  npm run cli -- build "<prompt>" --project <path> [--model <provider/model>] [--json] [--timeout <seconds>]',
-    '  npm run cli -- loop "<goal>" [--max-iterations <n>] [--project <path>] [--respect-delays] [--json]',
+    '  npm run cli -- loop "<goal>" [--max-iterations <n>] [--every <duration>] [--project <path>] [--respect-delays] [--json]',
     "",
     "Flags:",
     "  --project <path>          Establishes <path> as the writable project workspace for this run",
@@ -198,6 +206,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let model: string | undefined;
   let maxIterations: number | undefined;
   let respectDelays = false;
+  let everySeconds: number | undefined;
   let helpRequested = false;
   const positionals: string[] = [];
 
@@ -209,6 +218,23 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
     if (token === "--respect-delays") {
       respectDelays = true;
+      continue;
+    }
+    // Same flag and same bounds as the composer's "/loop --every", parsed by the
+    // same shared parser, so the CLI and the app cannot drift on what a
+    // duration means.
+    if (token === "--every" || token === "--interval") {
+      const value = rest[++i];
+      const seconds = value === undefined ? null : parseLoopDuration(value);
+      if (seconds === null) {
+        throw new CliUsageError(`--every needs a duration like 90s, 15m or 2h, got "${value ?? ""}".`);
+      }
+      if (seconds < LOOP_COMMAND_MIN_INTERVAL_SECONDS || seconds > LOOP_COMMAND_MAX_INTERVAL_SECONDS) {
+        throw new CliUsageError(
+          `--every must be between ${formatLoopDuration(LOOP_COMMAND_MIN_INTERVAL_SECONDS)} and ${formatLoopDuration(LOOP_COMMAND_MAX_INTERVAL_SECONDS)}, got ${formatLoopDuration(seconds)}.`
+        );
+      }
+      everySeconds = seconds;
       continue;
     }
     if (token === "--max-iterations") {
@@ -282,7 +308,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (subcommand === "loop" && model) {
     throw new CliUsageError('"loop" does not support --model: every loop iteration routes through the Auto Router.');
   }
-  if (subcommand !== "loop" && (maxIterations !== undefined || respectDelays)) {
+  if (subcommand !== "loop" && (maxIterations !== undefined || respectDelays || everySeconds !== undefined)) {
     throw new CliUsageError(`--max-iterations and --respect-delays only apply to "loop", not "${subcommand}".`);
   }
 
@@ -294,7 +320,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (subcommand === "loop" && !timeoutExplicit) {
     timeoutSeconds = DEFAULT_LOOP_TIMEOUT_SECONDS;
   }
-  return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays };
+  return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays, everySeconds };
 }
 
 function parseModelOverride(raw: string, providerInfo: CliRuntime["providerInfo"]): SessionModelOverride {
@@ -790,6 +816,7 @@ async function runLoop(parsed: ParsedArgs, deps: CliRuntime): Promise<number> {
   try {
     loop = await deps.createLoop({
       goal: parsed.prompt as string,
+      fixedIntervalSeconds: parsed.everySeconds,
       projectPath: resolvedProjectPath,
       maxIterations: parsed.maxIterations,
       // Pinned for the same reason chat/build pin it (see the module doc

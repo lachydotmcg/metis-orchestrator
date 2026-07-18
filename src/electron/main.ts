@@ -95,6 +95,7 @@ import {
   type LoopIterationRecord,
   type LoopRecord
 } from "./loops.js";
+import { LOOP_COMMAND_MAX_INTERVAL_SECONDS } from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
@@ -10075,6 +10076,22 @@ function isPermissionMode(value: unknown): value is PermissionMode {
   return value === "ask" || value === "edits" || value === "plan" || value === "auto" || value === "bypass";
 }
 
+/** Permission modes ordered from most restrictive to least. "plan" sits at the
+ *  bottom because it writes nothing at all; "bypass" at the top because it asks
+ *  for nothing. Used to clamp a requested mode down to a ceiling, never up. */
+const PERMISSION_MODE_LOOSENESS: PermissionMode[] = ["plan", "ask", "edits", "auto", "bypass"];
+
+/** Returns whichever of the two is MORE restrictive. A caller can always ask
+ *  for something tighter than the owner's global (a plan-only loop is a
+ *  perfectly reasonable thing to want) but never for something looser. */
+function clampPermissionMode(requested: PermissionMode, ceiling: PermissionMode): PermissionMode {
+  const requestedRank = PERMISSION_MODE_LOOSENESS.indexOf(requested);
+  const ceilingRank = PERMISSION_MODE_LOOSENESS.indexOf(ceiling);
+  if (requestedRank < 0) return ceiling;
+  if (ceilingRank < 0) return requested;
+  return requestedRank <= ceilingRank ? requested : ceiling;
+}
+
 /** Read-modify-write of a single loop. Always re-reads first: a tick can take
  *  minutes, and the user stopping a different loop from the UI meanwhile must
  *  not be clobbered by a stale in-memory list. Silently does nothing when the
@@ -10100,6 +10117,7 @@ async function createLoop(input: {
   maxIterations?: number;
   permissionMode?: string;
   origin?: LoopRecord["origin"];
+  fixedIntervalSeconds?: number;
 }): Promise<LoopRecord> {
   const goal = typeof input.goal === "string" ? input.goal.trim() : "";
   if (!goal) throw new Error("A loop needs a goal.");
@@ -10110,9 +10128,19 @@ async function createLoop(input: {
   const requested = Number.isFinite(input.maxIterations) ? Math.floor(Number(input.maxIterations)) : LOOP_DEFAULT_MAX_ITERATIONS;
   const maxIterations = Math.min(LOOP_MAX_ITERATIONS_CEILING, Math.max(1, requested));
 
-  const permissionMode = isPermissionMode(input.permissionMode)
-    ? input.permissionMode
-    : await readStoreValue<PermissionMode>("permissionMode", "auto");
+  // The user's own setting is a CEILING, not just a fallback. A caller may ask
+  // for a mode no looser than what the owner already runs interactively, and
+  // anything looser is clamped down to it rather than honoured.
+  //
+  // This matters now that a loop can be started from the composer: without the
+  // clamp, any caller that can reach this function could start an unattended
+  // bypass-mode run on a machine whose owner deliberately runs in "ask". The
+  // whole point of freezing the mode onto the record was that a loop must never
+  // be a permission laundering route, and accepting any valid mode from the
+  // caller would have reopened exactly that door from the other side.
+  const ceiling = await readStoreValue<PermissionMode>("permissionMode", "auto");
+  const requestedMode = isPermissionMode(input.permissionMode) ? input.permissionMode : ceiling;
+  const permissionMode = clampPermissionMode(requestedMode, ceiling);
 
   const now = new Date();
   const loop: LoopRecord = {
@@ -10121,6 +10149,7 @@ async function createLoop(input: {
     projectPath: input.projectPath,
     origin: input.origin ?? "app",
     permissionMode,
+    fixedIntervalSeconds: normaliseFixedInterval(input.fixedIntervalSeconds),
     status: "sleeping",
     iterations: 0,
     maxIterations,
@@ -10137,10 +10166,37 @@ async function createLoop(input: {
     id: loop.id,
     maxIterations,
     permissionMode,
-    origin: loop.origin
+    origin: loop.origin,
+    fixedIntervalSeconds: loop.fixedIntervalSeconds
   });
   scheduleNextLoopTick();
+  // Start the first turn NOW rather than waiting up to a full 60s slice. A loop
+  // started from the composer that sits visibly idle for a minute reads as
+  // broken, and the user's most likely response is to start another one.
+  // Deliberately not awaited: createLoop must return the record immediately so
+  // the panel can render it as "Working now". App loops only - a cli loop is
+  // driven in the foreground by its own process and firing here would double-run
+  // its first turn into the same conversation.
+  if (loop.origin !== "cli") {
+    void fireLoopTick(loop.id).catch(async (error) => {
+      await appendAudit("error", "loop.error", `First turn of loop "${loopLabel(loop)}" failed to start.`, {
+        id: loop.id,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+  }
   return loop;
+}
+
+/** A user-set interval from "/loop --every". Bounded here as well as in the
+ *  command parser, because the parser runs in the renderer and this function is
+ *  reachable over IPC: a renderer bug or any other caller must not be able to
+ *  install a 1-second interval on an unattended run. */
+function normaliseFixedInterval(seconds: number | undefined): number | undefined {
+  if (seconds === undefined || !Number.isFinite(seconds)) return undefined;
+  const rounded = Math.round(Number(seconds));
+  if (rounded <= 0) return undefined;
+  return Math.min(LOOP_COMMAND_MAX_INTERVAL_SECONDS, Math.max(LOOP_MIN_DELAY_SECONDS, rounded));
 }
 
 /** Stops a loop immediately and unconditionally: the record is terminal from
@@ -10316,9 +10372,15 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
         maxIterations: advanced.maxIterations
       });
     } else {
-      // Already clamped to [LOOP_MIN_DELAY_SECONDS, LOOP_MAX_DELAY_SECONDS] by
-      // extractLoopDecision; the fallback only covers the type being optional.
-      const delaySeconds = decision.delaySeconds ?? LOOP_MIN_DELAY_SECONDS;
+      // A user-set interval ("/loop --every 15m") wins over the delay the model
+      // asked for. It overrides the GAP ONLY: reaching this branch already means
+      // the model explicitly chose to continue, and a reply with no decision
+      // still stops the loop above regardless of any interval. A fixed interval
+      // must never become a way to keep a loop alive that did not ask to live.
+      // Otherwise: already clamped to [LOOP_MIN_DELAY_SECONDS,
+      // LOOP_MAX_DELAY_SECONDS] by extractLoopDecision, and the fallback only
+      // covers the type being optional.
+      const delaySeconds = advanced.fixedIntervalSeconds ?? decision.delaySeconds ?? LOOP_MIN_DELAY_SECONDS;
       settled = {
         ...advanced,
         status: "sleeping",
@@ -12831,8 +12893,13 @@ app.whenReady().then(async () => {
   // show and stop, which is exactly what earns a loop the right to be resumed
   // after a restart (see LoopRecord.origin).
   ipcMain.handle("metis-loops:list", () => listLoops());
-  ipcMain.handle("metis-loops:create", (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string }) =>
-    createLoop({ ...input, origin: "app" })
+  ipcMain.handle(
+    "metis-loops:create",
+    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number }) =>
+      // origin is forced here, never taken from the caller: a renderer must not
+      // be able to mint a "cli" loop and inherit the never-resume-on-launch
+      // handling that belongs to a process that has since exited.
+      createLoop({ ...input, origin: "app" })
   );
   ipcMain.handle("metis-loops:stop", (_event, id: string, reason?: string) => stopLoop(id, reason));
   ipcMain.handle("metis-loops:delete", (_event, id: string) => deleteLoop(id));

@@ -71,6 +71,14 @@ export interface LoopRecord {
   /** Inherited at creation and never re-read from settings, so a loop cannot
    *  gain permissions it did not start with by the user changing a global. */
   permissionMode: string;
+  /** Set by "/loop --every 15m". Overrides the delay the model asks for, so the
+   *  loop runs on the user's schedule instead of its own.
+   *
+   *  It overrides the GAP ONLY. The model is still asked to decide whether to
+   *  continue, and silence still stops the loop. A fixed interval must not be
+   *  allowed to become a way to make a loop run forever: that would turn the
+   *  one governing rule of this feature into an option. */
+  fixedIntervalSeconds?: number;
   status: LoopStatus;
   iterations: number;
   maxIterations: number;

@@ -160,6 +160,9 @@ import type {
 // the governance constants the record is validated against; global.d.ts
 // imports it the same way.
 import type { LoopRecord } from "../../electron/loops";
+// The SAME parser main.ts uses, so the hint strip under the composer cannot
+// promise something different from what the command will actually do.
+import { describeLoopCommand, formatLoopDuration, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
 
@@ -4156,6 +4159,10 @@ function NewSessionWorkspace({
   const [activeSection, setActiveSection] = useState(0);
   const [workspaceContextOpen, setWorkspaceContextOpen] = useState(false);
   const [previewRail, setPreviewRail] = useState<{ url: string; title: string } | null>(null);
+  /** Result of the last "/loop" command. Dismissible and never auto-hidden:
+   *  it names where the loop can be stopped, which is not something to flash
+   *  past someone who has just started an unattended run. */
+  const [loopNotice, setLoopNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
   const [previewRefreshTick, setPreviewRefreshTick] = useState(0);
   // Side-chat stack (docs/FABLE_PLANS.md §26): user-dismissable independent of
   // the underlying data — the cards themselves live on each turn's
@@ -4494,6 +4501,34 @@ function NewSessionWorkspace({
         turn.id === turnId && turn.pendingQuestion ? { ...turn, pendingQuestion: { ...turn.pendingQuestion, resolved: { answer } } } : turn
       )
     );
+  }
+
+  /** Starts a background loop from "/loop". Deliberately NOT a session run:
+   *  nothing streams into the conversation feed, because a loop's turns land in
+   *  its own thread over the following minutes and pretending otherwise would
+   *  leave a chat bubble that never fills in. The user gets a confirmation
+   *  naming where to watch and stop it, which is the honest report of what just
+   *  happened. */
+  async function startLoopFromCommand(parts: LoopCommandParts): Promise<void> {
+    if (!window.metisLoops) {
+      setLoopNotice({ tone: "error", text: "Loops need the desktop app." });
+      return;
+    }
+    try {
+      const loop = await window.metisLoops.create({
+        goal: parts.goal,
+        projectPath: projectWorkspace?.path,
+        maxIterations: parts.turns,
+        fixedIntervalSeconds: parts.everySeconds
+      });
+      const pace = loop.fixedIntervalSeconds ? `every ${formatLoopDuration(loop.fixedIntervalSeconds)}` : "at its own pace";
+      setLoopNotice({
+        tone: "ok",
+        text: `Loop started, up to ${loop.maxIterations} turns ${pace}. It is working now. Watch or stop it in Settings > Privacy & Data.`
+      });
+    } catch (error) {
+      setLoopNotice({ tone: "error", text: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   async function submitPrompt(text: string, attachments?: SessionAttachment[]): Promise<void> {
@@ -4946,6 +4981,14 @@ function NewSessionWorkspace({
             />
           </ChatboxPopup>
         ) : null}
+        {loopNotice ? (
+          <div className={loopNotice.tone === "ok" ? "loop-notice" : "loop-notice error"} role="status">
+            <span>{loopNotice.text}</span>
+            <button type="button" onClick={() => setLoopNotice(null)} aria-label="Dismiss">
+              <X size={13} />
+            </button>
+          </div>
+        ) : null}
         <SessionComposer
           sessionBusy={sessionBusy}
           projectWorkspace={projectWorkspace}
@@ -4957,6 +5000,7 @@ function NewSessionWorkspace({
           onFollowup={(text) => void submitPrompt(text)}
           suggestionResetKey={`${lastRun?.id ?? "none"}::${activeConversationId ?? "none"}`}
           onSubmit={submitPrompt}
+          onStartLoop={startLoopFromCommand}
           permissionMode={permissionMode}
           setPermissionMode={setPermissionMode}
           resourceMenuOpen={resourceMenuOpen}
@@ -5027,6 +5071,7 @@ function SessionComposer({
   followups,
   onFollowup,
   onSubmit,
+  onStartLoop,
   permissionMode,
   setPermissionMode,
   resourceMenuOpen,
@@ -5070,6 +5115,8 @@ function SessionComposer({
   /** Sends a follow-up chip straight through as the next message. */
   onFollowup: (text: string) => void;
   onSubmit: (text: string, attachments?: SessionAttachment[]) => void | Promise<void>;
+  /** Starts a background loop from a parsed "/loop" command. */
+  onStartLoop: (parts: LoopCommandParts) => void | Promise<void>;
   permissionMode: PermissionMode;
   setPermissionMode: (mode: PermissionMode | ((current: PermissionMode) => PermissionMode)) => void;
   resourceMenuOpen: boolean;
@@ -5354,6 +5401,15 @@ function SessionComposer({
   // menu, just a small heads-up that this prompt will force the build pipeline.
   const showOrchestrationChip = /^\s*\/(orchestration|orch)\b/i.test(prompt);
 
+  // "/loop" gets a live breakdown rather than a fixed chip, because unlike
+  // /orchestration it takes arguments and nobody can be expected to remember
+  // them. Re-parsed every keystroke by the SAME parser main.ts runs, so what
+  // the strip promises is what will actually happen. The "/" template popover
+  // cannot host this: it closes the moment a space is typed, which is exactly
+  // when the arguments start.
+  const loopCommand = useMemo(() => parseLoopCommand(prompt), [prompt]);
+  const loopHint = useMemo(() => describeLoopCommand(loopCommand), [loopCommand]);
+
   // Prompt template "/" popover (DRILL_PLAN Phase 8): only while the ENTIRE
   // prompt is a slash followed by a single space-free query token — i.e. it
   // can only begin when "/" is the very first character typed into an empty
@@ -5534,6 +5590,19 @@ function SessionComposer({
     event.preventDefault();
     const text = prompt.trim();
     if (!text && !attachments.length) return;
+
+    // "/loop" starts a background loop instead of running a chat turn. Handled
+    // before the normal path and NOT cleared on refusal: a malformed command
+    // leaves what you typed in the box so you can fix the flag rather than
+    // retype the goal. The hint strip is already showing why it will not run.
+    if (loopCommand.isLoopCommand) {
+      if (loopCommand.error || !loopCommand.parts?.goal) return;
+      setPrompt("");
+      setAttachments([]);
+      void onStartLoop(loopCommand.parts);
+      return;
+    }
+
     setPrompt("");
     const sentAttachments = attachments;
     setAttachments([]);
@@ -5584,6 +5653,23 @@ function SessionComposer({
       <div className="composer-box">
       {showOrchestrationChip ? (
         <span className="composer-suggestion-chip composer-orchestration-chip">Build pipeline will run</span>
+      ) : null}
+      {loopCommand.isLoopCommand ? (
+        <div className="composer-loop-hint" role="status">
+          {loopCommand.error ? (
+            <span className="composer-loop-error">{loopCommand.error}</span>
+          ) : (
+            <>
+              <span className="composer-loop-lede">Runs on its own until it decides to stop</span>
+              {loopHint.map((segment) => (
+                <span key={segment.meaning} className={segment.typed ? "composer-loop-seg typed" : "composer-loop-seg"}>
+                  <b>{segment.label}</b>
+                  <i>{segment.meaning}</i>
+                </span>
+              ))}
+            </>
+          )}
+        </div>
       ) : null}
       {slashExportBusy || (slashExportResult && !slashExportResult.cancelled) ? (
         <div className="composer-slash-note" role="status">
