@@ -104,16 +104,16 @@ is too scared to ship and promote. Everything in this batch serves that. Complet
 (permissions + version control), TESTED (by an engineer, not by guessing), EASY, and work actually
 gets done.
 
-- [ ] **CORE.1 - Real suggested next messages.** Replace the canned heuristics (suggestNextStep:
+- [x] **CORE.1 - Real suggested next messages.** SHIPPED + VERIFIED via CLI. Replace the canned heuristics (suggestNextStep:
   "Add a second page", "Continue the build") with follow-ups written by the model that ANSWERED,
   from the actual exchange. A separate single-job call after the answer, never stacked into the
   same response - the TEST_OK-swallowed-by-BANANA live test proved small models collapse under
   stacked instructions. Engine: src/electron/followups.ts. Renderer: a chip row above the
   composer, clicking sends it. SessionRun.suggestions carries them.
-- [ ] **CORE.2 - The answering model names the conversation.** generateLocalTitle always uses the
+- [x] **CORE.2 - The answering model names the conversation.** SHIPPED. generateLocalTitle always uses the
   local model even when a cloud model answered and understood far more. Retitle from the same
   model on the first exchange, keeping the manual-rename and one-shot guards.
-- [ ] **CORE.3 - CLI test harness.** electron . --cli chat|build|doctor, plus --json for
+- [x] **CORE.3 - CLI test harness.** SHIPPED + VERIFIED, and it found three ship blockers within the hour. electron . --cli chat|build|doctor, plus --json for
   assertions. The point: an engineer (or CI, or Fable) can exercise the REAL pipeline headlessly
   instead of guessing from a browser preview. This is the unlock that turns NEEDS-LIVE-TEST into
   actually-verified.
@@ -123,9 +123,9 @@ gets done.
 - [ ] **CORE.5 - Safety net before it writes.** Path containment inside the workspace, a git
   snapshot before an agentic run touches files, an obvious revert, and secrets kept out of reach.
   Nothing in CORE.4 ships without this.
-- [ ] **CORE.6 - A real sandbox + test prompts.** A genuine small project outside the repo with
+- [x] **CORE.6 - A real sandbox + test prompts.** SHIPPED at Documents/metis-sandbox. A genuine small project outside the repo with
   planted imperfections, plus prompts that each state what pass and fail look like.
-- [ ] **CORE.12 - SHIP BLOCKER: the build pipeline generates correct files and fails to write
+- [x] **CORE.12 - FIXED + VERIFIED (root cause was the permission grant target mismatch, not extraction): the build pipeline generated correct files and failed to write
   them. VERIFIED THREE TIMES.** Found the moment the CLI harness existed, which is exactly why it
   was worth building. Evidence: (a) the CLI agent ran two independent builds where the frontend
   stage AND both recovery passes produced well-formed index.html in ```html fences and
@@ -154,7 +154,7 @@ gets done.
   installs it. Fix options: (a) vendor the classification into main.ts so it has no external
   dependency, (b) bundle the CLI + a default profile via extraResources, or (c) stop calling it
   adaptive routing until it is. This is THE reason not to promote the app yet.
-- [ ] **CORE.11 - The app throws away its own best error message. VERIFIED, five-line fix.**
+- [x] **CORE.11 - The app throws away its own best error message. FIXED + VERIFIED live.**
   buildAssistantText (main.ts ~4573) starts with `providerResult?.source !== "placeholder" ?
   output : ""`, so when a run produces a placeholder result the genuinely useful text ("Ollama is
   not running, or qwen3:8b is not pulled. Start Ollama, then run: ollama pull qwen3:8b, and send
