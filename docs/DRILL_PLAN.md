@@ -125,6 +125,18 @@ gets done.
   Nothing in CORE.4 ships without this.
 - [ ] **CORE.6 - A real sandbox + test prompts.** A genuine small project outside the repo with
   planted imperfections, plus prompts that each state what pass and fail look like.
+- [ ] **CORE.8 - LOOPS: self-directed runs (Lachy, high want).** "You wake yourself up, spawn
+  subagents, spend time checking on things, schedule yourself to wake up again. I really want the
+  infrastructure for that to be possible in Metis too." Design shipped: docs/LOOPS.md. The finding
+  that matters: Metis already has 4 of the 5 primitives (the routine timer chain, the fan-out
+  engine, the agent bus, conversations as durable memory). The ONLY gap is the model deciding to
+  continue. Implementation reuses the metis-actions fenced block with three new kinds
+  (schedule_wakeup, spawn_agent, stop_loop) so it inherits the permission ceremony and audit trail
+  rather than inventing a second protocol. Silence stops the loop by design. Governance: hard
+  iteration cap, inherited never-escalating permission mode, minimum delay floor, and a token
+  ceiling drawn from the B12.7 usage ledger, which stops being display-only the moment something
+  can spend money while the owner is asleep. Phase 1 is testable from the CLI harness. Nothing
+  autonomous writes files until CORE.5 lands.
 - [ ] **CORE.7 - Ship barebones.** Decide what ships, what hides behind a flag, and what gets cut,
   so v1 is orchestration plus chatting done excellently. Audit: docs/SHIP_V1.md.
 
