@@ -14327,3 +14327,146 @@ a:focus-visible,
   border-color: var(--soft);
   background: var(--node);
 }
+
+/* --- Active loops (docs/LOOPS.md). Lives inside the Routines view. The status
+   badge is the load-bearing element: a loop that is working right now must look
+   different at a glance from one that is asleep or one that gave up. --- */
+.loops-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+.loops-panel-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+.loops-panel-header small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.loops-panel-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 0;
+  color: white;
+  font-size: 16px;
+}
+.loops-live-count {
+  padding: 2px 8px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+.loops-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.loop-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: start;
+  gap: 6px 12px;
+  padding: 12px;
+  background: var(--node);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.loop-row.loop-running {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.loop-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  grid-column: 1;
+}
+.loop-goal {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+.loop-badge {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 850;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.loop-badge-running {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.loop-badge-sleeping {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+}
+.loop-badge-stopped,
+.loop-badge-exhausted {
+  color: var(--faint);
+  background: color-mix(in srgb, var(--faint) 12%, transparent);
+}
+.loop-badge-failed {
+  color: #ff8a8a;
+  background: rgba(255, 138, 138, 0.12);
+}
+.loop-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  grid-column: 1;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+.loop-project {
+  overflow: hidden;
+  max-width: 340px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.loop-reason {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-style: italic;
+}
+.loop-reason-final {
+  font-style: normal;
+}
+.loop-row button.ghost {
+  grid-column: 2;
+  grid-row: 1;
+  padding: 5px 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.loop-row button.ghost.danger:hover:not(:disabled) {
+  color: #ff8a8a;
+  border-color: #ff8a8a;
+}

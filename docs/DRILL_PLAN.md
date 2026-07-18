@@ -176,13 +176,21 @@ gets done.
   infrastructure for that to be possible in Metis too." Design shipped: docs/LOOPS.md. The finding
   that matters: Metis already has 4 of the 5 primitives (the routine timer chain, the fan-out
   engine, the agent bus, conversations as durable memory). The ONLY gap is the model deciding to
-  continue. Implementation reuses the metis-actions fenced block with three new kinds
-  (schedule_wakeup, spawn_agent, stop_loop) so it inherits the permission ceremony and audit trail
-  rather than inventing a second protocol. Silence stops the loop by design. Governance: hard
-  iteration cap, inherited never-escalating permission mode, minimum delay floor, and a token
-  ceiling drawn from the B12.7 usage ledger, which stops being display-only the moment something
-  can spend money while the owner is asleep. Phase 1 is testable from the CLI harness. Nothing
-  autonomous writes files until CORE.5 lands.
+  continue. Silence stops the loop by design. Governance: hard iteration cap, inherited
+  never-escalating permission mode, minimum delay floor, wall-clock ceiling, and a token ceiling
+  drawn from the B12.7 usage ledger, which stops being display-only the moment something can spend
+  money while the owner is asleep. Phase 1 is testable from the CLI harness. Nothing autonomous
+  writes files until CORE.5 lands (it has).
+  - Phase 1 IN PROGRESS 2026-07-19. `src/electron/loops.ts` holds the decision layer and is
+    adversarially tested 38/38: every way a model can fail to answer clearly (no block, prose,
+    malformed JSON, an array, a bogus decision value, a truncated reply) resolves to STOP, and
+    delays are clamped so a model cannot request a hot loop or park itself past the horizon.
+  - Two design changes made while building, both written up in docs/LOOPS.md: the decision is its
+    own ```metis-loop block rather than three new ManagerAction kinds (a loop tick never goes
+    through the Manager chat, so extractManagerActions was not even in the path), and LoopRecord
+    carries `origin` so a loop is only ever resumed by a surface that can also show and stop it.
+    The second one closes a real hole: Ctrl-C on a CLI loop used to leave a sleeping record that
+    the desktop app would resume hours later.
 - [ ] **CORE.7 - Ship barebones.** Decide what ships, what hides behind a flag, and what gets cut,
   so v1 is orchestration plus chatting done excellently. Audit: docs/SHIP_V1.md.
 

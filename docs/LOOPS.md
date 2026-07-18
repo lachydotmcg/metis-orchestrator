@@ -141,6 +141,24 @@ and bus-completion wakeups so the loop sleeps until a worker finishes.
 **Phase 3, budget and polish.** Token ceilings drawn from the usage ledger, wall-clock ceilings,
 tray presence, and loop templates the user can start with one click.
 
+## Two decisions taken during phase 1 that changed the design above
+
+**The decision channel is its own block, not three new ManagerAction kinds.** The doc proposed
+reusing `metis-actions`. Building it showed that a loop tick runs through `runSessionTracked`, so
+`extractManagerActions` is not in the path at all, and a `schedule_wakeup` proposed by the Manager
+would be an action with no loop to re-arm. Loops parse a dedicated ```metis-loop block instead
+(`extractLoopDecision`, loops.ts). That keeps the SHAPE the doc actually cared about (fenced block,
+validated, never throws, silence is safe) without handing the Manager two actions it cannot perform.
+
+**A loop is resumed only by a surface that can also show it and stop it.** `LoopRecord` carries
+`origin: "app" | "cli"`. The doc said sleeping loops re-arm on launch like routines do, which is
+right for loops created in the app, because the Loops panel can show and kill them. It is wrong for
+the CLI: kill `npm run cli -- loop` with Ctrl-C and the record is left sleeping with a future
+wake time, so the next desktop launch would start an autonomous run the user never created and
+would not think to look for. CLI-origin loops are therefore closed out on launch rather than
+resumed, and the background tick skips them entirely so a foreground CLI loop can never be
+double-fired into the same conversation.
+
 ## Why this is worth building
 
 Every other AI desktop app is a request/response box. A local-first app that can be handed a goal,
