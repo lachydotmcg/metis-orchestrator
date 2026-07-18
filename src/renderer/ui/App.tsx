@@ -301,6 +301,10 @@ type CustomSkill = { id: string; name: string; description?: string };
 // update before it's ever persisted. Module-level constants keep the reference stable.
 const EMPTY_CUSTOM_SKILLS: CustomSkill[] = [];
 const EMPTY_STARRED_PACKAGES: string[] = [];
+// Stable module-level fallback for useAppStoreState("expandedProjects", ...) —
+// see the EMPTY_CUSTOM_SKILLS comment: an inline [] literal is a fresh
+// reference every render and would re-fire the load effect.
+const EMPTY_EXPANDED_PROJECTS: string[] = [];
 // Stable module-level fallback for useAppStoreState("providerAccounts", ...) — see comment above.
 const DEFAULT_PROVIDER_ACCOUNTS: ProviderAccount[] = [];
 
@@ -1683,7 +1687,11 @@ function conversationProjectMatchesPath(conversation: ConversationRecord, projec
 
 export function App(): JSX.Element {
   const [activeNav, setActiveNav] = useState<NavKey>("benchmark");
-  const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  // Sidebar expansion (Lachy: "I want them to stay expanded if you expand
+  // them") - a SET of open project names, not a single active one, persisted
+  // so the shape of your sidebar survives restarts. Opening one no longer
+  // collapses another.
+  const [expandedProjects, setExpandedProjects] = useAppStoreState("expandedProjects", EMPTY_EXPANDED_PROJECTS);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sessionKey, setSessionKey] = useState(0);
   const [storedConversations, setStoredConversations] = useState<ConversationRecord[]>([]);
@@ -1844,7 +1852,7 @@ export function App(): JSX.Element {
       if (!confirmed) return;
       const next = await window.metisConversations.deleteProject(project.path);
       setStoredConversations(next);
-      setExpandedProject(null);
+      setExpandedProjects((current) => current.filter((name) => name !== project.name));
       if (openConversation && conversationProjectMatchesPath(openConversation, project.path)) {
         setOpenConversation(null);
         setSessionKey((current) => current + 1);
@@ -1943,7 +1951,7 @@ export function App(): JSX.Element {
       setActiveNav("benchmark");
       return;
     }
-    setExpandedProject((current) => (current === project.name ? null : project.name));
+    setExpandedProjects((current) => (current.includes(project.name) ? current.filter((name) => name !== project.name) : [...current, project.name]));
   }
 
   useEffect(() => {
@@ -1986,7 +1994,7 @@ export function App(): JSX.Element {
 
     if (benchmarkWizard.status !== "complete") {
       setActiveNav("benchmark");
-      setExpandedProject(null);
+      setExpandedProjects(EMPTY_EXPANDED_PROJECTS);
     }
   }, [benchmarkLoaded, benchmarkWizard.status]);
 
@@ -2002,7 +2010,7 @@ export function App(): JSX.Element {
       {activeNav !== "settings" ? (
         <Sidebar
           activeNav={activeNav}
-          activeProject={expandedProject}
+          expandedProjects={expandedProjects}
           archivedConversations={archivedConversations}
           benchmarkLocked={benchmarkGateLocked}
           busyKeys={busyKeys}
@@ -2014,7 +2022,7 @@ export function App(): JSX.Element {
           onConversationRename={renameConversationById}
           onNewSession={startNewSession}
           onNewSessionForProject={(project) => {
-            setExpandedProject(project.name);
+            setExpandedProjects((current) => (current.includes(project.name) ? current : [...current, project.name]));
             startNewSession();
           }}
           onProjectDelete={deleteProjectByPath}
@@ -2808,7 +2816,7 @@ type RowMenuTarget = { kind: "conversation"; id: string } | { kind: "project"; p
 
 function Sidebar({
   activeNav,
-  activeProject,
+  expandedProjects,
   archivedConversations,
   benchmarkLocked,
   busyKeys,
@@ -2832,7 +2840,7 @@ function Sidebar({
   projects
 }: {
   activeNav: NavKey;
-  activeProject: string | null;
+  expandedProjects: string[];
   archivedConversations: { id: string; title: string; age: string }[];
   benchmarkLocked: boolean;
   /** Parallel sessions phase A: conversation keys (real conversationId or
@@ -2979,7 +2987,7 @@ function Sidebar({
         <div className="project-list">
           {visibleProjects.length === 0 && projects.length > 0 ? <p className="sidebar-empty">No folders match that filter.</p> : null}
           {visibleProjects.map((project) => {
-            const expanded = activeProject === project.name;
+            const expanded = expandedProjects.includes(project.name);
             const conversations = conversationsByProject[project.name] ?? [];
             const projectMenuOpen = rowMenu?.kind === "project" && rowMenu.project.name === project.name;
             return (
