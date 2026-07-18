@@ -25,10 +25,15 @@ wired into plumbing that already works.
 At the end of every turn, Fable makes one choice: re-arm or stop. That single decision, made by
 the model rather than by a cron expression, is what separates a loop from a routine.
 
-Metis already has a channel for a model to propose structured actions: the `metis-actions` fenced
-block, parsed out of a reply and permission-gated before anything happens (`ManagerAction`,
-runtime-contracts.ts:187). Loops extend that channel rather than inventing a second one. Three new
-action kinds:
+> **This section is the ORIGINAL PROPOSAL and is not what shipped.** Kept because the reasoning is
+> still worth reading, but see "Two decisions taken during phase 1" below for what replaced it and
+> why. The short version: a loop tick never goes through the Manager chat, so `extractManagerActions`
+> was not even in the path.
+
+The original idea was to reuse the channel Metis already has for a model to propose structured
+actions: the `metis-actions` fenced block, parsed out of a reply and permission-gated before
+anything happens (`ManagerAction`, runtime-contracts.ts). Loops would extend that channel rather
+than inventing a second one, with three new action kinds:
 
 ```jsonc
 { "kind": "schedule_wakeup", "delaySeconds": 900, "prompt": "check the deploy again", "reason": "watching CI" }
@@ -36,31 +41,62 @@ action kinds:
 { "kind": "stop_loop",       "reason": "the task is finished" }
 ```
 
-Reusing the existing block buys the permission ceremony, the approval UI, the audit trail, and the
-server-side re-validation for free. It also means a loop cannot do anything a Manager action could
-not already do.
+Reusing the existing block would have bought the permission ceremony, the approval UI, the audit
+trail, and the server-side re-validation for free. What actually shipped is a dedicated
+```metis-loop block (`extractLoopDecision`, loops.ts), which keeps the same SHAPE (fenced,
+validated, never throws, silence is safe) without giving the Manager two actions it cannot perform.
+`spawn_agent` was never built at all: that is phase 2.
 
 ## The state record
 
 A loop is a small durable object. Without it, a woken run is just a prompt with amnesia.
 
+This is the shape that actually shipped, copied from `src/electron/loops.ts`. Read that file for the
+full reasoning comments, they are longer than the type.
+
 ```ts
-interface LoopRecord {
+export interface LoopRecord {
   id: string;
-  goal: string;              // the original ask, verbatim, replayed every wakeup
-  conversationId: string;    // where the loop's turns land, so history IS the memory
+  goal: string;                  // the original ask, verbatim, replayed every wakeup
+  conversationId?: string;       // optional: assigned by the first tick, not at creation
   projectPath?: string;
-  status: "running" | "sleeping" | "stopped" | "exhausted";
+  origin: "app" | "cli";         // decides who may resume it after a restart
+  permissionMode: string;        // frozen at creation, never re-read from settings
+  fixedIntervalSeconds?: number; // "/loop --every 15m", overrides the GAP only
+  status: "sleeping" | "running" | "stopped" | "exhausted" | "failed";
   iterations: number;
-  maxIterations: number;     // hard stop, default 25
+  maxIterations: number;         // default 8, ceiling 25
   createdAt: string;
+  expiresAt: string;             // createdAt + LOOP_MAX_AGE_HOURS
   nextWakeAt?: string;
-  lastReason?: string;       // why it chose the current delay, shown in the UI
-  spawnedAgents: { id: string; name: string; status: string }[];
-  budget?: { tokenCeiling?: number; spentTokens: number };
-  stopRequestedByUser?: boolean;
+  lastReason?: string;           // why it chose the current delay, shown in the UI
+  stoppedReason?: string;        // the honest closing line the panel shows when it is over
+  history: LoopIterationRecord[];
 }
 ```
+
+Four things in the draft above this section did not survive contact with the build, and the doc used
+to show them as if they had:
+
+- **`spawnedAgents` does not exist.** That is phase 2 and nothing about it is built.
+- **`budget` does not exist.** Token ceilings are phase 3 and nothing about them is built. Nothing
+  in a loop reads the usage ledger today.
+- **`stopRequestedByUser` does not exist.** A user stop sets `status: "stopped"` plus a
+  `stoppedReason`, and `fireLoopTick` re-reads the record before its final write so a stop clicked
+  mid-turn wins over whatever the model decided during that same turn. One field, not two.
+- **`status` gained `"failed"`.** A turn that threw is not the same outcome as a loop that chose to
+  stop, and collapsing the two would have hidden errors behind a word that reads like success.
+  There is deliberately no retry: a loop that re-runs a failing turn every slice is the unattended
+  runaway this whole feature exists to design out.
+
+Four fields the draft did not have and the build needed: `origin`, `permissionMode`,
+`fixedIntervalSeconds` and `expiresAt`. The first two are explained below, the third is the
+`/loop --every` flag, the fourth is the wall-clock ceiling.
+
+`history` is `LoopIterationRecord[]`: index, timestamp, a one-line summary of what that turn did,
+the decision it made (`continue` / `stop` / `silent`) and any error. It is what gets replayed into
+the next wake prompt, which is why the summary is capped at 240 characters: a verbose summary costs
+tokens on every remaining iteration.
 
 Stored under a `loops` key, list-shaped, same read/modify/write idiom as `routines`. Persisted
 means a loop survives a restart, and the tick scheduler re-arms sleeping loops on launch exactly
@@ -74,13 +110,17 @@ Waking up is just adding a turn to a conversation that already knows what happen
 
 1. A timer fires for the due loop (same slice-capped chain as `scheduleNextRoutineTick`, which
    already re-evaluates at least once a minute so a laptop sleeping through a wakeup is handled).
-2. Metis composes the wake prompt: the goal, the iteration number, a compact digest of what the
-   last iterations did, and the status of any spawned agents.
-3. It runs a normal session turn in the loop's conversation, with the loop's permission mode.
-4. It parses the reply's action block. `schedule_wakeup` sets `nextWakeAt` and re-arms.
-   `stop_loop` ends it. No loop action at all also ends it, deliberately: **continuing is an
-   explicit act, and silence stops the loop.** A loop that runs forever because a model forgot to
-   say stop is the failure mode to design out first.
+2. Metis composes the wake prompt: the goal FIRST and alone, then the iteration number and a
+   compact digest of what the last iterations did. (No spawned-agent status: that was in the draft
+   and phase 2 does not exist.) The goal leads because routing classifies chat-versus-build from
+   the prompt text, and an earlier version that buried it under scaffolding got a read-only
+   question routed as a build.
+3. It runs a normal session turn in the loop's conversation, with the loop's frozen permission
+   mode, passing the bare goal as `routingPrompt` so the protocol block cannot skew classification.
+4. It parses the reply's ```metis-loop block. `"decision": "continue"` sets `nextWakeAt` and
+   re-arms, `"decision": "stop"` ends it. No parseable block at all also ends it, deliberately:
+   **continuing is an explicit act, and silence stops the loop.** A loop that runs forever because
+   a model forgot to say stop is the failure mode to design out first.
 5. Every outcome writes an audit event, so the whole life of a loop is reconstructable.
 
 ## Waking on events, not just timers
@@ -98,34 +138,59 @@ a long fallback." It is also cheaper, which matters when every tick is a real mo
 An autonomous loop is the most dangerous feature in the app. It runs when nobody is watching. The
 constraints are therefore not decoration.
 
-- **Hard iteration cap.** Default 25, always set, never unbounded. `exhausted` is a real terminal
-  status with its own honest UI copy.
-- **Token budget.** This is where B12.7 pays off unexpectedly: the usage ledger and usage limits
-  already meter every run. A loop takes a token ceiling and stops at `exhausted` when it is spent.
-  The limits feature stops being display-only the moment loops exist, because a loop is the first
-  thing in Metis that can spend money while the user is asleep.
-- **Permission mode is inherited and can never escalate.** A loop created in `ask` mode wakes in
-  `ask` mode, which in practice means it will block on the first gated action rather than proceed.
-  That is correct. A loop must never be a permission laundering route.
-- **Wall-clock ceiling** as well as iterations, because a loop with slow calls can burn a day in
-  ten iterations.
-- **Minimum delay.** Floor the model's requested `delaySeconds` (60s) so a confused model cannot
-  spin a hot loop.
-- **Nothing autonomous writes without CORE.5.** The git snapshot and path containment land before
-  loops get file-writing tools, not after.
+- **Hard iteration cap. SHIPPED.** `LOOP_MAX_ITERATIONS_CEILING = 25`, applied inside `createLoop`
+  to whatever number actually arrives rather than trusted to have been clamped upstream. The
+  default when a caller names nothing is 8, deliberately far under the ceiling: a loop that stops
+  early and gets restarted is the cheap direction to be wrong in. `exhausted` is a real terminal
+  status and the panel labels it "Hit its limit", never anything that reads like success.
+- **Permission mode is inherited and can never escalate. SHIPPED.** Frozen onto the record at
+  creation and never re-read, so changing the global while a loop sleeps cannot widen it. It is
+  also clamped: the user's own setting is a ceiling, not a fallback, so a caller may ask for
+  something tighter than the owner runs interactively but never something looser. That second half
+  was added once `/loop` made this function reachable from the composer, because otherwise anything
+  that could reach the IPC could start an unattended `bypass` run on a machine set to `ask`.
+- **Wall-clock ceiling. SHIPPED IN PHASE 1, not phase 3 as this doc used to file it.**
+  `LOOP_MAX_AGE_HOURS = 12`, stamped onto `expiresAt` at creation and checked by
+  `loopTerminalReason` both before a turn is spent and again against the incremented record after
+  it. Iterations alone do not bound a loop whose every turn is a slow build, so shipping the
+  iteration cap without this one would have been a half-cap.
+- **Minimum delay. SHIPPED.** `clampLoopDelay` floors the model's `delaySeconds` at 60 and caps it
+  at 3600, so a confused model can neither spin a hot loop nor park itself past the horizon where
+  the user has forgotten it exists.
+- **Nothing autonomous writes without CORE.5. SHIPPED.** The snapshot and path containment landed
+  first.
+- **Token budget. NOT BUILT.** Still the phase 3 plan: the B12.7 usage ledger already meters every
+  run, so a loop could take a token ceiling and stop at `exhausted` when it is spent. Today nothing
+  in the loop path reads the ledger, and a loop's only cost bounds are iterations and wall clock.
+- **Gating loop-driving to capable models. NOT BUILT, and it is an OPEN PHASE 1 ITEM.** See the
+  open items section below. Any model the router picks can drive a loop right now.
 
 ## Visibility and control
 
 The rule from the taste sheet applies hardest here: honest UI, no fake buttons. If Metis is doing
 something while the user is away, they must be able to see it and kill it in one click.
 
-- An **Active loops** surface (the Routines view is the natural home, or a sibling tab) listing
-  each loop with its goal, iteration count out of the cap, next wake time, its `lastReason`, and a
-  Stop button.
-- The **tray** already surfaces routing status and recent runs. A sleeping loop belongs there too,
-  so a headless/tray-mode Metis is not silently working with no visible trace.
+- An **Active loops** surface. SHIPPED as `ActiveLoopsPanel` in `src/renderer/ui/App.tsx`, listing
+  each loop with its goal, iteration count out of the cap, next wake time, its `lastReason` or
+  `stoppedReason`, a collapsed per-turn history of what it actually did, and a Stop button. It
+  **lives in Settings > Privacy & Data**, not the Routines view the design assumed: CORE.7 hid
+  Routines behind `V1_HIDDEN_NAV`, and a loop is the one thing in Metis that keeps working while
+  nobody watches, so leaving its only surface behind a hidden nav item would have meant an
+  autonomous run with no way to see or stop it. Privacy & Data is the honest home anyway, it
+  already answers "what has Metis done to my files and how do I undo it".
+- The panel **renders even when there is nothing to show**, explaining what a loop is and that
+  `/loop` starts one. That is not decoration: the entry point is a typed command with no button
+  anywhere, so an empty panel is the only place in the app that says loops exist.
+- **Pausing.** The tray's "Pause background work (routines and loops)" covers loops too, and is
+  named that way because it used to say "routines" while leaving loops running. `runLoopTick` checks
+  `isRoutinesPaused` before firing anything. It is checked inside the tick rather than by declining
+  to re-arm the chain, matching `runRoutineTick`, so unpausing takes effect within one slice. A
+  paused loop keeps its `nextWakeAt` and resumes where it was.
+- The **tray** does not yet list sleeping loops by name. Still phase 3.
 - Stop is immediate and unconditional: it cancels the timer, marks the record stopped, and lets any
-  in-flight turn finish rather than tearing it apart mid-write.
+  in-flight turn finish rather than tearing it apart mid-write. `fireLoopTick` re-reads the record
+  before its final write and honours a stop that landed during the run, so a click can never be
+  silently overwritten by the model's decision from the same turn.
 
 ## Phases
 
