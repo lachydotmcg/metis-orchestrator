@@ -3473,7 +3473,6 @@ function formatTokenCount(n: number): string {
   return String(Math.round(n));
 }
 
-const ONGOING_WORK_NOUNS = ["migration", "refactor", "rewrite", "cleanup", "clean-up", "integration", "deployment"];
 
 /** Derives one short, imperative "what's next" suggestion from the last
  *  completed run and the last user message in an open conversation. Pure
