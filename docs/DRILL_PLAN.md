@@ -174,8 +174,24 @@ gets done.
 - [x] **CORE.8 - LOOPS phase 1 SHIPPED + LIVE-VERIFIED 2026-07-19.** Proof run: "count upward
   from 1, three new numbers each turn, stop at 9" produced 1,2,3 / 4,5,6 / 7,8,9 and then STOPPED
   ITSELF at iteration 3 of a possible 5. History replay, the decision protocol, self-termination
-  before the cap, and nextWakeAt clearing are all demonstrated by that one run. Phase 2 (spawning
-  workers, event wakeups) and phase 3 (token ceilings, tray presence) remain.
+  before the cap, and nextWakeAt clearing are all demonstrated by that one run.
+  - **CORE.8b SHIPPED same day: "/loop" in the composer.** Loops shipped as an engine with no door
+    (metis-loops:create was wired and typed and called by nothing in the renderer). Now:
+    `/loop <goal>`, `--turns N`, `--every 15m`, with a live hint strip that names what each part
+    will do as you type, driven by the SAME shared parser that runs the command. 53/53 on the
+    grammar. Shipped with the two safety items a create surface makes live: permission modes are
+    now clamped to the user's global as a CEILING rather than merely defaulted, and the first turn
+    fires immediately instead of after a 60s slice.
+  - **STILL OPEN, phase 1:** the capable-model gate LOOPS.md closes on. Nothing checks that the
+    model driving a loop can reliably decide to STOP, which matters most on small local models.
+    The caps bound the damage; they do not make a 4B model good at knowing when it is done. Design
+    note: prefer a clear warning with an override to a hard block, because Metis is local-first and
+    a gate that only passes metered cloud models inverts the product argument.
+  - **STILL OPEN, phase 3 prerequisite:** UsageLedgerEntry has no loop/conversation attribution, so
+    a token ceiling has nothing to sum. Small change to appendUsageLedgerEntry, worth doing early so
+    the ledger accumulates attributable data before the budget feature needs it.
+  - Phase 2 (spawning workers, waking on a worker finishing) and the rest of phase 3 (token
+    ceilings, tray presence for sleeping loops) remain untouched.
 - [ ] **CORE.8 - LOOPS: self-directed runs (Lachy, high want).** "You wake yourself up, spawn
   subagents, spend time checking on things, schedule yourself to wake up again. I really want the
   infrastructure for that to be possible in Metis too." Design shipped: docs/LOOPS.md. The finding
