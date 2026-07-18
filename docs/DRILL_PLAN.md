@@ -125,6 +125,15 @@ gets done.
   Nothing in CORE.4 ships without this.
 - [ ] **CORE.6 - A real sandbox + test prompts.** A genuine small project outside the repo with
   planted imperfections, plus prompts that each state what pass and fail look like.
+- [ ] **CORE.9 - SECURITY: path containment is inconsistent, and one check is broken.** Found by
+  the AGENTIC_TOOLS design pass while reading the real code, not by a test. serveStaticFile
+  (main.ts ~4438) guards the preview server with a naive case-lowered startsWith and NO trailing
+  separator check, so a sibling folder whose name merely starts with the workspace name (project
+  vs project-secrets) resolves as inside it. Loopback-only, so the blast radius is small, but it
+  is a genuine traversal. There are THREE different containment implementations in main.ts
+  (assertMetisFilePathAllowed / isPathInside / this one) and none resolve symlinks. Fix: ONE
+  shared containment function with a trailing-separator check and symlink resolution, used by all
+  three call sites, before any agentic tool ever takes a path argument. Blocks CORE.4.
 - [ ] **CORE.8 - LOOPS: self-directed runs (Lachy, high want).** "You wake yourself up, spawn
   subagents, spend time checking on things, schedule yourself to wake up again. I really want the
   infrastructure for that to be possible in Metis too." Design shipped: docs/LOOPS.md. The finding
