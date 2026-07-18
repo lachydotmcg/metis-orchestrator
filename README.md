@@ -198,7 +198,7 @@ Exit codes are meaningful, so CI can assert on them: `0` success, `1` threw, `2`
 ```
 ````
 
-**The governing rule is that continuing is an explicit act, and silence stops the loop.** A model that forgets to answer, replies in prose, emits malformed JSON, returns an array, gives a bogus decision value, or crashes mid-sentence all land in the same place, which is the loop ending. The failure mode being designed out is a loop that runs all night because nobody said stop, which is the one bug in this feature that costs real money while you are asleep. The decision parser is adversarially tested at 38 out of 38 on exactly those cases, and every ambiguity resolves toward stopping.
+**The governing rule is that continuing is an explicit act, and silence stops the loop.** A model that forgets to answer, replies in prose, emits malformed JSON, returns an array, gives a bogus decision value, or crashes mid-sentence all land in the same place, which is the loop ending. The failure mode being designed out is a loop that runs all night because nobody said stop, which is the one bug in this feature that costs real money while you are asleep. The decision parser is adversarially tested at 41 out of 41 on exactly those cases, and every ambiguity resolves toward stopping.
 
 The parser takes the **last** `metis-loop` block in a reply, not the first, so a model that shows an example block mid-reply while reasoning out loud is not misread as having already decided.
 
@@ -209,13 +209,25 @@ Limits the model cannot argue past:
 - **Delay clamped to 60 to 3600 seconds.** A confused model answering `delaySeconds: 0` cannot spin a hot loop of real inference calls, and a loop cannot park itself past the horizon where you have forgotten it exists.
 - **Permission mode is frozen at creation** and never re-read from settings, so a loop cannot gain permissions it did not start with.
 
-There is a fixed-interval override (`/loop --every 15m`) that replaces the gap the model asked for with your own schedule. It overrides the gap only. The model is still asked each turn whether to continue, and silence still stops the loop, because a fixed interval must never become a way to make a loop run forever.
+Start one by typing a command in any new session:
+
+```
+/loop <goal>                     it decides its own pace
+/loop --turns 5 <goal>           cap the iterations
+/loop --every 15m <goal>         fixed gap instead of self-paced
+```
+
+Typing any of it renders a live breakdown under the composer naming what each part will do, with the parts you typed shown bright and the applied defaults shown muted, so the grammar teaches itself. A malformed flag shows the reason and refuses to send rather than guessing. The parser is shared between the hint and the thing that runs, so the strip cannot promise something that will not happen, and it is tested at 53 out of 53 including every malformed case.
+
+`--every` is a fixed-interval override that replaces the gap the model asked for with your own schedule. It overrides the gap only. The model is still asked each turn whether to continue, and silence still stops the loop, because a fixed interval must never become a way to make a loop run forever. It allows up to 6 hours where the model itself is clamped to 1, because that clamp exists to stop a confused model parking a loop past the horizon, and a person typing `--every 2h` is describing a schedule they want.
 
 Each wake replays a short digest of what previous turns already did, so iteration 4 does not redo iteration 2. The goal is always placed first and alone in the wake prompt, because routing classifies chat-versus-build from the prompt text: an earlier version buried the goal under scaffolding, and a read-only question ("how many functions does app.js define?") routed as a build and rewrote the file down from 171 lines to 10. That is fixed, and it is in the code comments so nobody undoes it.
 
 Live proof run: "count upward from 1, three new numbers each turn, stop at 9" produced 1,2,3 then 4,5,6 then 7,8,9 and stopped itself at iteration 3 of a possible 5.
 
-**The honest limit that matters most: there is currently no way to start a loop from inside the app. Loops are CLI-only.** The app has a Loops panel (Settings > Privacy & Data) which lists every loop, shows its status, iteration count, next wake time, and the model's own stated reason, and can stop any live one in a single click. It cannot create one. The panel lives there rather than under Routines specifically because Routines is hidden in v1, and a loop must never be running with no surface to see or stop it.
+The Loops panel (Settings > Privacy & Data) lists every loop with its status, iteration count, next wake time, and the model's own stated reason for the gap it chose, expands to show what each turn actually did, and can stop any live one in a single click. It lives there rather than under Routines specifically because Routines is hidden in v1, and a loop must never be running with no surface to see or stop it. The tray's "Pause background work" also halts every sleeping loop.
+
+**Honest limits.** Phase 1 is one loop working alone: there is no spawning of parallel workers and no waking on a worker finishing, both of which are phase 2. There is no token budget yet, so the iteration and wall-clock caps are the only spend ceilings. And nothing checks that the model driving a loop is capable enough to reliably decide to *stop*, which the design doc asks for and which matters most on small local models. The caps bound the damage; they do not make a 4B model good at knowing when it is done.
 
 A related safeguard: a loop records which surface created it. CLI loops are never resumed by the desktop app on a later launch, so pressing Ctrl-C partway through leaves a stopped record rather than an autonomous run that fires inside the app hours later that you never created and would not think to look for.
 </details>
@@ -475,7 +487,7 @@ There is no separate lint script and there are no tests. `typecheck`, `build`, a
 
 Plainly, so nothing here surprises you later:
 
-- **You cannot start a Loop from the app.** Loops are CLI-only. The app can list and stop them, not create them. Phase 2 (spawning workers, event-driven wakeups) and phase 3 (token ceilings, tray presence) are not built.
+- **A Loop runs alone, and nothing checks the model is up to it.** Phase 2 (spawning parallel workers, waking when one finishes) and phase 3 (token ceilings, tray presence) are not built. Neither is the capable-model gate the design doc asks for, so a small local model that never reliably decides to stop will run until a cap catches it. The caps bound the damage, they do not make the model good at knowing when it is done.
 - **Two flags have no UI at all.** `agentToolsEnabled` and `fanoutEnabled` are store keys with no Settings toggle and no CLI flag, so in practice they are developer-only in v1.
 - **Undo is one deep.** Only the most recent generated write can be reverted from Settings, and a revert never deletes files the run created.
 - **There are no automated tests.** Zero test or spec files under `src/`, and the manual checklist in `docs/LIVE_TESTS.md` is unticked.
