@@ -106,10 +106,16 @@ contextBridge.exposeInMainWorld("metisProject", {
   snapshot: () => ipcRenderer.invoke("metis-project:snapshot"),
   selectFolder: () => ipcRenderer.invoke("metis-project:select-folder"),
   clearWorkspace: () => ipcRenderer.invoke("metis-project:clear-workspace"),
-  listResources: () => ipcRenderer.invoke("metis-project:list-resources"),
-  addFiles: () => ipcRenderer.invoke("metis-project:add-files"),
-  addFolder: () => ipcRenderer.invoke("metis-project:add-folder"),
-  removeResource: (id: string) => ipcRenderer.invoke("metis-project:remove-resource", id)
+  // Per-conversation resources (Lachy's ruling): every call carries the
+  // conversation key; omitted/undefined means the new-session "pending"
+  // bucket, claimed onto the real conversation via claimPendingResources.
+  listResources: (key?: string) => ipcRenderer.invoke("metis-project:list-resources", key),
+  addFiles: (key?: string) => ipcRenderer.invoke("metis-project:add-files", key),
+  addFolder: (key?: string) => ipcRenderer.invoke("metis-project:add-folder", key),
+  removeResource: (id: string, key?: string) => ipcRenderer.invoke("metis-project:remove-resource", id, key),
+  claimPendingResources: (conversationId: string) => ipcRenderer.invoke("metis-project:claim-pending", conversationId),
+  bindConversation: (conversationId: string | null) => ipcRenderer.invoke("metis-project:bind-conversation", conversationId),
+  setConversationProject: (id: string, projectPath: string) => ipcRenderer.invoke("metis-conversations:set-project", id, projectPath)
 });
 
 contextBridge.exposeInMainWorld("metisFiles", {

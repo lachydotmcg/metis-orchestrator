@@ -1754,19 +1754,62 @@ async function clearProjectWorkspace(): Promise<void> {
   }
 }
 
-async function listProjectResources(): Promise<ProjectWorkspaceResource[]> {
-  return readStoreValue<ProjectWorkspaceResource[]>("projectResources", []);
+// Per-conversation resources (Lachy's ruling after the metis-test3 haunting:
+// reference folders are NOT global - each conversation attaches its own).
+// Buckets are keyed by conversationId, with "pending" holding anything
+// attached on the new-session page before the conversation exists; the
+// renderer claims the pending bucket onto the real id at creation. The old
+// global "projectResources" store key is deliberately no longer read - a
+// clean slate per conversation, re-add manually where wanted (his words).
+const PENDING_RESOURCE_KEY = "pending";
+
+function resourceKeyOf(key?: string): string {
+  return key?.trim() ? key : PENDING_RESOURCE_KEY;
 }
 
-async function addProjectResource(kind: ProjectWorkspaceResource["kind"]): Promise<ProjectWorkspaceResource[]> {
+async function readResourceBuckets(): Promise<Record<string, ProjectWorkspaceResource[]>> {
+  return readStoreValue<Record<string, ProjectWorkspaceResource[]>>("projectResourcesByKey", {});
+}
+
+async function writeResourceBucket(key: string, resources: ProjectWorkspaceResource[]): Promise<void> {
+  const buckets = await readResourceBuckets();
+  if (resources.length === 0) {
+    delete buckets[key];
+  } else {
+    buckets[key] = resources;
+  }
+  await writeStoreValue("projectResourcesByKey", buckets);
+}
+
+async function listProjectResources(key?: string): Promise<ProjectWorkspaceResource[]> {
+  const buckets = await readResourceBuckets();
+  return buckets[resourceKeyOf(key)] ?? [];
+}
+
+/** Moves the new-session "pending" resource bucket onto a freshly created
+ *  conversation's id (draft-to-real claim, called by the renderer right
+ *  after metis-conversations:create). Appends onto anything already there. */
+async function claimPendingResources(conversationId: string): Promise<ProjectWorkspaceResource[]> {
+  if (!conversationId.trim()) return [];
+  const buckets = await readResourceBuckets();
+  const pending = buckets[PENDING_RESOURCE_KEY] ?? [];
+  if (pending.length === 0) return buckets[conversationId] ?? [];
+  const merged = [...(buckets[conversationId] ?? []), ...pending];
+  buckets[conversationId] = merged;
+  delete buckets[PENDING_RESOURCE_KEY];
+  await writeStoreValue("projectResourcesByKey", buckets);
+  return merged;
+}
+
+async function addProjectResource(kind: ProjectWorkspaceResource["kind"], key?: string): Promise<ProjectWorkspaceResource[]> {
   const result = await dialog.showOpenDialog({
     title: kind === "file" ? "Add files to this Metis workspace" : "Add a folder to this Metis workspace",
     buttonLabel: kind === "file" ? "Add files" : "Add folder",
     properties: kind === "file" ? ["openFile", "multiSelections"] : ["openDirectory", "multiSelections"]
   });
-  if (result.canceled || result.filePaths.length === 0) return listProjectResources();
+  if (result.canceled || result.filePaths.length === 0) return listProjectResources(key);
 
-  const current = await listProjectResources();
+  const current = await listProjectResources(key);
   const existingPaths = new Set(current.map((item) => resolve(item.path).toLowerCase()));
   const next = [...current];
   for (const rawPath of result.filePaths) {
@@ -1788,10 +1831,11 @@ async function addProjectResource(kind: ProjectWorkspaceResource["kind"]): Promi
     });
     existingPaths.add(selectedPath.toLowerCase());
   }
-  await writeStoreValue("projectResources", next);
+  await writeResourceBucket(resourceKeyOf(key), next);
   await appendAudit("info", "project.resource.add", `Added ${next.length - current.length} workspace ${kind}${next.length - current.length === 1 ? "" : "s"}.`, {
     kind,
-    count: next.length - current.length
+    count: next.length - current.length,
+    conversationKey: resourceKeyOf(key)
   });
 
   // DRILL_PLAN PF1: attaching a folder (the renderer's "+ Add folder" flow) must make it the
@@ -1809,11 +1853,11 @@ async function addProjectResource(kind: ProjectWorkspaceResource["kind"]): Promi
   return next;
 }
 
-async function removeProjectResource(id: string): Promise<ProjectWorkspaceResource[]> {
-  const current = await listProjectResources();
+async function removeProjectResource(id: string, key?: string): Promise<ProjectWorkspaceResource[]> {
+  const current = await listProjectResources(key);
   const resource = current.find((item) => item.id === id);
   const next = current.filter((item) => item.id !== id);
-  await writeStoreValue("projectResources", next);
+  await writeResourceBucket(resourceKeyOf(key), next);
   if (resource) {
     await appendAudit("info", "project.resource.remove", `Removed ${resource.name} from workspace context.`, {
       id,
@@ -1857,11 +1901,14 @@ async function resolveWritableProjectWorkspace(requestedPath?: string): Promise<
  *  preserves the existing app-managed fallback + warning for that case. When `requestedPath` is
  *  given, the fallback only considers a resource whose path matches it, so this never hijacks an
  *  explicit, unrelated path request. */
-async function resolveActiveProjectWorkspace(requestedPath?: string): Promise<ProjectWorkspace | null> {
+async function resolveActiveProjectWorkspace(requestedPath?: string, resourceKey?: string): Promise<ProjectWorkspace | null> {
   const writable = await resolveWritableProjectWorkspace(requestedPath);
   if (writable) return writable;
 
-  const resources = await listProjectResources();
+  // Per-conversation resources: the fallback searches THIS conversation's
+  // bucket (or the pending one) - another conversation's folders can never
+  // hijack a run's write target.
+  const resources = await listProjectResources(resourceKey);
   const folderResources = resources.filter((resource) => resource.kind === "folder");
   if (folderResources.length === 0) return null;
 
@@ -5150,6 +5197,15 @@ async function appendRunToConversation(run: SessionRun, prompt: string): Promise
       updatedAt: run.completedAt,
       turns: []
     };
+    // Per-conversation resources (Lachy): anything attached on the new
+    // session page (the pending bucket) belongs to the conversation that
+    // first message just created. Fail-soft - resources are never
+    // run-critical.
+    try {
+      await claimPendingResources(conversation.id);
+    } catch {
+      /* best-effort */
+    }
   }
 
   const userTurn: ConversationTurnRecord = {
@@ -5595,7 +5651,7 @@ async function runPreviewRequest(args: {
   stream?: SessionStreamController;
 }): Promise<SessionRun> {
   const { input, prompt, conversationId, createdAt, promptHash, decision, stream } = args;
-  const writable = await resolveActiveProjectWorkspace(input.projectPath);
+  const writable = await resolveActiveProjectWorkspace(input.projectPath, input.conversationId);
   const steps: SessionPipelineStep[] = [
     { id: "route", label: "Route through Metis Policy", detail: "Recognized a preview request for the current project.", status: "complete" }
   ];
@@ -8433,7 +8489,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // truth (does the selected project actually have files?) before the build
   // gate decides, and so the build branch below reuses the same resolution
   // instead of resolving the workspace twice.
-  const writable = await resolveActiveProjectWorkspace(input.projectPath);
+  const writable = await resolveActiveProjectWorkspace(input.projectPath, input.conversationId);
   const editableProject = writable ? await projectHasSourceFiles(writable.path) : false;
 
   // Model-driven routing (DRILL_PLAN B5.4, opt-in experiment, default OFF):
@@ -8840,7 +8896,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const provider = override ? override.provider : depthRoute ? depthRoute.provider : providerFromRoute(route.provider, route.runtime, route.kind);
   const model = override ? resolveOverrideModel(override) : depthRoute ? depthRoute.model : route.model ?? providerInfo[provider].defaultModel ?? "auto";
   const effectiveRouteLabel = override ? overrideDisplayLabel(override) : depthRoute ? `${providerInfo[depthRoute.provider].label} ${depthRoute.model}` : routeLabel;
-  const writableWorkspace = await resolveActiveProjectWorkspace(input.projectPath);
+  const writableWorkspace = await resolveActiveProjectWorkspace(input.projectPath, input.conversationId);
   // Fast lane (bug L4b): a short, plain general_chat turn ("Test", "hi") skips
   // the project-snapshot walk and knowledge-bank retrieval below — both add
   // real tokens/latency that a trivial turn never needed. Route ceremony,
@@ -11814,10 +11870,36 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-project:snapshot", () => snapshotCurrentProject());
   ipcMain.handle("metis-project:select-folder", () => selectProjectWorkspace());
   ipcMain.handle("metis-project:clear-workspace", () => clearProjectWorkspace());
-  ipcMain.handle("metis-project:list-resources", () => listProjectResources());
-  ipcMain.handle("metis-project:add-files", () => addProjectResource("file"));
-  ipcMain.handle("metis-project:add-folder", () => addProjectResource("folder"));
-  ipcMain.handle("metis-project:remove-resource", (_event, id: string) => removeProjectResource(id));
+  ipcMain.handle("metis-project:list-resources", (_event, key?: string) => listProjectResources(key));
+  ipcMain.handle("metis-project:add-files", (_event, key?: string) => addProjectResource("file", key));
+  ipcMain.handle("metis-project:add-folder", (_event, key?: string) => addProjectResource("folder", key));
+  ipcMain.handle("metis-project:remove-resource", (_event, id: string, key?: string) => removeProjectResource(id, key));
+  // Per-conversation folders (Lachy): claim the new-session pending bucket
+  // onto a real conversation, and re-bind the active workspace to whatever
+  // folder a conversation carries when it is opened.
+  ipcMain.handle("metis-project:claim-pending", (_event, conversationId: string) => claimPendingResources(conversationId));
+  ipcMain.handle("metis-project:bind-conversation", async (_event, conversationId: string | null) => {
+    if (!conversationId) {
+      // New session page: no conversation, no inherited folder.
+      await writeStoreValue("projectWorkspace", null);
+      return null;
+    }
+    const conversation = (await readConversations()).find((item) => item.id === conversationId);
+    if (!conversation?.projectPath) {
+      await writeStoreValue("projectWorkspace", null);
+      return null;
+    }
+    // establishWritableWorkspace re-requests the write grant; for a folder
+    // this conversation already used, the existing grant satisfies it
+    // without a prompt in auto mode.
+    return establishWritableWorkspace(conversation.projectPath);
+  });
+  ipcMain.handle("metis-conversations:set-project", async (_event, id: string, projectPath: string) => {
+    const current = await readConversations();
+    const next = current.map((item) => (item.id === id ? { ...item, projectPath } : item));
+    await writeConversations(next);
+    return next.find((item) => item.id === id) ?? null;
+  });
   ipcMain.handle("metis-files:read", (_event, path: string) => readMetisFile(path));
   ipcMain.handle("metis-files:write", (_event, path: string, content: string) => writeMetisFile(path, content));
   ipcMain.on("metis-window:minimize", (event) => BrowserWindow.fromWebContents(event.sender)?.minimize());

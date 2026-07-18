@@ -104,10 +104,15 @@ declare global {
       snapshot: () => Promise<ProjectSnapshot | null>;
       selectFolder: () => Promise<ProjectWorkspaceSelectionResult>;
       clearWorkspace: () => Promise<void>;
-      listResources: () => Promise<ProjectWorkspaceResource[]>;
-      addFiles: () => Promise<ProjectWorkspaceResource[]>;
-      addFolder: () => Promise<ProjectWorkspaceResource[]>;
-      removeResource: (id: string) => Promise<ProjectWorkspaceResource[]>;
+      // Per-conversation resources (Lachy): key = conversationId, or omitted
+      // for the new-session pending bucket. Optional methods: older preloads.
+      listResources: (key?: string) => Promise<ProjectWorkspaceResource[]>;
+      addFiles: (key?: string) => Promise<ProjectWorkspaceResource[]>;
+      addFolder: (key?: string) => Promise<ProjectWorkspaceResource[]>;
+      removeResource: (id: string, key?: string) => Promise<ProjectWorkspaceResource[]>;
+      claimPendingResources?: (conversationId: string) => Promise<ProjectWorkspaceResource[]>;
+      bindConversation?: (conversationId: string | null) => Promise<ProjectWorkspace | null>;
+      setConversationProject?: (id: string, projectPath: string) => Promise<ConversationRecord | null>;
     };
     metisFiles?: {
       read: (path: string) => Promise<MetisFileReadResult>;

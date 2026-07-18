@@ -4281,10 +4281,18 @@ function NewSessionWorkspace({
     };
   }, [openConversationId]);
 
+  // Per-conversation folders (Lachy): the active workspace + resources FOLLOW
+  // the open conversation. Switching conversations re-binds the workspace to
+  // that conversation's own folder (or clears it); the new session page
+  // starts folderless with the pending resource bucket. bindConversation is
+  // optional-chained for older preloads/preview, falling back to a plain read.
   useEffect(() => {
     if (!window.metisProject) return;
     let alive = true;
-    void Promise.all([window.metisProject.getWorkspace(), window.metisProject.listResources()]).then(([workspace, resources]) => {
+    const bind = window.metisProject.bindConversation
+      ? window.metisProject.bindConversation(activeConversationId ?? null)
+      : window.metisProject.getWorkspace();
+    void Promise.all([bind, window.metisProject.listResources(activeConversationId ?? undefined)]).then(([workspace, resources]) => {
       if (!alive) return;
       setProjectWorkspace(workspace);
       setWorkspaceResources(resources);
@@ -4292,7 +4300,7 @@ function NewSessionWorkspace({
     return () => {
       alive = false;
     };
-  }, []);
+  }, [activeConversationId]);
 
   async function chooseProjectFolder(): Promise<void> {
     if (!window.metisProject || projectPickerBusy) return;
@@ -4301,6 +4309,13 @@ function NewSessionWorkspace({
       const result = await window.metisProject.selectFolder();
       if (!result.canceled && result.workspace) {
         setProjectWorkspace(result.workspace);
+        // Per-conversation folders (Lachy): choosing mid-conversation binds
+        // the folder to THIS conversation; on the new session page the bind
+        // happens at creation via the run's projectPath.
+        if (activeConversationId) {
+          await window.metisProject.setConversationProject?.(activeConversationId, result.workspace.path);
+          onConversationsChanged?.();
+        }
       }
     } finally {
       setProjectPickerBusy(false);
@@ -4312,7 +4327,10 @@ function NewSessionWorkspace({
     setResourceMenuOpen(false);
     setProjectPickerBusy(true);
     try {
-      const next = kind === "file" ? await window.metisProject.addFiles() : await window.metisProject.addFolder();
+      // Per-conversation resources (Lachy): attach into this conversation's
+      // bucket, or the pending bucket on the new session page.
+      const resourceKey = activeConversationId ?? undefined;
+      const next = kind === "file" ? await window.metisProject.addFiles(resourceKey) : await window.metisProject.addFolder(resourceKey);
       setWorkspaceResources(next);
       if (kind === "folder") {
         // PF1 (5c0c1a6): "+ Add folder" now also establishes the attached folder as the
@@ -4322,6 +4340,10 @@ function NewSessionWorkspace({
         // so this optional-chains to a no-op there.
         const workspace = await window.metisProject?.getWorkspace();
         if (workspace !== undefined) setProjectWorkspace(workspace);
+        if (workspace && activeConversationId) {
+          await window.metisProject.setConversationProject?.(activeConversationId, workspace.path);
+          onConversationsChanged?.();
+        }
       }
     } finally {
       setProjectPickerBusy(false);
@@ -4330,7 +4352,7 @@ function NewSessionWorkspace({
 
   async function removeWorkspaceResource(id: string): Promise<void> {
     if (!window.metisProject) return;
-    const next = await window.metisProject.removeResource(id);
+    const next = await window.metisProject.removeResource(id, activeConversationId ?? undefined);
     setWorkspaceResources(next);
   }
 
