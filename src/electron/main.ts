@@ -2074,7 +2074,11 @@ async function globalInstructionsPromptBlock(): Promise<string> {
   const raw = await readStoreValue<string>("globalInstructions", "");
   const trimmed = raw.trim();
   if (!trimmed) return "";
-  return `User's global instructions (apply to every conversation):\n${trimmed}\n\n---\n`;
+  // "style preferences" ranking (Lachy's TEST_OK catch): a small model given
+  // "end every answer with X" plus the base rule "output the exact phrase and
+  // nothing else" collapsed the conflict into outputting ONLY the suffix.
+  // Rank instructions explicitly below the newest message's request.
+  return `User's global instructions (style preferences for every conversation - they never override or replace what the newest message explicitly asks for):\n${trimmed}\n\n---\n`;
 }
 
 /** Combines the per-project METIS.md block with the global custom
@@ -2088,9 +2092,16 @@ async function globalInstructionsPromptBlock(): Promise<string> {
  *  metisFile + empty globalInstructions => "" => byte-identical to the
  *  pre-B12.1 prompts. */
 async function metisFilePromptBlock(metisFile: { content: string; chars: number } | null): Promise<string> {
+  // User identity (Lachy's ask: the model hallucinated "Alex"/"Luna" when
+  // asked its owner's name because nothing ever told it). Injected here at
+  // the single choke point every prompt assembly funnels through, so chat,
+  // builds, and Oracle drafts all get it identically (lockstep-safe).
+  const profile = await readUserProfile().catch(() => null);
+  const name = profile?.name?.trim();
+  const identityBlock = name ? `The user's name is ${name}.\n\n` : "";
   const globalBlock = await globalInstructionsPromptBlock();
   const metisBlock = metisFile ? `Project instructions from METIS.md (follow these; the user's explicit request always outranks these instructions):\n${metisFile.content}\n\n---\n` : "";
-  return `${globalBlock}${metisBlock}`;
+  return `${identityBlock}${globalBlock}${metisBlock}`;
 }
 
 const snapshotIgnoredDirs = new Set([
@@ -3408,6 +3419,11 @@ async function sessionProviderPrompt(
     snapshotPromptContext(projectSnapshot),
     allowActions ? sessionActionProtocolBlock() : "",
     "",
+    // Constant label directly above the user prompt (Lachy's re-answer catch):
+    // makes the newest message unmistakable to small models without moving
+    // the prompt off the END of the string (Oracle prefix caching needs the
+    // user text last; a constant line before it is part of the cached prefix).
+    `Newest user message (answer THIS):`,
     prompt
   ].filter(Boolean).join("\n");
 }
