@@ -99,8 +99,11 @@ the next wake prompt, which is why the summary is capped at 240 characters: a ve
 tokens on every remaining iteration.
 
 Stored under a `loops` key, list-shaped, same read/modify/write idiom as `routines`. Persisted
-means a loop survives a restart, and the tick scheduler re-arms sleeping loops on launch exactly
-as `startRoutineScheduler` already does for routines.
+means a loop survives a restart, and `startLoopScheduler` re-arms sleeping loops on launch much as
+`startRoutineScheduler` already does for routines, with two exceptions it learned the hard way: a
+`cli` loop still sleeping is closed out rather than resumed, and an `app` loop left `running` is
+marked `failed` rather than re-run, because Metis cannot know whether that interrupted turn had
+already written something.
 
 `conversationId` is the important field. The loop's memory is not a separate log, it is the
 conversation itself, which already carries turns, runs, timings, and the knowledge-bank grounding.
@@ -123,7 +126,9 @@ Waking up is just adding a turn to a conversation that already knows what happen
    a model forgot to say stop is the failure mode to design out first.
 5. Every outcome writes an audit event, so the whole life of a loop is reconstructable.
 
-## Waking on events, not just timers
+## Waking on events, not just timers (PHASE 2, NOT BUILT)
+
+Nothing in this section exists yet. It is written in the present tense because it is the plan.
 
 The bit that makes Fable's loops feel alive is that a finished background worker wakes it
 immediately, and the timer is only a fallback heartbeat. Metis can do the same with parts it has:
@@ -194,19 +199,64 @@ something while the user is away, they must be able to see it and kill it in one
 
 ## Phases
 
-**Phase 1, the smallest thing that is genuinely a loop.** `LoopRecord` store, the tick chain,
-`schedule_wakeup` and `stop_loop` actions, the iteration cap, and the Active loops list with Stop.
-No spawning, no event wakeups. Testable end to end from the CLI harness (CORE.3):
+**Phase 1, the smallest thing that is genuinely a loop. SHIPPED 2026-07-19, with one item still
+open.** `LoopRecord` store, the tick chain, the continue/stop decision (as a `metis-loop` block, not
+the ManagerAction kinds this doc first proposed), the iteration cap, the wall-clock ceiling, the
+delay clamp, and the Active loops list with Stop. No spawning, no event wakeups. Testable end to end
+from the CLI harness (CORE.3):
 `npm run cli -- loop "check the sandbox project builds" --max-iterations 3` and watch three ticks
-happen and the loop terminate itself.
+happen and the loop terminate itself. Startable from the app with `/loop <goal>` in the composer.
+Open: gating loop-driving to capable models, see below.
 
-**Phase 2, workers.** `spawn_agent` wired to the existing fan-out engine, `spawnedAgents` tracking,
-and bus-completion wakeups so the loop sleeps until a worker finishes.
+**Phase 2, workers. NOT BUILT.** `spawn_agent` wired to the existing fan-out engine, `spawnedAgents`
+tracking, and bus-completion wakeups so the loop sleeps until a worker finishes. None of this
+exists: there is no `spawn_agent`, no `spawnedAgents` field, and nothing subscribes a loop to the
+bus. The "waking on events, not just timers" section above is a plan, not a description.
 
-**Phase 3, budget and polish.** Token ceilings drawn from the usage ledger, wall-clock ceilings,
-tray presence, and loop templates the user can start with one click.
+**Phase 3, budget and polish. NOT BUILT,** minus one item that turned out to belong in phase 1.
+Token ceilings drawn from the usage ledger, tray presence for sleeping loops, and loop templates the
+user can start with one click. ~~Wall-clock ceilings~~: filed here originally, actually shipped in
+phase 1 as `LOOP_MAX_AGE_HOURS`, because an iteration cap on its own does not bound a loop whose
+every turn is slow.
+
+## What actually shipped, verified by running it
+
+Not "the code compiles". This is the run that proved the feature works, 2026-07-19.
+
+The goal: **"count upward from 1, three new numbers each turn, stop at 9"**, with a cap of 5 turns.
+
+- Iteration 1 produced 1, 2, 3 and asked to continue.
+- Iteration 2 produced 4, 5, 6 and asked to continue. It did not restart at 1, which is the history
+  digest in `composeWakePrompt` doing its job: without it a woken run is a prompt with amnesia.
+- Iteration 3 produced 7, 8, 9 and **stopped itself**, at iteration 3 of a possible 5.
+
+That single run demonstrates the four things worth demonstrating: history replay across wakeups, the
+`metis-loop` decision protocol parsing correctly, self-termination BEFORE the cap rather than by
+hitting it, and `nextWakeAt` being cleared so the scheduler does not re-fire a finished loop.
+Stopping early is the important part. A loop that only ever stops because it ran out of iterations
+has not shown that the decision layer works at all.
+
+## Open items, honestly
+
+- **Gating loop-driving to capable models.** The closing paragraph of this doc has always said a 4B
+  local model will not reliably decide to stop. That gate was never built. Any model the router
+  picks can drive a loop today, and nothing warns the user when a small one is about to. This is an
+  OPEN PHASE 1 ITEM, not a nice-to-have, because the whole safety story rests on the model
+  reliably emitting or omitting a decision block. Silence stopping the loop means a weak model
+  fails safe rather than dangerously, which is why this is a gap and not a hole, but it also means
+  a weak model will quietly stop after one turn and look broken.
+- **The routing hazard the first live loop found.** Metis classifies chat-vs-build from prompt text,
+  and an early, chattier version of the wake scaffold made a read-only goal ("how many functions
+  does app.js define?") route to the BUILD pipeline, which rewrote the file from 171 lines down to
+  10. Fixed two ways: `fireLoopTick` routes on `loop.goal` rather than the wake prompt, and
+  `loopDecisionPromptBlock` is kept terse and free of words like build, make or create. Worth
+  keeping in mind because it is a class of bug, not a single one: anything appended to a loop's
+  prompt is a routing signal.
+- **Token ceilings, worker spawning and event wakeups** all remain unbuilt, as above.
 
 ## Two decisions taken during phase 1 that changed the design above
+
+Both re-checked against the shipped code on 2026-07-19 and both still accurate.
 
 **The decision channel is its own block, not three new ManagerAction kinds.** The doc proposed
 reusing `metis-actions`. Building it showed that a loop tick runs through `runSessionTracked`, so
@@ -233,5 +283,6 @@ inference is not just cheaper but structurally enabling: nobody runs a 25-iterat
 on a metered API for fun, but on your own hardware it costs electricity.
 
 That is also the honest limit to respect. A loop is only as good as the model driving it. A 4B
-local model will not reliably decide to stop. Phase 1 should gate loop-driving to capable models
-and say so plainly rather than pretending every model can be trusted with the keys.
+local model will not reliably decide to stop. Phase 1 was supposed to gate loop-driving to capable
+models and say so plainly rather than pretending every model can be trusted with the keys. It does
+not, yet. That gate is still open and it is the first thing left to close.

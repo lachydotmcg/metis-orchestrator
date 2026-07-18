@@ -10280,6 +10280,10 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
   let assistantText = "";
   let conversationId = loaded.conversationId;
   let runError: string | undefined;
+  /** Which model actually answered this turn. Captured out of the try so the
+   *  decision branches below can name it, which is what makes a silent turn
+   *  actionable rather than mysterious. */
+  let answeringModel: string | undefined;
   try {
     const run = await runSessionTracked({
       prompt: composeWakePrompt(loaded),
@@ -10300,6 +10304,7 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
     });
     assistantText = run.assistantText ?? "";
     conversationId = run.conversationId ?? loaded.conversationId;
+    answeringModel = run.providerResult?.model;
   } catch (error) {
     runError = error instanceof Error ? error.message : String(error);
   }
@@ -10342,10 +10347,27 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
   } else if (!decision) {
     // The governing rule from loops.ts: continuing is an explicit act, so a
     // reply with no parseable decision block ends the loop.
-    settled = { ...advanced, status: "stopped", stoppedReason: "the model did not ask to continue" };
+    //
+    // Naming the model that answered is the closest thing phase 1 has to the
+    // capable-model gate LOOPS.md asks for, and is arguably the more useful
+    // half of it. A gate would have to guess up front whether a model can
+    // follow the protocol; this reports what actually happened, on the first
+    // turn where it mattered, with the model's name attached. Deliberately not
+    // a hard block: Metis is local-first and the loop is the one place free
+    // local inference is structurally enabling, so refusing to run on small
+    // models would invert the product's own argument. Say it plainly and let
+    // the owner decide.
+    settled = {
+      ...advanced,
+      status: "stopped",
+      stoppedReason: answeringModel
+        ? `the model did not ask to continue (${answeringModel} answered without a decision block, which smaller models often miss)`
+        : "the model did not ask to continue"
+    };
     await appendAudit("info", "loop.stop", `Loop "${loopLabel(advanced)}" stopped: no continue was requested on iteration ${index}.`, {
       id,
-      iteration: index
+      iteration: index,
+      model: answeringModel
     });
   } else if (decision.decision === "stop") {
     settled = {
