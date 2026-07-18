@@ -35,6 +35,10 @@ export interface AgentToolCall {
   path?: string;
   find?: string;
   replace?: string;
+  /** edit_file only: change EVERY occurrence rather than requiring the find
+   *  text to be unique. Opt-in on purpose, so a careless single edit cannot
+   *  spray across a file, while a deliberate rename stays one call. */
+  all?: boolean;
 }
 
 export interface AgentToolResult {
@@ -170,17 +174,23 @@ async function toolEditFile(root: string, call: AgentToolCall): Promise<AgentToo
       text: `The text to find was not present in "${resolved.relative}". Read the file and copy the exact text, including whitespace.`
     };
   }
-  if (occurrences > 1) {
+  // Renames are the common multi-site case, and refusing them outright made
+  // the tool useless for exactly the task it was built for: the first live
+  // run renamed 1 of 4 occurrences and declared victory. `all: true` is the
+  // model saying "yes, every one" explicitly. Without it, several matches
+  // still refuse as ambiguous, so a careless single edit cannot spray.
+  if (occurrences > 1 && !call.all) {
     return {
       ok: false,
-      text: `The text to find appears ${occurrences} times in "${resolved.relative}", so the edit is ambiguous. Include more surrounding context to make it unique.`
+      text: `The text to find appears ${occurrences} times in "${resolved.relative}". Either include more surrounding context to target one of them, or repeat the call with "all": true to change every occurrence.`
     };
   }
 
+  const updated = call.all ? content.split(find).join(replace) : content.replace(find, replace);
   return {
     ok: true,
-    text: `Prepared an edit to ${resolved.relative} (1 replacement).`,
-    pendingWrite: { relativePath: resolved.relative, content: content.replace(find, replace) }
+    text: `Prepared an edit to ${resolved.relative} (${occurrences} replacement${occurrences === 1 ? "" : "s"}).`,
+    pendingWrite: { relativePath: resolved.relative, content: updated }
   };
 }
 
@@ -263,9 +273,10 @@ export function agentToolsPromptBlock(): string {
     '{"agent_tool_call": {"tool": "read_file", "path": "app.js"}}',
     '{"agent_tool_call": {"tool": "list_files", "path": "."}}',
     '{"agent_tool_call": {"tool": "edit_file", "path": "app.js", "find": "exact text to replace", "replace": "new text"}}',
+    '{"agent_tool_call": {"tool": "edit_file", "path": "app.js", "find": "oldName", "replace": "newName", "all": true}}',
     "Rules:",
     "- READ a file before you edit it. Never guess at what it contains.",
-    "- For edit_file, the find text must appear EXACTLY ONCE. Include surrounding lines to make it unique.",
+    "- For edit_file, the find text must appear EXACTLY ONCE, unless you pass \"all\": true to change every occurrence (use this for renames).",
     "- One tool call per reply. You will be given the result and can then call another.",
     "- When the work is done, reply normally with your answer and no JSON."
   ].join("\n");
