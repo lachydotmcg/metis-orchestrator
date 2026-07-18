@@ -3490,18 +3490,15 @@ function suggestNextStep(lastRun: SessionRun | undefined, lastUserMessage: strin
       lastRun.steps?.some((step) => /repair/i.test(step.label) && step.status === "error");
     if (repairFailed) return "Retry the build with a different model";
 
-    if (project && project.verified === true) {
-      const isBuildPipeline = /orchestration pipeline/i.test(lastRun.pipelineName ?? "");
-      if (isBuildPipeline) return "Add a second page";
-      return "Open the preview and refine the design";
-    }
   }
 
-  if (lastUserMessage) {
-    const noun = ONGOING_WORK_NOUNS.find((word) => new RegExp(`\\b${word}\\b`, "i").test(lastUserMessage));
-    if (noun) return `Continue the ${noun}`;
-  }
-
+  // CORE.1: the old guesses ("Add a second page", "Open the preview and
+  // refine the design", "Continue the <noun>") are gone. They fired on any
+  // successful run regardless of what was actually discussed, which is
+  // exactly the fake-suggestion problem real follow-ups replace. What
+  // survives above are the two cases grounded in real run STATE (a failed
+  // verification, a failed repair), where the next step is genuinely known
+  // without guessing. Everything else waits for the model's own follow-ups.
   return null;
 }
 
@@ -5551,7 +5548,7 @@ function SessionComposer({
         <textarea
           value={prompt}
           rows={3}
-          placeholder={showSuggestion ? "" : sessionBusy ? "Steer the running build — e.g. “skip the b feature, add d instead”" : "Describe a task or ask a question"}
+          placeholder={showSuggestion ? "" : sessionBusy ? "Add a direction while it works" : "Describe a task or ask a question"}
           aria-label={showSuggestion ? `Prompt — suggestion: ${suggestion} — press Tab to accept` : "Prompt"}
           onChange={(event) => {
             setPrompt(event.target.value);

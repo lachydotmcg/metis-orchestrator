@@ -84,6 +84,7 @@ import type {
   GatewayStatus
 } from "../shared/runtime-contracts.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
+import { runCliMode, type CliRuntime } from "./cli.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const storeKeyPattern = /^[a-zA-Z0-9_-]+$/;
