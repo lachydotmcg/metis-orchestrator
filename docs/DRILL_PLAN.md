@@ -96,6 +96,38 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
 
 ---
 
+## ★ CORE BATCH (2026-07-18) - THE ONLY THING THAT MATTERS NOW
+
+Lachy's framing: stop overengineering the periphery. The primary part of the app - chatting, the
+router, and orchestration actually doing work - is the single biggest part and the single thing he
+is too scared to ship and promote. Everything in this batch serves that. Completion means SAFE
+(permissions + version control), TESTED (by an engineer, not by guessing), EASY, and work actually
+gets done.
+
+- [ ] **CORE.1 - Real suggested next messages.** Replace the canned heuristics (suggestNextStep:
+  "Add a second page", "Continue the build") with follow-ups written by the model that ANSWERED,
+  from the actual exchange. A separate single-job call after the answer, never stacked into the
+  same response - the TEST_OK-swallowed-by-BANANA live test proved small models collapse under
+  stacked instructions. Engine: src/electron/followups.ts. Renderer: a chip row above the
+  composer, clicking sends it. SessionRun.suggestions carries them.
+- [ ] **CORE.2 - The answering model names the conversation.** generateLocalTitle always uses the
+  local model even when a cloud model answered and understood far more. Retitle from the same
+  model on the first exchange, keeping the manual-rename and one-shot guards.
+- [ ] **CORE.3 - CLI test harness.** electron . --cli chat|build|doctor, plus --json for
+  assertions. The point: an engineer (or CI, or Fable) can exercise the REAL pipeline headlessly
+  instead of guessing from a browser preview. This is the unlock that turns NEEDS-LIVE-TEST into
+  actually-verified.
+- [ ] **CORE.4 - Agentic tool loop.** Give routed models real tools: read, list, targeted edit,
+  write, run a command, verify. Reuse the shipped P10.2 MCP loop shape rather than inventing a
+  second one. Design: docs/AGENTIC_TOOLS.md.
+- [ ] **CORE.5 - Safety net before it writes.** Path containment inside the workspace, a git
+  snapshot before an agentic run touches files, an obvious revert, and secrets kept out of reach.
+  Nothing in CORE.4 ships without this.
+- [ ] **CORE.6 - A real sandbox + test prompts.** A genuine small project outside the repo with
+  planted imperfections, plus prompts that each state what pass and fail look like.
+- [ ] **CORE.7 - Ship barebones.** Decide what ships, what hides behind a flag, and what gets cut,
+  so v1 is orchestration plus chatting done excellently. Audit: docs/SHIP_V1.md.
+
 ## ★ LACHY BATCH 12 (2026-07-16, brainstorm round - PRIORITIZED BY LACHY, P1 highest)
 
 - [ ] **B12.1 [P1] - The router that learns YOU.** Usage should teach routing. Phase A: a local
