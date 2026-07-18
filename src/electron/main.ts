@@ -3391,7 +3391,7 @@ async function sessionProviderPrompt(
   return [
     knowledgeContext ?? "",
     await metisFilePromptBlock(metisFile ?? null),
-    conversationContext ? `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}` : "",
+    conversationContext ? `Recent conversation (READ-ONLY reference for continuity. It is already answered - do NOT repeat or re-answer anything in it. Respond ONLY to the newest user message below):\n${conversationContext}` : "",
     `You are running inside Metis Orchestrator.`,
     `Task type: ${decision.task_type}.`,
     decision.task_type === "coding" ? `You are the selected Back End/Coding Pipeline model for this turn.` : `You are the selected model for this turn.`,
@@ -6999,7 +6999,7 @@ YOUR file territory (produce files ONLY at these paths, nothing outside it): ${s
 
 Return COMPLETE files, not snippets, only for paths inside your territory. Before each fenced code block, put the file path in backticks on its own line. One short sentence of intro, then the files.`;
       if (metisBlock) subPrompt = `${metisBlock}\n${subPrompt}`;
-      if (conversationContext) subPrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${subPrompt}`;
+      if (conversationContext) subPrompt = `Recent conversation (READ-ONLY reference for continuity. It is already answered - do NOT repeat or re-answer anything in it. Respond ONLY to the newest user message below):\n${conversationContext}\n\n${subPrompt}`;
       subPrompt += `\n\n${designSeedPromptLine(seed, { explicitStyle, replacesPrevious: false })}`;
 
       // Reference-image attachments (when present) only make sense for
@@ -7492,7 +7492,7 @@ async function runOrchestratedStages(
     let stagePrompt: string;
     if (stage.templateRole === "plan") {
       stagePrompt = `You are the PLANNING model in a build pipeline. The user wants:\n${prompt}\n\nWrite a short, concrete build plan: the pages/components, the data, and the interactivity. Be tight — no code yet, just the plan.\n\nNever ask the user for a brief, requirements, or say the project is empty. If details are missing, invent tasteful, specific choices yourself (name, copy, palette, content) and state them briefly — you are the creative lead. Do not end with a question asking permission to proceed; proceed.`;
-      if (conversationContext) stagePrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${stagePrompt}`;
+      if (conversationContext) stagePrompt = `Recent conversation (READ-ONLY reference for continuity. It is already answered - do NOT repeat or re-answer anything in it. Respond ONLY to the newest user message below):\n${conversationContext}\n\n${stagePrompt}`;
     } else if (stage.templateRole === "frontend") {
       stagePrompt = `You are the FRONT-END model. Build the UI for this plan.\n\nPlan:\n${plan}\n\nReturn COMPLETE files, not snippets. Before each fenced code block, put the file path in backticks on its own line (e.g. \`index.html\` or \`public/index.html\`). Keep it clean and minimal — one short sentence of intro, then the files.\n\nAvoid the generic AI look — do not default to purple/violet gradients; choose a distinctive, coherent palette and typography that fit the subject.`;
       // Gallery visual RAG retrieval (docs/FABLE_PLANS.md section 4): the
@@ -8553,7 +8553,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       const editConfig = stageConfigs.find((config) => config.templateRole === "frontend") ?? stageConfigs[0];
       const fileDump = editContextFiles.map((file) => `\`${file.path}\`\n\`\`\`\n${file.content}\n\`\`\``).join("\n\n");
       let editPrompt = `You are EDITING an existing project. Do NOT redesign or rebuild it — preserve its current structure, style, and content except where the user's request requires changes. You may ADD new files (e.g. a new page) alongside changed ones when the request calls for it.\n\nUser request:\n${prompt}\n\nCurrent project files:\n${fileDump}\n\nReturn the complete files you changed or added — and nothing else. Before each fenced code block, put the file path in backticks on its own line. One short sentence describing the change, then the files.`;
-      if (conversationContext) editPrompt = `Recent conversation (for continuity — the newest user request is the task):\n${conversationContext}\n\n${editPrompt}`;
+      if (conversationContext) editPrompt = `Recent conversation (READ-ONLY reference for continuity. It is already answered - do NOT repeat or re-answer anything in it. Respond ONLY to the newest user message below):\n${conversationContext}\n\n${editPrompt}`;
       // Read via metisFilePromptBlock (not gated on `metisFile` alone, DRILL_PLAN
       // B12.1 Phase C) so global instructions still land here even on a project
       // with no METIS.md.
