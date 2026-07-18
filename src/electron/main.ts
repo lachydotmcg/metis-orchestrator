@@ -85,6 +85,7 @@ import type {
 } from "../shared/runtime-contracts.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
+import { generateConversationTitle, generateFollowups } from "./followups.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const storeKeyPattern = /^[a-zA-Z0-9_-]+$/;
@@ -4595,6 +4596,18 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
 
 function buildAssistantText(input: SessionRunInput, _decision: RouteDecision, _pipelineName: string, providerResult?: ProviderInvokeResult, projectResult?: ProjectToolResult): string {
   const output = providerResult?.source !== "placeholder" ? providerResult?.output.trim() : "";
+  // CORE.11: a placeholder result carries the app's most USEFUL text - the
+  // one that names the actual problem and the exact command to fix it
+  // ("Ollama is not running, or qwen3:8b is not pulled... run: ollama pull
+  // qwen3:8b"). It used to be discarded here in favour of "The route
+  // completed, but no live model answer was returned", so the app knew what
+  // was wrong and said nothing useful. Surface it verbatim instead. Only
+  // when a build genuinely produced files does the file summary win, since
+  // then the run did real work regardless.
+  if (!output && !projectResult && providerResult?.source === "placeholder") {
+    const placeholder = providerResult.output.trim();
+    if (placeholder) return placeholder;
+  }
   if (projectResult && output && containsGeneratedSource(output)) {
     const fileCount = projectResult.artifacts.filter((artifact) => artifact.kind === "file" || artifact.kind === "file_create").length;
     const preview = projectResult.previewUrl ? ` Preview is running at ${projectResult.previewUrl}.` : "";
@@ -5317,7 +5330,42 @@ Assistant: ${assistantText.slice(0, 800)}`;
  *  conversation, manual rename, already-attempted, model unavailable, junk
  *  reply) degrades to "do nothing" or "keep the existing placeholder title",
  *  never to a thrown error. */
-async function maybeAutoTitleConversation(conversationId: string, firstPrompt: string, assistantText: string): Promise<void> {
+/** Builds the injected invoker the followups module uses: the SAME provider
+ *  and model that answered this run (CORE.1/CORE.2). Falls back to the local
+ *  model when a run had no live provider result, so a placeholder/errored run
+ *  never tries to bill a cloud call just to write chips nobody asked for.
+ *  Non-streaming and short by construction. */
+function followupInvokerFor(providerResult?: ProviderInvokeResult): (prompt: string) => Promise<{ output: string; source: string }> {
+  const ref: StageModelRef =
+    providerResult && providerResult.source !== "placeholder"
+      ? { provider: providerResult.provider, model: providerResult.model }
+      : localStageRef();
+  return async (prompt: string) => {
+    const result = await invokeProvider({ provider: ref.provider, model: ref.model, prompt });
+    return { output: result.output, source: result.source };
+  };
+}
+
+/** CORE.1: attaches model-written follow-ups to a completed run. Never
+ *  throws, never blocks a real answer for long, and attaches nothing rather
+ *  than guessing. Skipped entirely for runs with no real answer (a failed or
+ *  placeholder run has nothing to follow up on) and for build runs, where the
+ *  next step is the build result itself, not conversation. */
+async function attachModelFollowups(run: SessionRun, prompt: string): Promise<void> {
+  try {
+    if (!(await readStoreValue<boolean>("followupsEnabled", true))) return;
+    if (!run.providerResult || run.providerResult.source === "placeholder") return;
+    if (run.projectResult) return;
+    const text = run.assistantText?.trim();
+    if (!text || text.length < 40) return;
+    const suggestions = await generateFollowups(followupInvokerFor(run.providerResult), prompt, text);
+    if (suggestions.length > 0) run.suggestions = suggestions;
+  } catch {
+    // Follow-ups are a nicety. A failure here must never mark a good run bad.
+  }
+}
+
+async function maybeAutoTitleConversation(conversationId: string, firstPrompt: string, assistantText: string, providerResult?: ProviderInvokeResult): Promise<void> {
   try {
     const current = await readConversations();
     const conversation = current.find((item) => item.id === conversationId);
@@ -5333,7 +5381,15 @@ async function maybeAutoTitleConversation(conversationId: string, firstPrompt: s
       return;
     }
 
-    const generated = await generateLocalTitle(trimmedPrompt, assistantText);
+    // CORE.2 (Lachy: "the model you send your message to will read the
+    // message, set the title separately and respond"): name the conversation
+    // with the model that ANSWERED it. A cloud model that just understood the
+    // exchange writes a far better title than whatever local model happened
+    // to be the default. Falls back to the local titler, then to the raw
+    // prompt slice, so this can only ever improve on the old behaviour.
+    const generated =
+      (await generateConversationTitle(followupInvokerFor(providerResult), trimmedPrompt, assistantText)) ??
+      (await generateLocalTitle(trimmedPrompt, assistantText));
     const finalTitle = generated ?? conversationTitle(trimmedPrompt);
 
     // Re-read right before writing so a concurrent rename or new turn (the
@@ -9313,12 +9369,19 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     }
   );
 
+  // CORE.1 + CORE.2: real follow-ups and a real title, both written by the
+  // model that ACTUALLY answered rather than by heuristics or by whichever
+  // local model happened to be default. Awaited (unlike titling below)
+  // because run.suggestions must be on the record before it is persisted and
+  // returned; the calls are cheap, capped, and fail soft to nothing.
+  await attachModelFollowups(run, prompt);
+
   await appendRunToConversation(run, prompt);
   await writeSessionRun(run, input);
   // Fire-and-forget: never awaited, so a slow/unavailable local model can
   // never delay or fail this run's return. See maybeAutoTitleConversation
   // for the one-shot / manual-rename guards and the local-model prompt.
-  void maybeAutoTitleConversation(conversationId, prompt, run.assistantText).catch(() => {});
+  void maybeAutoTitleConversation(conversationId, prompt, run.assistantText, run.providerResult).catch(() => {});
   emitStream(stream, { kind: "complete", run });
   return run;
 }
