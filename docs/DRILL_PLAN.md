@@ -125,6 +125,26 @@ gets done.
   Nothing in CORE.4 ships without this.
 - [ ] **CORE.6 - A real sandbox + test prompts.** A genuine small project outside the repo with
   planted imperfections, plus prompts that each state what pass and fail look like.
+- [ ] **CORE.10 - SHIP BLOCKER: Auto Router does not run in a packaged build. VERIFIED.** Found by
+  the SHIP_V1 audit, then confirmed directly. decidePolicy (main.ts ~3190) needs a metis-policy CLI
+  plus profile resolved from env vars or SIBLING paths (../metis-policy/). electron-builder.yml's
+  extraResources ships only build/icon.png, so neither ever exists on an installed machine.
+  getPolicyStatus returns available:false, decidePolicy returns sampleDecision, and
+  src/shared/sample-decision.ts hardcodes model qwen3:8b - the SAME answer for every prompt.
+  WHY NOBODY NOTICED: Lachy's dev machine HAS the sibling repo at Documents\metis-policy, and his
+  audit log confirms real decisions ("profile: C:\...\metis-policy\profile.json"). So the headline
+  feature works perfectly for the one person building it and is silently dead for every user who
+  installs it. Fix options: (a) vendor the classification into main.ts so it has no external
+  dependency, (b) bundle the CLI + a default profile via extraResources, or (c) stop calling it
+  adaptive routing until it is. This is THE reason not to promote the app yet.
+- [ ] **CORE.11 - The app throws away its own best error message. VERIFIED, five-line fix.**
+  buildAssistantText (main.ts ~4573) starts with `providerResult?.source !== "placeholder" ?
+  output : ""`, so when a run produces a placeholder result the genuinely useful text ("Ollama is
+  not running, or qwen3:8b is not pulled. Start Ollama, then run: ollama pull qwen3:8b, and send
+  again." - main.ts ~1011) is DISCARDED and replaced with "The route completed, but no live model
+  answer was returned." The app knows exactly what is wrong and how to fix it, and says something
+  vague instead. Surface the placeholder text as the assistant message. Highest value per line in
+  the codebase, and it turns CORE.10's failure mode from a dead end into an actionable message.
 - [ ] **CORE.9 - SECURITY: path containment is inconsistent, and one check is broken.** Found by
   the AGENTIC_TOOLS design pass while reading the real code, not by a test. serveStaticFile
   (main.ts ~4438) guards the preview server with a naive case-lowered startsWith and NO trailing
