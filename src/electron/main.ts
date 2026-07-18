@@ -1938,6 +1938,20 @@ async function hasExistingGrant(scope: PermissionRequest["scope"], target: strin
   return grants.some((grant) => grant.scope === scope && grant.target === target && (!projectPath || sameResolvedPath(grant.projectPath ?? "", projectPath)));
 }
 
+/** True when a filesystem.write grant already covers this exact project
+ *  folder, whatever `target` label it was stored under (CORE.12). Writes are
+ *  authorised by the FOLDER the user picked, not by the string a given call
+ *  site happens to pass; establishWritableWorkspace stores "project-tools"
+ *  while the build pipeline gates on the path itself. Path-only, so it can
+ *  never widen a grant to a different folder. */
+async function hasWorkspaceWriteGrant(projectPath?: string): Promise<boolean> {
+  if (!projectPath) return false;
+  const grants = await listPermissions();
+  return grants.some(
+    (grant) => grant.scope === "filesystem.write" && Boolean(grant.projectPath) && sameResolvedPath(grant.projectPath ?? "", projectPath)
+  );
+}
+
 /** Central gate for a permission-scoped action inside a run, per the five
  *  permission modes (docs/FABLE_PLANS.md section 24):
  *  - "bypass": always proceed, never prompts.
@@ -1965,7 +1979,16 @@ async function gatePermission(args: {
   let shouldPrompt: boolean;
   if (mode === "ask") shouldPrompt = true;
   else if (mode === "edits") shouldPrompt = !isEditScope;
-  else /* auto */ shouldPrompt = !(await hasExistingGrant(scope, target, projectPath));
+  // CORE.12 fix: auto mode was asking EVERY time even with a valid standing
+  // grant. The call sites pass the workspace PATH as `target`, but
+  // establishWritableWorkspace stores the grant with target "project-tools"
+  // (main.ts ~1715), so hasExistingGrant never matched and shouldPrompt was
+  // always true. In the GUI that means a pointless prompt on every build; in
+  // any headless context it means a 5-minute wait that then denies. Match on
+  // the GRANTED WORKSPACE instead: a filesystem.write grant for this exact
+  // project path is what actually authorises the write, whatever label the
+  // call site used.
+  else /* auto */ shouldPrompt = !(await hasExistingGrant(scope, target, projectPath)) && !(await hasWorkspaceWriteGrant(projectPath));
 
   if (!shouldPrompt) return { proceed: true };
 
@@ -8697,6 +8720,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     }
     let files: GeneratedFile[] = [];
     let projectResult: ProjectToolResult | undefined;
+    // CORE.12: the honest reason nothing was written, set at whichever gate
+    // actually blocked (permission vs extraction) and reported verbatim.
+    let writeBlockedReason: string | undefined;
     let repairCount = 0;
     if (permissionMode === "plan") {
       // Plan mode: no extraction, no writes, no commands, no repair/recovery —
@@ -8726,9 +8752,14 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
         emitTimeline(stream, timelineText(`I’ve got the generated files. Writing them into ${writable?.name ?? "the app workspace"} now.`));
         projectResult = await writeProjectFiles(files, writable, { singleFile });
       } else {
+        // CORE.12: record WHY nothing was written. Without this the run ends
+        // up reporting an extraction failure for what was actually a denied
+        // or unanswered permission, which sent Fable hunting the wrong bug.
+        writeBlockedReason = `Permission to write into ${writable?.name ?? "the workspace"} was denied or went unanswered, so ${files.length} generated file${files.length === 1 ? "" : "s"} ${files.length === 1 ? "was" : "were"} not written. The model's work is in the stage output above.`;
         emitTimeline(stream, timelineText(`Permission denied — skipped writing ${files.length} file${files.length === 1 ? "" : "s"}.`));
       }
     } else {
+      writeBlockedReason = "The model replied, but no complete file could be extracted from its output, so the folder was left unchanged.";
       emitTimeline(stream, timelineText("I could not extract a complete project file from the model output, so I am leaving the folder unchanged."));
     }
     // Self-healing: if verification failed, feed the errors back and retry.
@@ -8833,8 +8864,12 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       fanout: fanoutMeta
     };
     if (!projectResult) {
-      run.assistantText = "I ran this through the build pipeline, but no complete project files were extracted. I left the folder unchanged.";
-      run.warnings = [...(run.warnings ?? []), "No complete files were extracted from the build stages; nothing was written."];
+      // CORE.12: say the ACTUAL reason. This used to hardcode "no complete
+      // project files were extracted" for every no-write outcome, including
+      // permission denials, which is the app lying about its own failure.
+      const reason = writeBlockedReason ?? "No complete files were extracted from the build stages; nothing was written.";
+      run.assistantText = `I ran this through the build pipeline but did not change any files. ${reason}`;
+      run.warnings = [...(run.warnings ?? []), reason];
     }
     if (permissionMode === "plan") {
       // Graph-driven stages keep the graph node's own id (docs/FABLE_PLANS.md
