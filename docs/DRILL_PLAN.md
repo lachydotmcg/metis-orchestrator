@@ -120,7 +120,7 @@ gets done.
 - [ ] **CORE.4 - Agentic tool loop.** Give routed models real tools: read, list, targeted edit,
   write, run a command, verify. Reuse the shipped P10.2 MCP loop shape rather than inventing a
   second one. Design: docs/AGENTIC_TOOLS.md.
-- [ ] **CORE.5 - Safety net before it writes.** Path containment inside the workspace, a git
+- [x] **CORE.5 - Safety net before it writes. SHIPPED + VERIFIED (projectSnapshot.ts, full revert round trip proven).** Path containment inside the workspace, a git
   snapshot before an agentic run touches files, an obvious revert, and secrets kept out of reach.
   Nothing in CORE.4 ships without this.
 - [x] **CORE.6 - A real sandbox + test prompts.** SHIPPED at Documents/metis-sandbox. A genuine small project outside the repo with
@@ -162,7 +162,7 @@ gets done.
   answer was returned." The app knows exactly what is wrong and how to fix it, and says something
   vague instead. Surface the placeholder text as the assistant message. Highest value per line in
   the codebase, and it turns CORE.10's failure mode from a dead end into an actionable message.
-- [ ] **CORE.9 - SECURITY: path containment is inconsistent, and one check is broken.** Found by
+- [x] **CORE.9 - FIXED + PROVEN: path containment consolidated, sibling-prefix traversal closed, symlinks resolved.** Found by
   the AGENTIC_TOOLS design pass while reading the real code, not by a test. serveStaticFile
   (main.ts ~4438) guards the preview server with a naive case-lowered startsWith and NO trailing
   separator check, so a sibling folder whose name merely starts with the workspace name (project
