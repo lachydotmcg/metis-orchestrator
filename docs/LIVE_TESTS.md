@@ -205,3 +205,6 @@ Settings > Providers.
 - [ ] **Thumbs + escape hatch.** Every completed answer has thumbs up/down next to copy - one
   vote per turn, counted in the noticing panel's signal table. And a near-match-served answer
   shows a quiet "Answer my exact prompt instead" link underneath; clicking re-asks for real.
+- [ ] **Near-match v2 regression (the Test bug).** Prewarm + near-match ON. Ask a question,
+  let the draft land, get the answer, then send just "Test" as the next message. It must do a
+  NORMAL call - never serve the previous turn's answer (this exact case served stale in v1).

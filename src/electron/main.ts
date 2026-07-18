@@ -8930,7 +8930,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // one (cosmetic last edit) and serve with an honest near-match label.
   let servedSimilarity: number | null = null;
   if (!servedDraft && oracleServeEligible && (await readStoreValue<boolean>("oracleSimilarityEnabled", false))) {
-    const near = await takeSimilarServableDraft(model, sessionPrompt);
+    const near = await takeSimilarServableDraft(model, sessionPrompt, prompt);
     if (near) {
       servedDraft = { text: near.text, thoughts: near.thoughts };
       servedSimilarity = near.similarity;
@@ -10022,8 +10022,10 @@ function abortOracleSpeculativeWork(): void {
  *  each is served at most once (one-shot) within a short TTL. */
 // v0.4 (DRILL_PLAN B12.3): `prompt` keeps the exact assembled prompt the
 // draft was generated from, so a near-miss send can be similarity-checked
-// against it. Memory cost is one assembled prompt string - fine.
-let servableDraft: { model: string; promptHash: string; prompt?: string; text: string; thoughts?: string; at: number } | null = null;
+// against it; `userDraft` keeps the RAW text the user had typed - the
+// near-match comparison runs on user text, not assembled haystacks (Lachy's
+// stale-serve catch). Memory cost is two strings - fine.
+let servableDraft: { model: string; promptHash: string; prompt?: string; userDraft?: string; text: string; thoughts?: string; at: number } | null = null;
 
 /** One-shot claim of a cached servable draft for an exact (model, prompt
  *  hash) match. Clears the cache on claim so a stale draft can never be
@@ -10049,27 +10051,50 @@ function takeServableDraft(model: string, promptHash: string): { text: string; t
 // refuses whenever the edit introduces/removes negations, numbers, or other
 // meaning-flippers that embeddings under-punish.
 const ORACLE_SIMILARITY_THRESHOLD = 0.97;
-const ORACLE_SIMILARITY_TAIL_CONTEXT = 200; // shared chars kept before the divergence so short tails embed stably
 // Words whose appearance in EITHER side's unique set vetoes serving: cheap
 // three-character edits ("now WITHOUT react") can flip meaning while barely
 // moving an embedding.
 const ORACLE_SIMILARITY_GUARD_RE = /^(no|not|never|none|without|don'?t|doesn'?t|isn'?t|aren'?t|won'?t|can'?t|cannot|except|instead|remove|delete|drop|stop|undo|opposite|un\w{2,})$/i;
 
-/** One-shot claim of the servable draft for a NEAR-MISS prompt: same model,
- *  fresh, lexical guard clean, and the divergent tails embed above the
- *  threshold. Resolves null (and never throws) on any miss/guard/embedding
- *  failure - the caller just makes the normal call. */
-async function takeSimilarServableDraft(model: string, sentPrompt: string): Promise<{ text: string; thoughts?: string; similarity: number } | null> {
+/** One-shot claim of the servable draft for a NEAR-MISS prompt. Rebuilt after
+ *  Lachy's live catch: v1 embedded the assembled prompts' divergent tails
+ *  WITH 200 chars of shared runway, so a short unrelated prompt ("Test")
+ *  near-matched the previous turn's draft - identical context drowned out
+ *  the difference that mattered. v2 compares what the USER actually typed:
+ *  1. CONTEXT INTEGRITY: the assembled prompts must be identical except for
+ *     the trailing user-prompt region (common prefix reaches to within the
+ *     user-text delta + slack). A conversation that moved on can never serve
+ *     a stale draft, no matter how similar the words are.
+ *  2. Length-ratio guard: a 4-char send vs a 17-char draft is refused flat.
+ *  3. Lexical guard on the USER texts' unique words (negations/numbers).
+ *  4. Embedding similarity of the USER texts only - the edit is the whole
+ *     signal now, undiluted by shared context.
+ *  Resolves null (never throws) on any miss/guard/embedding failure. */
+async function takeSimilarServableDraft(model: string, sentPrompt: string, sentUserPrompt: string): Promise<{ text: string; thoughts?: string; similarity: number } | null> {
   try {
-    if (!servableDraft || !servableDraft.prompt) return null;
+    if (!servableDraft || !servableDraft.prompt || !servableDraft.userDraft) return null;
     if (Date.now() - servableDraft.at > SERVABLE_DRAFT_TTL_MS) return null;
     if (servableDraft.model !== model) return null;
     const draftPrompt = servableDraft.prompt;
+    const draftUser = servableDraft.userDraft.trim();
+    const sentUser = sentUserPrompt.trim();
+    if (!draftUser || !sentUser) return null;
 
-    // Lexical guard on the words unique to either prompt.
+    // 1. Context integrity: everything up to the user-text region must match.
+    let commonPrefix = 0;
+    const shorter = Math.min(draftPrompt.length, sentPrompt.length);
+    while (commonPrefix < shorter && draftPrompt[commonPrefix] === sentPrompt[commonPrefix]) commonPrefix += 1;
+    const userDelta = Math.max(draftUser.length, sentUser.length) + 64;
+    if (commonPrefix < shorter - userDelta) return null;
+
+    // 2. Length ratio: wildly different lengths are different prompts.
+    const ratio = Math.min(draftUser.length, sentUser.length) / Math.max(draftUser.length, sentUser.length);
+    if (ratio < 0.5) return null;
+
+    // 3. Lexical guard on the words unique to either USER text.
     const wordsOf = (text: string): Set<string> => new Set(text.toLowerCase().split(/[^a-z0-9']+/).filter(Boolean));
-    const draftWords = wordsOf(draftPrompt);
-    const sentWords = wordsOf(sentPrompt);
+    const draftWords = wordsOf(draftUser);
+    const sentWords = wordsOf(sentUser);
     const uniques: string[] = [];
     for (const word of draftWords) if (!sentWords.has(word)) uniques.push(word);
     for (const word of sentWords) if (!draftWords.has(word)) uniques.push(word);
@@ -10077,12 +10102,8 @@ async function takeSimilarServableDraft(model: string, sentPrompt: string): Prom
       if (ORACLE_SIMILARITY_GUARD_RE.test(word) || /\d/.test(word)) return null;
     }
 
-    // Embed only the divergent tails (plus a little shared runway).
-    let divergeAt = 0;
-    const shorter = Math.min(draftPrompt.length, sentPrompt.length);
-    while (divergeAt < shorter && draftPrompt[divergeAt] === sentPrompt[divergeAt]) divergeAt += 1;
-    const from = Math.max(0, divergeAt - ORACLE_SIMILARITY_TAIL_CONTEXT);
-    const vectors = await embedTexts([draftPrompt.slice(from), sentPrompt.slice(from)]);
+    // 4. Embed the USER texts alone - no shared-context dilution.
+    const vectors = await embedTexts([draftUser, sentUser]);
     if (!vectors || vectors.length !== 2) return null;
     const similarity = cosineSimilarity(vectors[0], vectors[1]);
     if (similarity < ORACLE_SIMILARITY_THRESHOLD) return null;
@@ -10229,7 +10250,7 @@ async function draftModel(
       // prompt (raw-draft prompts can never hash-match a real run) and the
       // model finished on its own rather than being truncated by the cap.
       if (assembled && doneReason === "stop") {
-        servableDraft = { model: trimmedModel, promptHash: sha256(assembled), prompt: assembled, text: trimmedOutput, thoughts: trimmedThoughts, at: Date.now() };
+        servableDraft = { model: trimmedModel, promptHash: sha256(assembled), prompt: assembled, userDraft: trimmedDraft, text: trimmedOutput, thoughts: trimmedThoughts, at: Date.now() };
       }
       return trimmedThoughts ? { text: trimmedOutput, thoughts: trimmedThoughts } : { text: trimmedOutput };
     } finally {
@@ -10332,7 +10353,7 @@ async function draftCloudModel(model: string, draft: string, context?: PrewarmCo
       const { output, thoughts } = splitThinkTaggedOutput(text ?? "");
       if (!output.trim()) return null;
       // Cloud responses are always complete (no num_predict cap) - servable.
-      servableDraft = { model: resolved, promptHash: sha256(assembled), prompt: assembled, text: output, thoughts, at: Date.now() };
+      servableDraft = { model: resolved, promptHash: sha256(assembled), prompt: assembled, userDraft: trimmedDraft, text: output, thoughts, at: Date.now() };
       return thoughts ? { text: output, thoughts } : { text: output };
     } finally {
       clearTimeout(timeout);

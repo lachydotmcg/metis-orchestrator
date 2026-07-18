@@ -175,6 +175,12 @@ The B2.7 fix only patched the Manager-action path, not this (the real upstream c
   serves one-shot; run.oracleNearMatch carries the similarity, renderer labels "Oracle answered
   instantly, Xms - near match 98%", audit line carries it too; fail-soft everywhere (no embed
   model = normal call). Follow-ups: the background-verify + visible-correction endgame. NEEDS-LIVE-TEST.
+  V2 REBUILD (Lachy live-caught a stale serve: typing Test served the previous turns draft -
+  the 200-char shared runway diluted the embedding until unrelated prompts cleared 0.97).
+  Near-match now compares the USER texts only, with three gates before embedding: context
+  integrity (assembled prompts identical outside the user-text region - a conversation that
+  moved on can never serve stale), a 0.5 length-ratio floor, and the lexical guard. servable
+  slot carries userDraft for this.
   UPDATE (gym drill): the one-click answer-my-exact-prompt escape hatch SHIPPED - a quiet
   underlined link under every near-match-served answer re-asks via the regenerate plumbing
   (so the redo is also a recorded preference signal).
