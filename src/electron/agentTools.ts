@@ -210,9 +210,31 @@ export function parseAgentToolCall(text: string): AgentToolCall | null {
   // prose or a closing fence cannot break the parse.
   const start = text.lastIndexOf("{", markerIndex);
   if (start < 0) return null;
+  // Brace matching must IGNORE braces inside string values. The find/replace
+  // arguments carry source code, which is full of them: the first real tool
+  // call this ever saw was
+  //   {"tool":"edit_file","find":"function calculateStreak(habit) {"}
+  // and a naive counter treated that trailing brace as nesting, never
+  // balanced, and silently dropped a perfectly good edit. Track string state
+  // and backslash escapes.
   let depth = 0;
+  let inString = false;
+  let escaped = false;
   for (let index = start; index < text.length; index += 1) {
     const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
     if (char === "{") depth += 1;
     else if (char === "}") {
       depth -= 1;

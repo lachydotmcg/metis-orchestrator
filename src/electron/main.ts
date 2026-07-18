@@ -87,6 +87,7 @@ import { QUICKASK_HTML } from "./quickask-page.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
+import { agentToolsPromptBlock, executeAgentTool, parseAgentToolCall } from "./agentTools.js";
 import { describeSnapshot, revertSnapshot, snapshotBeforeWrite, type ProjectSnapshot as MetisProjectSnapshot } from "./projectSnapshot.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -2758,6 +2759,9 @@ async function probeMcpServer(installedPackageId: string): Promise<McpProbeResul
 // spawn/handshake plumbing as probeMcpServer) and feeds back.
 
 const MCP_MAX_TOOL_CALLS_PER_RUN = 4;
+// CORE.4: same cap idea as MCP, separate knob. A look-edit-verify cycle
+// needs a few more turns than a single data fetch.
+const AGENT_MAX_TOOL_CALLS_PER_RUN = 6;
 const MCP_TOOL_CALL_TIMEOUT_MS = 30_000;
 /** Leak guard: a run toolset's child is force-killed after this long even if
  *  the normal close path was skipped (e.g. a Stop-button cancel between
@@ -9165,6 +9169,15 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // once for this run and advertise its tools in the prompt. Appending here,
   // BEFORE the Oracle hash check below, also means an Oracle draft (drafted
   // without the tool block) can never be served for a tool-enabled prompt.
+  // CORE.4: advertise the built-in project tools alongside MCP, and for the
+  // same reason it is done HERE - appending before the Oracle hash check
+  // means a draft made without the tool block can never be served for a
+  // tool-enabled prompt. Requires a writable project (there is nothing to
+  // read or edit otherwise) and the default-off flag.
+  if (writableWorkspace && (await readStoreValue<boolean>("agentToolsEnabled", false))) {
+    sessionPrompt += `\n\n${agentToolsPromptBlock()}`;
+    emitTimeline(stream, timelineText(`Project tools available this turn: read_file, list_files, edit_file in ${writableWorkspace.name}.`));
+  }
   const mcpToolsets = (await readStoreValue<boolean>("mcpToolsEnabled", false)) ? await connectMcpToolsetsForRun() : [];
   if (mcpToolsets.length > 0) {
     sessionPrompt += mcpToolPromptBlock(mcpToolsets);
@@ -9301,6 +9314,81 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       closeMcpToolsets(mcpToolsets);
     }
   }
+
+  // CORE.4 phase 1: the agentic tool loop. Same shape as the MCP loop above
+  // on purpose - one directive protocol, one cap, one visible timeline line
+  // per call. What it adds is the ability to LOOK before changing: the live
+  // sweep caught a model inventing a constant's name because it could not
+  // read the file it was editing. read_file / list_files / edit_file close
+  // that. No run_command in this phase.
+  //
+  // Writes are NOT performed here. edit_file returns a pendingWrite that goes
+  // through writeProjectFiles at the end, so every tool edit inherits the
+  // CORE.5 snapshot safety net rather than reimplementing it.
+  const agentToolWrites = new Map<string, string>();
+  let agentToolProjectResult: ProjectToolResult | undefined;
+  const agentToolsWorkspace = writableWorkspace;
+  if (
+    agentToolsWorkspace &&
+    providerResult.source !== "placeholder" &&
+    (await readStoreValue<boolean>("agentToolsEnabled", false))
+  ) {
+    for (let callIndex = 0; callIndex < AGENT_MAX_TOOL_CALLS_PER_RUN; callIndex++) {
+      const requested = parseAgentToolCall(providerResult.output);
+      if (!requested) break;
+      const callStart = Date.now();
+      const outcome = await executeAgentTool(agentToolsWorkspace.path, requested);
+      const callMs = Date.now() - callStart;
+      if (outcome.pendingWrite) {
+        // Stage it; later calls to the same file build on the newer content.
+        agentToolWrites.set(outcome.pendingWrite.relativePath, outcome.pendingWrite.content);
+      }
+      emitTimeline(
+        stream,
+        timelineText(`Tool ${requested.tool}${requested.path ? ` on ${requested.path}` : ""} ${outcome.ok ? "ok" : "refused"} in ${callMs}ms.`)
+      );
+      await appendAudit(outcome.ok ? "info" : "warning", "agent.tool.call", `Agent tool ${requested.tool} ${outcome.ok ? "ok" : "refused"}.`, {
+        tool: requested.tool,
+        path: requested.path,
+        durationMs: callMs,
+        ok: outcome.ok
+      });
+      const resultText = outcome.text.length > 8000 ? `${outcome.text.slice(0, 8000)}\n[truncated]` : outcome.text;
+      sessionPrompt += `\n\nYou called ${requested.tool}. ${outcome.ok ? "Result" : "It was refused"}:\n${resultText}\n\n${
+        callIndex + 1 >= AGENT_MAX_TOOL_CALLS_PER_RUN
+          ? "That was the last tool call allowed this turn. Answer now, summarising what you changed."
+          : // CORE.4: models narrate instead of acting if you let them. The
+            // first live run read the file then replied "Now I'll rename every
+            // occurrence" and stopped, having changed nothing, because the
+            // continuation invited a prose answer. Make prose mean DONE.
+            "If any change still needs making, reply with ONLY the next tool call JSON and no prose. Do NOT describe what you are about to do - do it. Reply in prose only when every change has already been applied by a tool call."
+      }`;
+      providerResult = await invokeProvider(
+        { provider: providerResult.provider, model: providerResult.model, prompt: sessionPrompt, images: chatImages },
+        stream,
+        cancelScope
+      );
+    }
+    // Apply any staged edits through the normal, snapshotted write path.
+    if (agentToolWrites.size > 0) {
+      const files = [...agentToolWrites.entries()].map(([path, content]) => ({ path, content }));
+      const gate = await gatePermission({
+        stream,
+        mode: permissionMode,
+        scope: "filesystem.write",
+        target: agentToolsWorkspace.path,
+        projectPath: agentToolsWorkspace.path,
+        detail: `Apply ${files.length} tool edit${files.length === 1 ? "" : "s"} in ${agentToolsWorkspace.name}?`
+      });
+      if (gate.proceed) {
+        agentToolProjectResult = await writeProjectFiles(files, agentToolsWorkspace);
+        emitTimeline(stream, timelineText(`Applied ${files.length} tool edit${files.length === 1 ? "" : "s"}.`));
+      } else {
+        emitTimeline(stream, timelineText(`Permission denied - the ${files.length} tool edit(s) were not applied.`));
+      }
+    }
+  }
+
   const providerMs = Date.now() - providerStart;
   // General-chat action proposals (bug L6): reuses the exact Manager-tab
   // machinery (extractManagerActions / validateManagerAction / MANAGER_ACTION_KINDS
@@ -9325,7 +9413,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const providerIndex = steps.findIndex((step) => step.id === "provider");
   if (providerIndex >= 0) steps[providerIndex] = completeStep(steps[providerIndex], providerResult.auditId);
 
-  let projectResult: ProjectToolResult | undefined;
+  let projectResult: ProjectToolResult | undefined = agentToolProjectResult;
   let noProjectFilesWritten = false;
   const projectToolsIndex = steps.findIndex((step) => step.id === "project-tools");
   if (projectToolsIndex >= 0 && permissionMode === "plan") {
