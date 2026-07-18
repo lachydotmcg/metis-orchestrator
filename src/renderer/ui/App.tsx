@@ -549,7 +549,10 @@ type ConversationTurn = {
    *  record, so raw base64 never bloats long-term storage. Undefined once
    *  the app reloads and this turn is rehydrated from storage. */
   attachments?: SessionAttachment[];
-  status: "running" | "complete" | "error";
+  /** "stopped" is the user's own Stop: a distinct state from "error" on
+   *  purpose. Both end the run, but a stop keeps whatever had already streamed
+   *  and reads as neutral, while an error still surfaces red and honestly. */
+  status: "running" | "complete" | "error" | "stopped";
   run?: SessionRun;
   streamEvents?: SessionTimelineEvent[];
   streamStages?: NonNullable<SessionRun["stages"]>;
@@ -660,6 +663,11 @@ function applyStreamEventToTurn(turn: ConversationTurn, event: SessionStreamEven
     return { ...turn, id: event.run.id, status: "complete", run: event.run };
   }
   if (event.kind === "error") {
+    // A user Stop is not a failure. The spread already preserved
+    // liveAssistantText (the streamed answer was never deleted, only hidden by
+    // PendingRun's error branch), so flipping to "stopped" and leaving `error`
+    // undefined is all it takes to keep what the user was reading on screen.
+    if (event.cancelled) return { ...turn, status: "stopped", error: undefined };
     return { ...turn, status: "error", error: event.message };
   }
   if (event.kind === "permission_request") {
@@ -4617,13 +4625,26 @@ function NewSessionWorkspace({
       }
       onConversationsChanged?.();
     } catch (error) {
+      // The rejected invoke lands here as well as the stream's error event, so
+      // this site MUST make the same stop-vs-failure distinction. If it did not,
+      // it would overwrite the "stopped" status that applyStreamEventToTurn just
+      // set and re-introduce Electron's wrapped "Error invoking remote
+      // method..." string, undoing the fix a few milliseconds after it applied.
+      const stopped = isUserCancellation(error);
       updatePendingTurns(runKey, (current) =>
         current.map((turn) =>
           turn.id === turnId
             ? {
                 ...turn,
-                status: "error",
-                error: error instanceof Error ? error.message : String(error)
+                status: stopped ? "stopped" : "error",
+                // Keep the stream event's message when it already landed. It is
+                // the provider's real words ("DeepSeek returned 503 Service
+                // Unavailable"), while the rejected invoke only carries
+                // Electron's wrapping of them ("Error invoking remote method
+                // 'metis-session:run-stream': Error: ..."). Same clobber the
+                // stopped case had, one layer over: the useful text arrives
+                // first and the uglier duplicate overwrites it.
+                error: stopped ? undefined : (turn.error ?? (error instanceof Error ? error.message : String(error)))
               }
             : turn
         )
@@ -6716,6 +6737,21 @@ const ConversationTurnCard = memo(function ConversationTurnCard({
 });
 
 function PendingRun({ turn }: { turn: ConversationTurn }): JSX.Element {
+  // Checked BEFORE the error branch. A stopped run keeps everything that had
+  // already streamed and adds a neutral note, because the user asked it to
+  // stop and throwing away the answer they were reading is a punishment for
+  // clicking the button. The error branch below is deliberately untouched:
+  // a genuine failure still replaces the bubble, since a half-answer from a
+  // provider that died mid-stream looks identical to a finished one and
+  // presenting it as the model's reply would be the dishonest version of this.
+  if (turn.status === "stopped") {
+    return (
+      <>
+        {turn.streamEvents?.length || turn.liveAssistantText || turn.liveThoughtText ? <LiveRunTimeline turn={turn} /> : null}
+        <small className="session-stopped">Stopped. This is as far as it got.</small>
+      </>
+    );
+  }
   if (turn.status === "error") {
     return <small className="session-warning">{turn.error ?? "Something went wrong on that route."}</small>;
   }
@@ -13737,8 +13773,19 @@ function ManagerActionCard({ action, onNavigate }: { action: ManagerAction; onNa
       if (action.kind === "add_todo") {
         setStatus({ kind: "done", message: "Added to your board." });
       } else if (action.kind === "open_view") {
-        if (result.view) onNavigate(result.view as NavKey);
-        setStatus({ kind: "done", message: `Opened ${result.view ?? action.view ?? "view"}.` });
+        // A model-proposed open_view can still name a view that V1_HIDDEN_NAV
+        // hides, because MANAGER_ACTION_VIEWS in main.ts predates the v1 cut and
+        // validates against the full NavKey set. Refuse here rather than
+        // navigating: the alternative is stranding the user on a surface with no
+        // sidebar entry to leave by, and reporting "Opened Routines" for a view
+        // that v1 does not have is a lie the approval card would be telling.
+        const target = result.view as NavKey | undefined;
+        if (target && !isNavVisible(target)) {
+          setStatus({ kind: "error", message: `${target} is not available in this version.` });
+        } else if (target) {
+          onNavigate(target);
+          setStatus({ kind: "done", message: `Opened ${result.view ?? action.view ?? "view"}.` });
+        }
       } else {
         setStatus({ kind: "done", message: "Started a run." });
       }

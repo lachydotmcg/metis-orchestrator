@@ -3715,6 +3715,15 @@ p {
   color: #ffd8a3 !important;
 }
 
+/* A user's own Stop is not a failure, so it must not borrow the warning colour.
+   Muted and quiet: it marks where the answer ended, it does not report a problem. */
+.session-stopped {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted) !important;
+  font-size: 11.5px;
+}
+
 .conversation-feed {
   display: grid;
   gap: 20px;

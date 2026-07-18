@@ -810,6 +810,14 @@ export type SessionStreamEvent =
   | {
       kind: "error";
       message: string;
+      /** True when this "error" is the user's own Stop rather than a failure.
+       *  Stamped in main, at the one place that can tell the difference
+       *  authoritatively (isCancellationError at the run-stream IPC catch),
+       *  because the renderer would otherwise have to substring-match an
+       *  Electron-wrapped message to guess. A stopped run keeps the text that
+       *  already streamed and reads as stopped; a real failure is untouched and
+       *  still surfaces honestly. */
+      cancelled?: boolean;
     }
   | {
       kind: "permission_request";

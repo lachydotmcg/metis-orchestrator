@@ -9778,10 +9778,17 @@ async function runLabExperiment(prompt?: string): Promise<LabExperimentResult> {
 let routineTimer: ReturnType<typeof setTimeout> | undefined;
 let routineTickRunning = false;
 
-// Tray "Pause background routines" state (persisted so it survives restarts).
-// Cached in memory after first read; the scheduler tick checks this flag
+// Tray "Pause background work" state (persisted so it survives restarts).
+// Cached in memory after first read; BOTH scheduler chains check this flag
 // before firing anything due, so a pause genuinely stops background runs
 // rather than just hiding them in the UI.
+//
+// The store key is still "routinesPaused" for back-compat with anyone who has
+// already toggled it, but the meaning is now every unattended chain: routines
+// AND loops. It used to cover routines only, which made the tray a half-truth -
+// it reported "routines paused" while a loop carried on spending money in the
+// background, and a pause switch that leaves the most autonomous thing in the
+// app running is worse than no switch at all, because it is trusted.
 let routinesPausedCache: boolean | undefined;
 
 async function isRoutinesPaused(): Promise<boolean> {
@@ -10365,6 +10372,12 @@ async function runLoopTick(): Promise<void> {
   if (loopTickRunning) return;
   loopTickRunning = true;
   try {
+    // The tray's pause covers loops too. Deliberately checked INSIDE the tick
+    // rather than by declining to re-arm the chain, matching runRoutineTick:
+    // the timer keeps running so unpausing takes effect within one slice
+    // instead of needing something to restart the chain. A paused loop simply
+    // does not fire and keeps its nextWakeAt, so it resumes where it was.
+    if (await isRoutinesPaused()) return;
     const loops = await readLoops();
     const now = new Date();
     const due = loops.filter(
@@ -12085,7 +12098,10 @@ let isQuitting = false;
 
 function trayStatusLabel(paused: boolean): string {
   if (activeSessionRunCount > 0) return "running";
-  if (paused) return "routines paused";
+  // "background work", not "routines": the pause covers loops as well, and the
+  // tray is the only surface a headless/tray-mode Metis has, so this label is
+  // the whole report.
+  if (paused) return "background work paused";
   return "idle";
 }
 
@@ -12132,7 +12148,7 @@ async function refreshTrayMenu(): Promise<void> {
       { type: "separator" },
       { label: "Open Metis", click: () => void openOrFocusMainWindow() },
       {
-        label: paused ? "Resume background routines" : "Pause background routines",
+        label: paused ? "Resume background work" : "Pause background work (routines and loops)",
         click: () => void setRoutinesPaused(!paused)
       },
       {
@@ -12624,7 +12640,18 @@ app.whenReady().then(async () => {
       const run = await runSessionTracked(input, { emit });
       return run;
     } catch (error) {
-      emit({ kind: "error", message: error instanceof Error ? error.message : String(error) });
+      // Stamp WHY the run ended here, because this is the only place that still
+      // knows. isCancellationError is authoritative on the main side; by the
+      // time this reaches the renderer it has been flattened into an
+      // Electron-wrapped string ("Error invoking remote method ... Stopped by
+      // user.") that the renderer would have to substring-match to guess at.
+      // Without this flag a user's own Stop is indistinguishable from a crash,
+      // which is why stopping used to blank the answer and show a red error.
+      emit({
+        kind: "error",
+        message: error instanceof Error ? error.message : String(error),
+        cancelled: isCancellationError(error)
+      });
       throw error;
     }
   });
