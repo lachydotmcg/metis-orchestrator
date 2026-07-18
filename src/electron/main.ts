@@ -11825,7 +11825,50 @@ async function setGatewayEnabled(enabled: boolean): Promise<GatewayStatus> {
   return getGatewayStatus();
 }
 
+// Headless CLI mode (--cli): a single scripted session run, invoked as
+// `npm run cli -- chat "..."` / `-- build "..." --project <path>` / `--
+// doctor` (see package.json's "cli" script and src/electron/cli.ts's module
+// doc comment for the full design). Checked once here, at the very top of
+// app.whenReady(), so a --cli invocation returns before a single ipcMain
+// handler is registered and before createTray()/createWindow() further down
+// this same callback ever run — no window, no tray, no routine scheduler,
+// no gateway autostart, no global shortcut. CLI mode never needs any of
+// that: it calls the exact same pipeline functions (runSessionTracked etc.)
+// directly, in-process, instead of over IPC from a renderer that doesn't
+// exist in this mode.
+const cliMode = process.argv.includes("--cli");
+
 app.whenReady().then(async () => {
+  if (cliMode) {
+    let code = 1;
+    try {
+      const runtime: CliRuntime = {
+        runSessionTracked,
+        establishWritableWorkspace,
+        readProjectWorkspace,
+        respondToPermissionPrompt,
+        respondToUserQuestion,
+        requestSessionCancel,
+        readStoreValue,
+        listOllamaModels,
+        listSecrets,
+        getPolicyStatus,
+        providerInfo,
+        userDataPath: app.getPath("userData")
+      };
+      code = await runCliMode(process.argv, runtime);
+    } catch (error) {
+      // runCliMode is documented to never throw, but this is a defensive
+      // backstop (same belt-and-suspenders style as the rest of this file)
+      // so a bug in it can never leave the process hanging open with no
+      // window and nothing left for the user to close.
+      console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+      code = 1;
+    }
+    app.exit(code);
+    return;
+  }
+
   ipcMain.handle("metis-policy:get-sample-decision", () => sampleDecision);
   ipcMain.handle("metis-policy:get-status", (_event, profilePath?: string) => getPolicyStatus(profilePath));
   ipcMain.handle("metis-policy:decide", (_event, input: PolicyDecisionInput) => decidePolicy(input));
