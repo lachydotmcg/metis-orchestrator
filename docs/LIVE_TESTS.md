@@ -208,3 +208,17 @@ Settings > Providers.
 - [ ] **Near-match v2 regression (the Test bug).** Prewarm + near-match ON. Ask a question,
   let the draft land, get the answer, then send just "Test" as the next message. It must do a
   NORMAL call - never serve the previous turn's answer (this exact case served stale in v1).
+
+## 16. Per-conversation project folders (added 2026-07-17)
+
+- [ ] **The haunting is over.** Open the Project context 3-dots on an EXISTING conversation:
+  it should list only folders belonging to that conversation, never metis-test3 from some
+  other session. Old globally-attached folders are gone by design (re-add per conversation).
+- [ ] **New session starts folderless.** Start a new session: the folder chip above the prompt
+  box should read "No project folder" with a + beside it. Attach one, send a message: that
+  folder is now bound to that conversation.
+- [ ] **Switching conversations switches folders.** Give conversation A folder metis-test4 and
+  conversation B folder metis-test3, then click between them. The chip/context should follow
+  the conversation each time, and a build in A must write into A's folder.
+- [ ] **Mid-conversation attach binds.** In an existing conversation, use the 3-dots to choose
+  a different folder. Reopen the conversation later - it should still have that folder.
