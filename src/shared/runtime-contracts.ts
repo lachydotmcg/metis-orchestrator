@@ -870,6 +870,12 @@ export interface SessionRun {
    *  (same pinned local model, same default sampling) instead of a fresh
    *  generation. The renderer labels these honestly. */
   oracleServed?: boolean;
+  /** Real suggested next messages (docs/DRILL_PLAN.md CORE.1) - written by
+   *  the SAME model that answered, from the actual exchange, replacing the
+   *  old canned heuristics ("Add a second page"). Two or three short things
+   *  the user might genuinely say next. Absent when the model gave nothing
+   *  usable: silence beats a wrong guess. */
+  suggestions?: string[];
   /** Oracle v0.4 (DRILL_PLAN B12.3): set alongside oracleServed when the
    *  serve was a SIMILARITY match rather than an exact hash match - the
    *  cosine similarity (0..1) of the drafted prompt's divergent tail vs the

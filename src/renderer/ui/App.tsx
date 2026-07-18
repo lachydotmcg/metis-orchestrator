@@ -4261,7 +4261,12 @@ function NewSessionWorkspace({
     if (lastConversationPrompt) return lastConversationPrompt;
     return [...history].reverse().find((turn) => turn.role === "user")?.content;
   }, [conversation, history]);
+  // Real follow-ups (docs/DRILL_PLAN.md CORE.1): written by the model that
+  // answered, from the actual exchange. The old canned heuristic stays ONLY
+  // as the fallback for runs that predate this (or whose model gave nothing
+  // usable), so existing conversations do not suddenly lose their hint.
   const composerSuggestion = useMemo(() => suggestNextStep(lastRun, lastUserMessage), [lastRun, lastUserMessage]);
+  const followups = useMemo(() => (sessionBusy ? [] : lastRun?.suggestions ?? []), [lastRun, sessionBusy]);
 
   useEffect(() => {
     const el = homeScrollRef.current;
@@ -4884,6 +4889,8 @@ function NewSessionWorkspace({
           onChooseProjectFolder={chooseProjectFolder}
           activeConversationId={activeConversationId}
           suggestion={composerSuggestion}
+          followups={followups}
+          onFollowup={(text) => void submitPrompt(text)}
           suggestionResetKey={`${lastRun?.id ?? "none"}::${activeConversationId ?? "none"}`}
           onSubmit={submitPrompt}
           permissionMode={permissionMode}
@@ -4953,6 +4960,8 @@ function SessionComposer({
   activeConversationId,
   suggestion,
   suggestionResetKey,
+  followups,
+  onFollowup,
   onSubmit,
   permissionMode,
   setPermissionMode,
@@ -4992,6 +5001,10 @@ function SessionComposer({
   activeConversationId?: string;
   suggestion: string | null | undefined;
   suggestionResetKey: string;
+  /** Real model-written follow-ups for the last completed run (CORE.1). */
+  followups: string[];
+  /** Sends a follow-up chip straight through as the next message. */
+  onFollowup: (text: string) => void;
   onSubmit: (text: string, attachments?: SessionAttachment[]) => void | Promise<void>;
   permissionMode: PermissionMode;
   setPermissionMode: (mode: PermissionMode | ((current: PermissionMode) => PermissionMode)) => void;
@@ -5465,6 +5478,18 @@ function SessionComposer({
 
   return (
     <>
+    {followups.length > 0 && !prompt.trim() ? (
+      // Real follow-ups (CORE.1): what the model that just answered thinks
+      // you might say next, phrased as YOU would type it. Clicking sends it
+      // straight through. Hidden the moment you start typing your own.
+      <div className="followup-row" aria-label="Suggested next messages">
+        {followups.map((text) => (
+          <button type="button" className="followup-chip" key={text} onClick={() => onFollowup(text)} title={text}>
+            {text}
+          </button>
+        ))}
+      </div>
+    ) : null}
     {!hasConversation ? (
       // B12 revisions (Lachy): on the NEW SESSION page only, the conversation
       // folder sits right above the prompt box, with a + to its right to add
