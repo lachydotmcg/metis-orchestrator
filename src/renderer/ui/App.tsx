@@ -2992,12 +2992,12 @@ function Sidebar({
                     title={benchmarkLocked ? "Finish the benchmark wizard first" : undefined}
                     onClick={() => onProjectSelect(project)}
                   >
-                    <ChevronRight className={expanded ? "open" : ""} size={14} />
-                    <Folder size={16} />
-                    <span>
-                      <strong>{project.name}</strong>
-                      <small>{project.latest}</small>
-                    </span>
+                    {/* B12 sidebar simplification (Lachy): just the project
+                        name. The caret occupies reserved space and fades in on
+                        hover (or stays while expanded) so nothing shifts. The
+                        folder glyph and the latest-activity line are gone. */}
+                    <ChevronRight className={`project-caret ${expanded ? "open" : ""}`} size={13} />
+                    <strong>{project.name}</strong>
                   </button>
                   <button
                     className={`row-menu-btn ${projectMenuOpen ? "open" : ""}`}
@@ -3065,11 +3065,11 @@ function Sidebar({
                               }}
                             />
                           ) : (
-                            <button className="project-conversation-row" type="button" onClick={() => onConversationOpen(conversation.id)}>
-                              <span>
-                                <strong>{conversation.title}</strong>
-                                <small>{conversation.summary}</small>
-                              </span>
+                            <button className="project-conversation-row" type="button" onClick={() => onConversationOpen(conversation.id)} title={conversation.summary || conversation.title}>
+                              {/* Title only (B12 sidebar simplification) - the
+                                  summary moved to the tooltip rather than a
+                                  second line under every row. */}
+                              <strong>{conversation.title}</strong>
                             </button>
                           )}
                           {busyKeys.has(conversation.id) ? (

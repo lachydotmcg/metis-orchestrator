@@ -14186,3 +14186,56 @@ a:focus-visible,
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* --- Sidebar simplification (Lachy: "just the name of the project, arrow
+   when you hover over it, and then below it are your projects") ---
+   Single-line rows, no folder glyph, no activity subtitle. The caret keeps
+   its slot reserved and only fades in on hover (or stays while expanded), so
+   revealing it never shifts the name. */
+.project-row {
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 8px;
+}
+.project-caret {
+  flex: 0 0 auto;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 130ms ease, transform 150ms ease;
+}
+.project-row-wrap:hover .project-caret,
+.project-row.active .project-caret,
+.project-caret.open {
+  opacity: 1;
+}
+.project-caret.open {
+  transform: rotate(90deg);
+}
+.project-row > strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #eaeaea;
+  font-size: 13px;
+  font-weight: 600;
+}
+.project-conversations {
+  padding-bottom: 2px;
+}
+.project-conversation-row {
+  align-items: center;
+  min-height: 28px;
+  padding: 4px 8px 4px 21px;
+}
+.project-conversation-row > strong {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 500;
+}
