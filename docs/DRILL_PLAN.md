@@ -196,7 +196,13 @@ gets done.
     carries `origin` so a loop is only ever resumed by a surface that can also show and stop it.
     The second one closes a real hole: Ctrl-C on a CLI loop used to leave a sleeping record that
     the desktop app would resume hours later.
-- [ ] **CORE.7 - Ship barebones.** Decide what ships, what hides behind a flag, and what gets cut,
+- [x] **CORE.7 - Ship barebones SHIPPED 2026-07-19** (Lachy: "ship barebones, hide the rest behind the flag").
+  V1_HIDDEN_NAV + V1_HIDDEN_SETTINGS in App.tsx, filtered through the sidebar, the Ctrl+K palette,
+  the settings rail and selectNav. v1 nav = New session, Orchestration, Benchmark, Settings.
+  Two consequences worth remembering: the Active loops panel MOVED to Settings > Privacy & Data
+  (Routines is hidden, and a loop must never be running with no surface to stop it), and Benchmark
+  was promoted out of the More group, which now hides itself when empty.
+- [ ] **CORE.7 - Ship barebones (original entry).** Decide what ships, what hides behind a flag, and what gets cut,
   so v1 is orchestration plus chatting done excellently. Audit: docs/SHIP_V1.md.
 
 ## ★ LACHY BATCH 12 (2026-07-16, brainstorm round - PRIORITIZED BY LACHY, P1 highest)
