@@ -171,6 +171,35 @@ type StageCallEvent = Extract<SessionStreamEvent, { kind: "stage_call" }>;
 type NavKey = "session" | "orchestration" | "routines" | "marketplace" | "gallery" | "graph" | "benchmark" | "todo" | "manager" | "settings" | "pulse";
 type NodeKind = "router" | "agent" | "skill";
 
+/** v1 ship scope (docs/SHIP_V1.md section A). v1 is chat plus orchestration done
+ *  excellently, so everything that is peripheral, early, or a large trust
+ *  surface is hidden rather than deleted: every component, IPC handler and
+ *  store key below stays exactly as it is, and bringing a view back for a later
+ *  release is deleting one string from this Set.
+ *
+ *  Reasons, one per key, so a future reader does not have to guess:
+ *  manager    - a todo board with a chat window, not the autonomous worker the
+ *               README sells; its own code comment says the actions are local-only.
+ *  marketplace- installs arbitrary skills/MCP servers from an early registry.
+ *  routines   - scheduled automation is explicitly a "later" feature.
+ *  gallery    - already held back from the stack (DRILL_PLAN B8.1) and needs a
+ *               vision model pulled, which is onboarding friction for a non-core view.
+ *  graph      - peripheral; its knowledge-provenance value already shows inline
+ *               in chat as the "Grounded on N chunks" row.
+ *  todo       - a generic kanban that mostly exists to support Manager.
+ *  pulse      - depends on a remote feed that is still mostly empty. */
+const V1_HIDDEN_NAV = new Set<NavKey>(["manager", "marketplace", "routines", "gallery", "graph", "todo", "pulse"]);
+
+function isNavVisible(key: NavKey): boolean {
+  return !V1_HIDDEN_NAV.has(key);
+}
+
+/** The sidebar's collapsible "More" group. Listed here so the disclosure button
+ *  can hide itself when every member is hidden, rather than expanding to reveal
+ *  nothing - a control that opens onto emptiness is the dead-button problem the
+ *  audit exists to remove. */
+const MORE_GROUP_NAV: NavKey[] = ["routines", "todo", "gallery", "graph"];
+
 /** Command palette (Ctrl/Cmd+K) "Views" group — nav destinations by label, matching the
  *  labels used elsewhere in the sidebar/titlebar so results feel consistent app-wide.
  *  Module-level so it's a stable identity across renders (docs convention for static lists). */
@@ -1968,6 +1997,13 @@ export function App(): JSX.Element {
   }
 
   function selectNav(key: NavKey): void {
+    // Alongside the benchmark gate rather than instead of it: a persisted
+    // activeNav from a previous build, or any caller that still names a hidden
+    // view, must not be able to reach one now that it has no way back.
+    if (!isNavVisible(key)) {
+      setActiveNav("session");
+      return;
+    }
     if (benchmarkGateLocked && key !== "benchmark" && key !== "settings") {
       setActiveNav("benchmark");
       return;
@@ -2585,7 +2621,8 @@ function CommandPalette({
     const q = query.trim().toLowerCase();
     const list: PaletteResult[] = [];
 
-    const views = q ? PALETTE_VIEWS.filter((view) => view.label.toLowerCase().includes(q)) : PALETTE_VIEWS;
+    const shippable = PALETTE_VIEWS.filter((view) => isNavVisible(view.key));
+    const views = q ? shippable.filter((view) => view.label.toLowerCase().includes(q)) : shippable;
     for (const view of views.slice(0, 6)) {
       list.push({ id: `view-${view.key}`, group: "Views", label: view.label, icon: view.icon, onSelect: () => onNavigate(view.key) });
     }
@@ -2602,7 +2639,7 @@ function CommandPalette({
         });
       }
 
-      const matchedSettings = SETTINGS_NAV.filter((item) => item.label.toLowerCase().includes(q)).slice(0, 6);
+      const matchedSettings = SETTINGS_NAV.filter((item) => isSettingsSectionVisible(item.section) && item.label.toLowerCase().includes(q)).slice(0, 6);
       for (const item of matchedSettings) {
         list.push({
           id: `settings-${item.section}`,
@@ -2976,21 +3013,26 @@ function Sidebar({
       <div className="sidebar-scroll">
       <nav className="sidebar-nav" aria-label="Primary">
         <NavButton active={activeNav === "orchestration"} disabled={benchmarkLocked} icon={<GitBranch size={16} />} label="Orchestration" onClick={() => onSelect("orchestration")} />
-        <NavButton active={activeNav === "manager"} disabled={benchmarkLocked} icon={<Bot size={16} />} label="Manager" onClick={() => onSelect("manager")} />
-        <NavButton active={activeNav === "marketplace"} disabled={benchmarkLocked} icon={<Cable size={16} />} label="Marketplace" onClick={() => onSelect("marketplace")} />
+        {isNavVisible("manager") ? <NavButton active={activeNav === "manager"} disabled={benchmarkLocked} icon={<Bot size={16} />} label="Manager" onClick={() => onSelect("manager")} /> : null}
+        {isNavVisible("marketplace") ? <NavButton active={activeNav === "marketplace"} disabled={benchmarkLocked} icon={<Cable size={16} />} label="Marketplace" onClick={() => onSelect("marketplace")} /> : null}
+        {/* Benchmark is the only member of the old More group that ships in v1
+            (docs/SHIP_V1.md), so it sits inline rather than behind a disclosure
+            that would expand to reveal a single item. */}
+        <NavButton active={activeNav === "benchmark"} icon={<Cpu size={16} />} label="Benchmark" onClick={() => onSelect("benchmark")} />
         {moreOpen ? (
           <>
-            <NavButton active={activeNav === "routines"} disabled={benchmarkLocked} icon={<CalendarClock size={16} />} label="Routines" onClick={() => onSelect("routines")} />
-            <NavButton active={activeNav === "todo"} disabled={benchmarkLocked} icon={<ListTodo size={16} />} label="To Do List" onClick={() => onSelect("todo")} />
-            <NavButton active={activeNav === "gallery"} disabled={benchmarkLocked} icon={<GalleryHorizontalEnd size={16} />} label="Gallery" onClick={() => onSelect("gallery")} />
-            <NavButton active={activeNav === "graph"} disabled={benchmarkLocked} icon={<Network size={16} />} label="Graph View" onClick={() => onSelect("graph")} />
-            <NavButton active={activeNav === "benchmark"} icon={<Cpu size={16} />} label="Benchmark" onClick={() => onSelect("benchmark")} />
+            {isNavVisible("routines") ? <NavButton active={activeNav === "routines"} disabled={benchmarkLocked} icon={<CalendarClock size={16} />} label="Routines" onClick={() => onSelect("routines")} /> : null}
+            {isNavVisible("todo") ? <NavButton active={activeNav === "todo"} disabled={benchmarkLocked} icon={<ListTodo size={16} />} label="To Do List" onClick={() => onSelect("todo")} /> : null}
+            {isNavVisible("gallery") ? <NavButton active={activeNav === "gallery"} disabled={benchmarkLocked} icon={<GalleryHorizontalEnd size={16} />} label="Gallery" onClick={() => onSelect("gallery")} /> : null}
+            {isNavVisible("graph") ? <NavButton active={activeNav === "graph"} disabled={benchmarkLocked} icon={<Network size={16} />} label="Graph View" onClick={() => onSelect("graph")} /> : null}
           </>
         ) : null}
-        <button className="nav-more" type="button" onClick={() => setMoreOpen((open) => !open)}>
-          <ChevronDown className={moreOpen ? "open" : ""} size={14} />
-          <span>{moreOpen ? "Less" : "More"}</span>
-        </button>
+        {MORE_GROUP_NAV.some(isNavVisible) ? (
+          <button className="nav-more" type="button" onClick={() => setMoreOpen((open) => !open)}>
+            <ChevronDown className={moreOpen ? "open" : ""} size={14} />
+            <span>{moreOpen ? "Less" : "More"}</span>
+          </button>
+        ) : null}
       </nav>
 
       {pinnedConversations.length ? (
@@ -13591,8 +13633,6 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
           <p className="routines-demo-note">Preview mode — showing demo routines (read-only). Run inside the desktop app to create and manage real routines.</p>
         ) : null}
 
-        <ActiveLoopsPanel />
-
         {editingDraft ? (
           <RoutineEditor
             draft={editingDraft}
@@ -14518,6 +14558,18 @@ const SETTINGS_NAV: Array<{ group: string; icon: JSX.Element; label: string; sec
   { group: "System", icon: <HelpCircle size={15} />, label: "About", section: "about" }
 ];
 
+/** Same v1 mechanism as V1_HIDDEN_NAV, for settings sections.
+ *  mcp   - spawns arbitrary local stdio processes for installed servers; the
+ *          mcpToolsEnabled flag underneath it already defaults off.
+ *  usage - well built and honestly labelled, but it is a read-only report over
+ *          data already being collected, so it costs nothing sitting hidden
+ *          until its ring has an actual live-test checkmark. */
+const V1_HIDDEN_SETTINGS = new Set<SettingsSection>(["mcp", "usage"]);
+
+function isSettingsSectionVisible(section: SettingsSection): boolean {
+  return !V1_HIDDEN_SETTINGS.has(section);
+}
+
 const SETTINGS_SECTION_META: Record<SettingsSection, { subtitle: string; title: string }> = {
   general: { title: "General", subtitle: "Runtime defaults, policy bridge, permissions, and marketplace registry." },
   providers: { title: "Providers", subtitle: "Provider-level API keys and health checks used by every route." },
@@ -14809,7 +14861,8 @@ function SettingsWorkspace({
   const mcpPackages = useMemo(() => installedPackages.filter((item) => item.kind === "mcp"), [installedPackages]);
   const filteredNav = useMemo(() => {
     const query = navQuery.trim().toLowerCase();
-    return query ? SETTINGS_NAV.filter((item) => item.label.toLowerCase().includes(query)) : SETTINGS_NAV;
+    const shippable = SETTINGS_NAV.filter((item) => isSettingsSectionVisible(item.section));
+    return query ? shippable.filter((item) => item.label.toLowerCase().includes(query)) : shippable;
   }, [navQuery]);
   const navGroups = useMemo(() => Array.from(new Set(filteredNav.map((item) => item.group))), [filteredNav]);
 
@@ -16028,6 +16081,13 @@ function SettingsWorkspace({
 
       {section === "privacy" ? (
       <section className="settings-grid">
+        {/* Loops live here in v1, not in Routines. Routines is hidden by
+            V1_HIDDEN_NAV, and a loop is the one thing in Metis that keeps
+            working while nobody is watching - leaving its only surface behind a
+            hidden nav item would mean an autonomous run with no way to see or
+            stop it. Privacy & Data is the honest home anyway: it already
+            answers "what has Metis done to my files, and how do I undo it." */}
+        <ActiveLoopsPanel />
         <article className="settings-panel">
           <header>
             <span>
