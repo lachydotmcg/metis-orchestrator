@@ -102,6 +102,7 @@ import {
   ThumbsUp,
   Trash2,
   Upload,
+  Volume2,
   Wand2,
   Waypoints,
   X,
@@ -154,6 +155,8 @@ import type {
   UserProfile,
   UserQuestionAnswer
 } from "../../shared/runtime-contracts";
+import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
+import { installDecorativeSound } from "./soundRouter";
 
 /** Narrows SessionStreamEvent down to the `stage_call` variant (docs/FABLE_PLANS.md
  *  §26) so ConversationTurn and the side-chat stack can reference its `call`
@@ -1564,6 +1567,28 @@ const MAX_TILT = 15;
 const prefersReducedMotion =
   typeof window !== "undefined" && window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)").matches : false;
 
+/** Sound is opt-in, so "reduce motion" never has to turn anything OFF - it only
+ *  explains why the feature starts silent (docs/DRILL_PLAN.md B12.10). Tracked
+ *  as its own store key because useAppStoreState cannot tell a stored
+ *  `{ enabled: false }` from an untouched fallback, and the hint must stop
+ *  appearing once the user has made a choice of their own. Deliberately NOT
+ *  read anywhere inside sound.ts: once the user opts in, reduced motion has no
+ *  further say at runtime. */
+const SOUND_TOUCHED_KEY = "soundSettingsTouched";
+
+/** main.ts throws this exact message for every Stop-button path (its
+ *  CANCELLATION_MESSAGE). Electron's ipcRenderer.invoke re-wraps a rejected
+ *  handler as "Error invoking remote method '<channel>': Error: <message>", so
+ *  this has to be a substring test, never an equality one. Used to keep the
+ *  runError cue off user cancellations: stopping a run on purpose is a thing
+ *  the user did, not a failure worth sounding (docs/DRILL_PLAN.md B12.10). */
+const CANCELLATION_MESSAGE = "Stopped by user.";
+
+function isUserCancellation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes(CANCELLATION_MESSAGE);
+}
+
 function makeGalleryThumb(label: string, start: string, end: string): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="650" viewBox="0 0 900 650"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${start}"/><stop offset="1" stop-color="${end}"/></linearGradient></defs><rect width="900" height="650" fill="url(#g)"/><rect x="58" y="64" width="784" height="92" rx="18" fill="rgba(255,255,255,.14)"/><rect x="58" y="196" width="360" height="300" rx="26" fill="rgba(255,255,255,.18)"/><rect x="458" y="196" width="384" height="56" rx="16" fill="rgba(255,255,255,.20)"/><rect x="458" y="282" width="306" height="42" rx="13" fill="rgba(255,255,255,.14)"/><rect x="458" y="356" width="348" height="42" rx="13" fill="rgba(255,255,255,.14)"/><rect x="458" y="450" width="178" height="58" rx="17" fill="rgba(255,255,255,.28)"/><text x="76" y="125" fill="white" font-family="Segoe UI, Arial, sans-serif" font-size="38" font-weight="800">${label}</text></svg>`;
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
@@ -1965,12 +1990,26 @@ export function App(): JSX.Element {
         const merged = { ...DEFAULT_APPEARANCE, ...value };
         applyAppearance(merged);
         return writeAppStore("appearance", merged);
+      }),
+      // Cues fire from all over the app, not just while Settings is open, so
+      // the engine gets its settings once here at boot (docs/DRILL_PLAN.md
+      // B12.10). The Sound panel pushes its own updates live on top of this.
+      readAppStore("soundSettings", DEFAULT_SOUND_SETTINGS).then((value) => {
+        sound.setSettings({ ...DEFAULT_SOUND_SETTINGS, ...value });
       })
     ]);
     if (window.metisConversations) {
       void window.metisConversations.list().then(setStoredConversations);
     }
   }, []);
+
+  // The decorative tier routes itself off delegated listeners rather than
+  // per-component handlers (docs/DRILL_PLAN.md B12.10 — see soundRouter.ts).
+  // This subscribes the router to the sound settings for the life of the app;
+  // the router then attaches and detaches its own document listeners as the
+  // tier is switched on and off, so with sound off — the default — nothing is
+  // listening for pointer events at all.
+  useEffect(() => installDecorativeSound(), []);
 
   /** Settings > MCP servers "Add more" — stages the Marketplace's MCP filter
    *  in the shared `marketplaceState` store key before navigating, so the tab
@@ -4160,9 +4199,11 @@ function NewSessionWorkspace({
     if (!openStoredConversation || !window.metisConversations) return;
     if (!contextDeleteArmed) {
       setContextDeleteArmed(true);
+      sound.play("destructiveArm");
       window.setTimeout(() => setContextDeleteArmed(false), 3000);
       return;
     }
+    sound.play("destructiveCommit");
     await window.metisConversations.delete(openStoredConversation.id);
     onConversationsChanged?.();
     setWorkspaceContextOpen(false);
@@ -4408,7 +4449,11 @@ function NewSessionWorkspace({
     // stop button, not here. Attachments are ignored on the directive path —
     // steering directives are text-only; images belong to a fresh run.
     if (sessionBusy) {
+      // The send cue sits BELOW this guard on both paths: a send that drops on
+      // the floor must not sound like one that landed (docs/DRILL_PLAN.md
+      // B12.10). Posting a steering directive IS a send, so that one sounds.
       if (!text || !window.metisBus) return;
+      sound.play("send");
       updatePendingTurns(activeKey, (current) => [
         ...current,
         { id: `directive-${Date.now()}`, prompt: text, status: "complete", directive: true }
@@ -4421,6 +4466,12 @@ function NewSessionWorkspace({
     // (not `activeKey`, which can change if the user navigates elsewhere
     // while this run streams) so writes always land in the right bucket.
     const runKey = activeKey;
+    // Every prompt that actually starts a run funnels through here (composer,
+    // slash commands), so this is the one send cue for the run path.
+    sound.play("send");
+    // Wall-clock start for the runComplete cue: a run that felt instant does
+    // not get a chime (docs/DRILL_PLAN.md B12.10).
+    const runStartedAt = Date.now();
     const turnId = `turn-${Date.now()}`;
     const pending = makePendingTurn(turnId, text, attachments);
     updatePendingTurns(runKey, (current) => [...current, pending]);
@@ -4508,6 +4559,9 @@ function NewSessionWorkspace({
       updatePendingTurns(runKey, (current) =>
         current.map((turn) => (turn.id === turnId ? { ...turn, id: run.id, status: "complete", run } : turn))
       );
+      // Both the streaming and non-streaming branches above settle here, so
+      // one cue covers both. The send figure, slowed.
+      sound.play("runComplete", { runDurationMs: Date.now() - runStartedAt });
       const finalPreviewUrl = run.projectResult?.previewUrl ?? run.outputUrl;
       if (finalPreviewUrl && activeKeyRef.current === runKey) {
         const title = run.projectResult ? projectNameFromPath(run.projectResult.projectRoot) : "Preview";
@@ -4526,6 +4580,12 @@ function NewSessionWorkspace({
             : turn
         )
       );
+      // A failure is worth hearing however long it took, so there is no
+      // short-run suppression on this one. A Stop click lands in this same
+      // catch but is NOT a failure, so it stays silent - the user already
+      // knows they stopped it, and scolding them for it is exactly the kind
+      // of noise B12.10 exists to avoid.
+      if (!isUserCancellation(error)) sound.play("runError");
     } finally {
       const settledKey = draftToRealRef.current.get(runKey) ?? runKey;
       setBusyKeys((current) => {
@@ -11161,9 +11221,11 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
     if (!selectedImageId) return;
     if (!deleteImageArmed) {
       setDeleteImageArmed(true);
+      sound.play("destructiveArm");
       window.setTimeout(() => setDeleteImageArmed(false), 3000);
       return;
     }
+    sound.play("destructiveCommit");
     const imageId = selectedImageId;
     onBoardsChange((current) =>
       current.map((item) => {
@@ -11220,9 +11282,11 @@ function GalleryWorkspace({ boards, onBoardsChange }: { boards: GalleryBoard[]; 
   function deleteBoard(board: GalleryBoard): void {
     if (deleteBoardArmedId !== board.id) {
       setDeleteBoardArmedId(board.id);
+      sound.play("destructiveArm");
       window.setTimeout(() => setDeleteBoardArmedId((current) => (current === board.id ? null : current)), 3000);
       return;
     }
+    sound.play("destructiveCommit");
     setDeleteBoardArmedId(null);
     onBoardsChange((current) => current.filter((item) => item.id !== board.id));
     if (window.metisGallery) {
@@ -14538,6 +14602,12 @@ function SettingsWorkspace({
   const [providerAccounts, setProviderAccounts] = useAppStoreState("providerAccounts", DEFAULT_PROVIDER_ACCOUNTS);
   const [rawAppearance, setAppearance] = useAppStoreState("appearance", DEFAULT_APPEARANCE);
   const appearance = useMemo(() => ({ ...DEFAULT_APPEARANCE, ...rawAppearance }), [rawAppearance]);
+  // Settings > Appearance > Sound (docs/DRILL_PLAN.md B12.10). Same backfill
+  // reasoning as `settings` above: `decorative` lands in commit 2 and must not
+  // read as undefined on an install that persisted this key today.
+  const [rawSoundSettings, setSoundSettings, soundSettingsLoaded] = useAppStoreState("soundSettings", DEFAULT_SOUND_SETTINGS);
+  const soundSettings = useMemo<SoundSettings>(() => ({ ...DEFAULT_SOUND_SETTINGS, ...rawSoundSettings }), [rawSoundSettings]);
+  const [soundTouched, setSoundTouched] = useAppStoreState(SOUND_TOUCHED_KEY, false);
   // "Is this done?" critic loop (docs/FABLE_PLANS.md §22) — a top-level store
   // key (not nested in AppSettings) since main.ts reads it directly by name.
   const [selfVerify, setSelfVerify] = useAppStoreState<"off" | "local" | "all">("selfVerify", "local");
@@ -14741,6 +14811,39 @@ function SettingsWorkspace({
 
   function resetAppearance(): void {
     setAppearance(DEFAULT_APPEARANCE);
+  }
+
+  // Same live-sync reasoning as applyAppearance above: the App() mount effect
+  // seeds the engine on load, this keeps it honest while Settings is open so
+  // the Preview button plays at the volume the slider is currently showing.
+  // Gated on `loaded`: this hook's first render hands back the DEFAULT (silent)
+  // settings until its own store read resolves, and pushing that into the
+  // engine would switch sound OFF for a frame every time Settings mounts, even
+  // though App()'s boot effect already seeded the real values.
+  useEffect(() => {
+    if (!soundSettingsLoaded) return;
+    sound.setSettings(soundSettings);
+  }, [soundSettings, soundSettingsLoaded]);
+
+  function updateSoundSetting<K extends keyof SoundSettings>(key: K, value: SoundSettings[K]): void {
+    setSoundTouched(true);
+    setSoundSettings((current) => ({ ...DEFAULT_SOUND_SETTINGS, ...current, [key]: value }));
+    // Pushed into the engine HERE as well as from the effect above, and that is
+    // not a redundancy. The click router resolves a cue in the capture phase and
+    // plays it a microtask later; React flushes this component's passive effects
+    // on its own schedule, which may land either side of that microtask. Without
+    // this synchronous push, clicking a sound toggle would sound or not sound
+    // depending on React's internal timing - the effect stays for the boot and
+    // store-rehydration paths, this line makes the toggles deterministic
+    // (docs/DRILL_PLAN.md B12.10).
+    sound.setSettings({ [key]: value } as Partial<SoundSettings>);
+  }
+
+  /** Preview plays the pair that carries the whole idea: a send, and the same
+   *  figure slowed into its answer half a second later. */
+  function previewSound(): void {
+    sound.play("send");
+    window.setTimeout(() => sound.play("runComplete"), 500);
   }
 
   const checkForUpdates = useCallback(async () => {
@@ -15346,6 +15449,73 @@ function SettingsWorkspace({
             <button type="button" onClick={resetAppearance}>
               <RotateCcw size={15} />
               Reset to default
+            </button>
+          </div>
+        </article>
+        {/* Sound (docs/DRILL_PLAN.md B12.10) — one instrument, struck
+            differently. Off until asked for. */}
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Sound</small>
+              <h2>Interface sound</h2>
+            </span>
+          </header>
+          <label className="settings-field toggle-field">
+            <span>Play sound</span>
+            <button
+              type="button"
+              className={`toggle-switch ${soundSettings.enabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={soundSettings.enabled}
+              onClick={() => updateSoundSetting("enabled", !soundSettings.enabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">
+            {prefersReducedMotion && !soundTouched
+              ? "Off to start because your system asks for reduced motion. Turn it on anyway if you want it, and that choice sticks."
+              : "One struck tone, tuned once, used for everything. Sound never gates an action, it only tells you one happened."}
+          </p>
+          {/* Sub-toggle: the decorative tier only exists while the master
+              switch above is on, so it disables with it rather than sitting
+              there implying it still does something (B12.10). */}
+          <label className="settings-field toggle-field settings-field-nested">
+            <span>Interface clicks and hover</span>
+            <button
+              type="button"
+              className={`toggle-switch ${soundSettings.decorative ? "on" : ""}`}
+              role="switch"
+              aria-checked={soundSettings.decorative}
+              disabled={!soundSettings.enabled}
+              onClick={() => updateSoundSetting("decorative", !soundSettings.decorative)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint settings-hint-nested">
+            Buttons, toggles and menus get a short tick. Hovering a control gets the contact sound with no note at all, rate limited so
+            running down a long list will not chatter. Fields stay silent: nothing sounds while you are typing or dragging a slider.
+          </p>
+          <label className="settings-field">
+            <span>Volume</span>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={soundSettings.volume}
+              disabled={!soundSettings.enabled}
+              aria-label="Sound volume"
+              onChange={(event) => updateSoundSetting("volume", Number(event.target.value))}
+            />
+          </label>
+          <p className="settings-hint">What makes a sound: {SOUND_CUES.map((cue) => cue.label.toLowerCase()).join(", ")}.</p>
+          <div className="settings-actions">
+            <button type="button" disabled={!soundSettings.enabled} onClick={previewSound}>
+              <Volume2 size={15} />
+              Preview
             </button>
           </div>
         </article>

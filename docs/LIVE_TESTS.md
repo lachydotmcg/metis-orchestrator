@@ -222,3 +222,108 @@ Settings > Providers.
   the conversation each time, and a build in A must write into A's folder.
 - [ ] **Mid-conversation attach binds.** In an existing conversation, use the 3-dots to choose
   a different folder. Reopen the conversation later - it should still have that folder.
+
+## 17. Interface sound, both tiers (added 2026-07-18, docs/DRILL_PLAN.md B12.10)
+
+Sound is off until you ask for it, so every test below starts from Settings > Appearance >
+Interface sound. Do these with the room quiet and the system volume somewhere sane: the whole
+tier is deliberately near the floor and you will not hear it over a fan.
+
+**Turning it on**
+
+- [ ] **Off is really off.** Fresh install, before touching anything: click around, hover
+  everything, send a prompt. Silence, all of it. Nothing in this section should make a sound
+  until the master switch is on.
+- [ ] **Reduced motion is honoured, once.** If your system asks for reduced motion, the hint
+  under the master switch should say so and the switch should be off. Turn it on anyway - the
+  hint should change and stay changed. Your choice beats the system preference from then on.
+- [ ] **The two switches nest.** With the master switch off, the "Interface clicks and hover"
+  switch below it and the Volume slider should both be greyed out and unclickable, not sitting
+  there looking live.
+- [ ] **The sound switches themselves are silent.** Flipping either switch, in either
+  direction, makes no sound. That is intentional and deterministic, not a dropped cue: the
+  click that changes what sound does should not be the one thing that ignores the change.
+- [ ] **Preview.** Master switch on, hit Preview. You should hear a rising three-note figure,
+  and half a second later the SAME figure slowed down. That pair is the whole design: a send,
+  and the answer to it. If the second one sounds like a different instrument, something is
+  wrong.
+- [ ] **Volume glides.** Play Preview and drag the Volume slider while it is still ringing. It
+  should get quieter smoothly. Any zipper, crackle or step means the gain ramp regressed.
+
+**The informational tier (the five cues that mean something)**
+
+- [ ] **Send.** Type anything and hit Enter. One rising figure, once.
+- [ ] **Run complete.** Let a real run finish. Same figure, slower. Now do a run that finishes
+  almost instantly - that one should be SILENT. A sound for something that felt instant is
+  noise, so anything under 1.5s is dropped on purpose.
+- [ ] **Run failed.** Stop Ollama and send something. Two neighbouring tones rubbing against
+  each other - rough, not a beep. Cancelling a run yourself must NOT play this.
+- [ ] **Delete armed, then committed.** Arm a delete (conversation 3-dots, a gallery image, a
+  board). First click: a dull, dark tone with nothing bright in it. Second click: lower,
+  shorter, final. These two must not sound like the click tier.
+- [ ] **No smearing on retrigger.** Send several prompts quickly. Each new figure should duck
+  the one still ringing rather than piling up into a loud mush.
+
+**The click and hover tier**
+
+- [ ] **Sub-toggle gates BOTH.** Turn "Interface clicks and hover" off (master still on).
+  Clicking and hovering go silent while sends and run-completes still sound. Turn it back on
+  and both return.
+- [ ] **Buttons tick.** Click ordinary buttons around the app: a short, quiet tick, same
+  instrument as the big cues, about a third of the weight.
+- [ ] **Toggles rise and fall.** Any toggle that is not a sound toggle (Settings > General >
+  Close to tray, say). Switching ON rises, switching OFF falls. If they are backwards, the
+  capture-phase pre-click read regressed and this is the test that catches it.
+- [ ] **Nav is lighter.** Click between sidebar sections and settings tabs: a higher, drier
+  tick than a button. Moving between places should feel lighter than committing to something.
+- [ ] **Menus open and close.** The permission pill above the composer. Opening leaps up an
+  octave, closing leaps back down. Click the pill again to close it - the fall is the test.
+- [ ] **Hover has no note.** Hover a button or a sidebar row. You should hear the contact
+  sound only - a tiny tick with no pitch. If you can hum it, `contactOnly` regressed.
+- [ ] **First hover after launch is silent.** Expected, not a bug. Hover cannot open the audio
+  engine on its own (a mouse move is not a user gesture, so the browser would hand back a
+  suspended context). Click something first, then hover works for the rest of the session.
+
+**One action, one sound**
+
+- [ ] **Send does not double.** Click the send BUTTON with the mouse rather than pressing
+  Enter. You should hear the send figure and nothing stacked on top of it. Before this fix the
+  button ticked and then sent, two sounds for one action.
+- [ ] **Delete does not double.** Same check on an arm/commit delete: exactly one sound per
+  click, and it should be the dark one, never a bright tick over it.
+- [ ] **Preview does not double.** Hit Preview: the send/answer pair only, no button tick.
+- [ ] **Stop is not a send.** Start a long run and clear the composer so the button becomes
+  the square stop button. Click it. You should hear the NEUTRAL click, never the send tone -
+  the abort and the send must never be confusable, and that button carries both class names.
+- [ ] **A menu opening under the cursor does not tick.** Click something that opens a popover
+  right under your pointer and then hold still. One sound (the click), not a click followed by
+  a hover tick as the new elements appear beneath you.
+
+**The typing-silence guarantee**
+
+- [ ] **The composer is silent.** Click into the prompt box, type a paragraph, select text with
+  the mouse, drag the selection, click the box again. Not one sound at any point. This is the
+  most-used surface in the app and the one that has to be perfect.
+- [ ] **Settings fields are silent.** Click into the custom-instructions textarea, an API key
+  field, any text input. Silent. Drag the Volume slider itself end to end: silent (it is a
+  field, and a tick per step would be unbearable).
+- [ ] **Dragging is silent.** In Orchestration, drag a graph node around the canvas and drop
+  it. No sound. A drag that ends where it started fires a click event, so this is a real trap -
+  the boundary is 6px of travel, same idea as the 5px click-vs-drag rule in the Library.
+- [ ] **Keyboard activation still counts.** Tab to a button and press Enter or Space. That
+  SHOULD tick - it is a deliberate activation, just not with a mouse.
+
+**The fast-sweep test (the one that proves it is not a machine gun)**
+
+- [ ] **Run down the conversation list.** Sidebar with a good number of conversations. Drag the
+  pointer from top to bottom as fast as you can. You should hear about four ticks in the first
+  third of a second and then roughly one every third of a second for the rest of the sweep -
+  never one per row, and never a rattle.
+- [ ] **Sweep the model picker.** Same again across the router option rows. Same behaviour.
+- [ ] **Sweep and click.** Sweep a list, then immediately click a row. The click should still
+  sound at full weight: the click tier keeps a reserve the hover tier cannot spend.
+- [ ] **Sweep during a run.** Machine-gun the sidebar while a run is finishing. The run-complete
+  cue must still land. If drumming on the interface can swallow it, the tier floors regressed.
+- [ ] **Wiggle inside one row.** Hold the pointer inside a single row and jiggle it over the
+  icon, the text and the buttons inside it. Crossing into a nested button may tick once, but
+  jiggling within the same control must not tick repeatedly.

@@ -48,6 +48,17 @@ import type {
 } from "../shared/runtime-contracts";
 
 declare global {
+  /** Just the slice of Vite's HMR API the sound engine needs to close its
+   *  AudioContext on reload (docs/DRILL_PLAN.md B12.10). Declared here rather
+   *  than pulling in `vite/client` types, which would drag the whole ambient
+   *  asset/env surface into a renderer that has never needed it. */
+  interface ImportMeta {
+    readonly hot?: {
+      dispose: (cb: () => void) => void;
+      accept: (cb?: () => void) => void;
+    };
+  }
+
   interface Window {
     metisPolicy?: {
       getSampleDecision: () => Promise<RouteDecision>;

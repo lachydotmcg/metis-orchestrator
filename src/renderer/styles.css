@@ -7590,6 +7590,31 @@ button.pulse-tile:hover {
   box-shadow: 0 0 0 3px rgb(174 183 198 / 0.12);
 }
 
+/* Settings > Appearance > Sound volume (docs/DRILL_PLAN.md B12.10). The
+   generic `.settings-field input` rule above dresses a range slider as a text
+   box (36px tall, filled, bordered), which looks broken - strip it back to a
+   bare track the same way `.field input[type="range"]` already does. */
+.settings-field input[type="range"] {
+  min-height: 22px;
+  /* The UA sheet's 2px margin pushed the track off-centre inside the panel's
+     12px gutter and overflowed the inherited width:100%. */
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  accent-color: var(--accent);
+}
+
+.settings-field input[type="range"]:focus {
+  border: 0;
+  box-shadow: none;
+}
+
+.settings-field input[type="range"]:disabled {
+  cursor: default;
+  opacity: 0.46;
+}
+
 /* ---- Custom select (replaces native <select> popups) ---- */
 
 .custom-select {
@@ -8223,6 +8248,30 @@ button.pulse-tile:hover {
 
 .toggle-switch.on .toggle-knob {
   left: 18px;
+}
+
+.toggle-switch:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ---- Nested sub-settings (Settings > Appearance > Sound, DRILL_PLAN B12.10)
+   A rule down the left says "this belongs to the switch above it", so a
+   sub-toggle that is on but inert reads as dependent rather than broken. ---- */
+
+.settings-field-nested,
+.settings-hint-nested {
+  padding-left: 12px;
+  border-left: 1px solid var(--line);
+}
+
+.settings-field-nested {
+  margin-left: 2px;
+}
+
+.settings-hint-nested {
+  margin-left: 2px;
+  padding-bottom: 2px;
 }
 
 /* ---- Settings > General > Metis Gateway (DRILL_PLAN P10.1) ---- */
