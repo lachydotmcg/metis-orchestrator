@@ -142,7 +142,7 @@ gets done.
   written nothing. THE REAL SIN IS THE SILENCE: when extraction yields zero files from non-empty
   model output, that must be a loud, specific error naming what was seen, not a quiet no-op.
   This is the single biggest "work actually gets done" failure in the app.
-- [ ] **CORE.10 - SHIP BLOCKER: Auto Router does not run in a packaged build. VERIFIED.** Found by
+- [x] **CORE.10 - FIXED: Auto Router now routes for real in a packaged build (builtinRouter.ts).** Found by
   the SHIP_V1 audit, then confirmed directly. decidePolicy (main.ts ~3190) needs a metis-policy CLI
   plus profile resolved from env vars or SIBLING paths (../metis-policy/). electron-builder.yml's
   extraResources ships only build/icon.png, so neither ever exists on an installed machine.
