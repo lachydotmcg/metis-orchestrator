@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeImage,
 import type { MenuItemConstructorOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { access, appendFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, appendFile, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -4517,7 +4517,22 @@ async function serveStaticFile(root: string, rawUrl: string, response: ServerRes
     const parsed = new URL(rawUrl, "http://127.0.0.1");
     const pathname = decodeURIComponent(parsed.pathname === "/" ? "/index.html" : parsed.pathname);
     const target = resolve(root, `.${pathname}`);
-    if (!target.toLowerCase().startsWith(root.toLowerCase())) {
+    // CORE.9: this used to be a bare lowercased startsWith with no trailing
+    // separator, so a SIBLING folder whose name merely begins with the
+    // workspace name (C:\project vs C:\project-secrets) resolved as inside
+    // it and was served. isPathInside is the one containment check in this
+    // file that gets the separator right; use it rather than keeping a third
+    // hand-rolled variant.
+    if (!isPathInside(target, root)) {
+      response.writeHead(403);
+      response.end("Forbidden");
+      return;
+    }
+    // Defence in depth: resolve symlinks before reading, so a link planted
+    // inside the workspace cannot point out of it. A path that cannot be
+    // realpath'd (it does not exist) falls through to the 404 below.
+    const realTarget = await realpath(target).catch(() => null);
+    if (realTarget && !isPathInside(realTarget, root)) {
       response.writeHead(403);
       response.end("Forbidden");
       return;
