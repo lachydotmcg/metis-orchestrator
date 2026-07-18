@@ -14637,3 +14637,16 @@ a:focus-visible,
   color: var(--faint);
   font-style: italic;
 }
+
+/* Empty state. Quieter than a populated panel: it is documentation, not status. */
+.loops-panel-empty {
+  background: transparent;
+  border-style: dashed;
+}
+.loops-panel-empty code {
+  padding: 1px 5px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 5px;
+  font-size: 11.5px;
+}

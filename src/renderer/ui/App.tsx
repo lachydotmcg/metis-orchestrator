@@ -16531,7 +16531,31 @@ function ActiveLoopsPanel(): JSX.Element | null {
     setLoops(next);
   }
 
-  if (!hasBridge || loops.length === 0) return null;
+  if (!hasBridge) return null;
+
+  // Renders even with nothing to show, unlike before. This panel is now the
+  // only place in the app that explains loops exist, and the confirmation shown
+  // after starting one sends people here by name: arriving to find literally
+  // nothing would read as the loop having vanished. It also has to be
+  // discoverable at all, since the entry point is a typed command with no
+  // button anywhere.
+  if (loops.length === 0) {
+    return (
+      <section className="loops-panel loops-panel-empty" aria-label="Loops">
+        <header className="loops-panel-header">
+          <div>
+            <small>Nothing running</small>
+            <h2>Loops</h2>
+          </div>
+        </header>
+        <p className="settings-hint">
+          A loop is a goal Metis works on across several turns, deciding after each one whether to keep going. Start one by typing{" "}
+          <code>/loop</code> followed by the goal in a new session. It stops itself when the goal is met, and anything running shows up here with a
+          Stop button.
+        </p>
+      </section>
+    );
+  }
 
   const live = loops.filter((loop) => loop.status === "sleeping" || loop.status === "running");
   const finished = loops.filter((loop) => loop.status !== "sleeping" && loop.status !== "running");
