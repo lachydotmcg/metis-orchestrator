@@ -71,6 +71,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Closed
 
+- ~~**Five races in the loops store.**~~ Fixed 2026-07-19 (`63062be`): every mutation is now
+  serialised and re-reads inside the lock, so a Stop clicked during a turn can no longer be
+  overwritten by that turn's own final write. Also closed: two concurrent turns for one loop, the
+  tray pause being checked once per pass, and the 60s timer being pushed out indefinitely by
+  unrelated panel activity.
+
 - ~~**Loops could only ever do one turn of real work.**~~ Fixed 2026-07-19 (`4222546`): a turn
   that routes to the build pipeline returns a pipeline summary rather than a model reply, so no
   decision block existed and the loop always stopped after one turn, having looked like it worked.
