@@ -4559,7 +4559,20 @@ function NewSessionWorkspace({
       // A capability warning goes FIRST, before the reassurance. It is the part
       // that changes what you should expect to happen, and burying it under
       // "it is working now" would be the wrong order to read them in.
-      setLoopNotice(loop.capabilityWarning ? { tone: "warn", text: `${loop.capabilityWarning} ${base}` } : { tone: "ok", text: base });
+      // When the warning says nothing can run this, appending "It is working
+      // now" contradicts it in the same sentence. Keep the warning and where to
+      // stop it, drop the reassurance.
+      const cannotRun = /cannot run/i.test(loop.capabilityWarning ?? "");
+      setLoopNotice(
+        loop.capabilityWarning
+          ? {
+              tone: "warn",
+              text: cannotRun
+                ? `${loop.capabilityWarning} The loop was created but will not get far. Stop it in Settings > Privacy & Data.`
+                : `${loop.capabilityWarning} ${base}`
+            }
+          : { tone: "ok", text: base }
+      );
     } catch (error) {
       setLoopNotice({ tone: "error", text: error instanceof Error ? error.message : String(error) });
     }

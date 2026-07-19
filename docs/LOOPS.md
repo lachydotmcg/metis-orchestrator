@@ -167,8 +167,13 @@ constraints are therefore not decoration.
 - **Token budget. NOT BUILT.** Still the phase 3 plan: the B12.7 usage ledger already meters every
   run, so a loop could take a token ceiling and stop at `exhausted` when it is spent. Today nothing
   in the loop path reads the ledger, and a loop's only cost bounds are iterations and wall clock.
-- **Gating loop-driving to capable models. NOT BUILT, and it is an OPEN PHASE 1 ITEM.** See the
-  open items section below. Any model the router picks can drive a loop right now.
+- **Gating loop-driving to capable models. SHIPPED, as a warning rather than a block.**
+  `assessLoopCapability` checks what models are AVAILABLE at creation, since a loop routes through
+  the Auto Router at every tick and the answering model is not knowable up front. A cloud key or any
+  local model at or above ~7B is silent; only smaller models get a warning naming the largest one
+  you have and what will go wrong; nothing at all is reported as not capable. It deliberately never
+  refuses, because Metis is local-first and a gate that only passed metered cloud models would
+  invert this doc's own argument for the feature.
 
 ## The decision is asked separately when the work turn cannot carry it
 
@@ -232,7 +237,7 @@ delay clamp, and the Active loops list with Stop. No spawning, no event wakeups.
 from the CLI harness (CORE.3):
 `npm run cli -- loop "check the sandbox project builds" --max-iterations 3` and watch three ticks
 happen and the loop terminate itself. Startable from the app with `/loop <goal>` in the composer.
-Open: gating loop-driving to capable models, see below.
+The capability warning ships too, see the governance list above.
 
 **Phase 2, workers. NOT BUILT.** `spawn_agent` wired to the existing fan-out engine, `spawnedAgents`
 tracking, and bus-completion wakeups so the loop sleeps until a worker finishes. None of this
@@ -264,13 +269,12 @@ has not shown that the decision layer works at all.
 
 ## Open items, honestly
 
-- **Gating loop-driving to capable models.** The closing paragraph of this doc has always said a 4B
-  local model will not reliably decide to stop. That gate was never built. Any model the router
-  picks can drive a loop today, and nothing warns the user when a small one is about to. This is an
-  OPEN PHASE 1 ITEM, not a nice-to-have, because the whole safety story rests on the model
-  reliably emitting or omitting a decision block. Silence stopping the loop means a weak model
-  fails safe rather than dangerously, which is why this is a gap and not a hole, but it also means
-  a weak model will quietly stop after one turn and look broken.
+- **Gating loop-driving to capable models. CLOSED 2026-07-19, with a caveat worth keeping.** The
+  warning half shipped: `assessLoopCapability` reports at creation when nothing available is likely
+  to drive a loop well, and a silent turn names the model that went silent. What it cannot do is
+  promise the other direction. It reads availability, not the answering model, so "your 8B will
+  probably cope" is not a guarantee, only "nothing below ~7B reliably does" is a real claim. Silence
+  stopping the loop still means a weak model fails safe rather than dangerously.
 - **The routing hazard the first live loop found.** Metis classifies chat-vs-build from prompt text,
   and an early, chattier version of the wake scaffold made a read-only goal ("how many functions
   does app.js define?") route to the BUILD pipeline, which rewrote the file from 171 lines down to

@@ -326,10 +326,16 @@ export async function decideLoopContinuation(
     // Otherwise the LAST continue line, mirroring extractLoopDecision's
     // "the decision is the one it ends on".
     const line = candidates[candidates.length - 1];
-    const match = line.match(/^continue\b[\s:.-]*(\d+)?\s*(.*)$/i);
+    // The unit matters. Reading the bare number as seconds turned
+    // "CONTINUE 5 minutes" into 5 seconds, which the clamp then floored to 60:
+    // a model asking for a five minute gap silently got one minute.
+    const match = line.match(/^continue\b[\s:.-]*(?:in\s+)?(\d+(?:\.\d+)?)?\s*(s|sec|secs|second|seconds|m|min|mins|minute|minutes|h|hr|hrs|hour|hours)?\b\s*(.*)$/i);
     if (!match) return null;
-    const seconds = match[1] ? Number(match[1]) : LOOP_MIN_DELAY_SECONDS;
-    const reason = (match[2] ?? "").trim();
+    const rawNumber = match[1] ? Number(match[1]) : null;
+    const unit = (match[2] ?? "").toLowerCase();
+    const multiplier = unit.startsWith("h") ? 3600 : unit.startsWith("m") ? 60 : 1;
+    const seconds = rawNumber === null ? LOOP_MIN_DELAY_SECONDS : rawNumber * multiplier;
+    const reason = (match[3] ?? "").trim();
     return { decision: "continue", delaySeconds: clampLoopDelay(seconds), reason: reason || undefined };
   } catch {
     return null;

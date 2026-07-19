@@ -5931,6 +5931,10 @@ async function runPreviewRequest(args: {
     createdAt,
     completedAt: new Date().toISOString(),
     promptSha256: promptHash,
+    // Attribution must be set at EVERY construction site. It was on one of
+    // four, so the build-pipeline turns, which are a loop's most expensive,
+    // wrote no ledger attribution at all.
+    loopId: input.loopId,
     promptPreview: prompt.slice(0, 180),
     rawPromptStored: false,
     projectPath: writable?.path ?? input.projectPath,
@@ -8700,6 +8704,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       createdAt,
       completedAt: new Date().toISOString(),
       promptSha256: promptHash,
+      loopId: input.loopId,
       promptPreview: originalPrompt.slice(0, 180),
       rawPromptStored: false,
       projectPath: input.projectPath,
@@ -9088,6 +9093,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       createdAt,
       completedAt: new Date().toISOString(),
       promptSha256: promptHash,
+      // The BUILD pipeline's run record. A loop doing real work routes here,
+      // and these turns cost the most (several stage calls plus repair passes),
+      // so omitting attribution here made loopUsageTotals understate exactly
+      // the spend a budget would most need to see.
+      loopId: input.loopId,
       promptPreview: originalPrompt.slice(0, 180),
       rawPromptStored: false,
       projectPath: projectResult?.workspacePath ?? input.projectPath,
@@ -10384,10 +10394,13 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
   // is never wanted, and the scheduler will pick it up on the next slice if it
   // is still due once the current turn finishes.
   if (loopsTicking.has(id)) return undefined;
-  const loaded = (await readLoops()).find((item) => item.id === id);
-  if (!loaded) return undefined;
+  // Claimed BEFORE the first await. readLoops yields the event loop, so a check
+  // above an await and an add below it leaves a window where both callers see an
+  // empty set and both proceed: two model calls billed into one conversation.
   loopsTicking.add(id);
   try {
+    const loaded = (await readLoops()).find((item) => item.id === id);
+    if (!loaded) return undefined;
     return await fireLoopTickInner(id, loaded);
   } finally {
     loopsTicking.delete(id);
@@ -10486,7 +10499,11 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   // stopped after exactly one turn.
   let decision = runError ? null : extractLoopDecision(assistantText);
   let decisionAsked = false;
-  if (!runError && !decision) {
+  // Terminal check BEFORE paying for the fallback call. The record is about to
+  // be settled as exhausted either way, so asking costs a model call whose
+  // answer is discarded.
+  const alreadyTerminal = loopTerminalReason({ ...loaded, iterations: index }, new Date()) !== null;
+  if (!runError && !decision && !alreadyTerminal) {
     decisionAsked = true;
     decision = await decideLoopContinuation(followupInvokerFor(providerResultForDecision), {
       goal: loaded.goal,
@@ -10554,7 +10571,12 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       ...advanced,
       status: "stopped",
       stoppedReason: decisionAsked
-        ? `the model did not ask to continue when asked directly${answeringModel ? ` (${answeringModel})` : ""}`
+        ? answeringModel
+          ? `the model did not ask to continue when asked directly (${answeringModel})`
+          : // No model answered the work turn at all, so nothing declined
+            // anything. Reporting an outage as a decision sends the owner
+            // looking at their goal when the real problem is their setup.
+            "no model was reachable to decide whether to continue, so the loop stopped"
         : "the model did not ask to continue"
     };
     await appendAudit("info", "loop.stop", `Loop "${loopLabel(advanced)}" stopped: no continue was requested on iteration ${index}.`, {
