@@ -8237,6 +8237,40 @@ function projectDepthRoutes(nodes: GraphNode[]): Record<string, unknown> | null 
   return next;
 }
 
+/** One rung of a depths-enabled node, resolved for display.
+ *  `implied` marks a rung the user did not pick explicitly, so the node can
+ *  show it as inherited rather than chosen. */
+type DepthRung = { level: "L1" | "L2" | "L3"; label: string; provider?: ProviderId; implied: boolean };
+
+/** What a depths-enabled node will ACTUALLY reach for, resolved the same way
+ *  projectDepthRoutes resolves it. Deliberately sitting next to that function:
+ *  the L3-defaults-to-the-primary-model rule lives in both, and a node that
+ *  displayed a different stack from the one it writes to the store would be
+ *  the most confusing possible bug in this feature.
+ *
+ *  Levels the user has not pinned are shown as their real fallback wording
+ *  rather than left blank, because blank reads as "nothing happens here" when
+ *  in fact the depth engine has a default for it. */
+function resolveNodeDepths(node: GraphNode): DepthRung[] {
+  const models = node.depthModels ?? {};
+  const primary: ModelRef | undefined = node.provider && node.model ? { provider: node.provider, model: node.model } : undefined;
+
+  const describe = (level: DepthRung["level"], pick: ModelRef | "router" | undefined, fallback: string, impliedRef?: ModelRef): DepthRung => {
+    if (pick === "router") return { level, label: "the router answers it", implied: false };
+    if (pick) return { level, label: pick.model, provider: pick.provider, implied: false };
+    if (impliedRef) return { level, label: impliedRef.model, provider: impliedRef.provider, implied: true };
+    return { level, label: fallback, implied: true };
+  };
+
+  return [
+    describe("L1", models.l1, "your local model"),
+    describe("L2", models.l2, "whatever the router picks"),
+    // L3 inherits the node's own primary model when unset, matching
+    // projectDepthRoutes: "whatever you drag onto the node is your L3".
+    describe("L3", models.l3, "strongest configured cloud", primary)
+  ];
+}
+
 function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, ModelGatewayConfig>): GraphPipelineConfig {
   // Per-MODEL gateways (docs/DRILL_PLAN.md B11.3 v2): a model's gateway
   // config lives in the global modelGateways store (set from the Library
@@ -8303,6 +8337,10 @@ function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, 
 
 function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNav: NavKey; gallerySkills: string[]; galleryVisuals: Record<string, GalleryVisual> }): JSX.Element {
   const [nodes, setNodes] = useState<GraphNode[]>(loadNodes);
+  // Read here rather than inside NodeCard so every node on the canvas agrees
+  // about whether depths are live, instead of each one reading the store
+  // separately and briefly disagreeing while they load.
+  const [depthRoutingActive] = useAppStoreState("depthRoutingEnabled", false);
   const [installedSkills, setInstalledSkills] = useState<RegistryPackage[]>([]);
   const [customSkills, setCustomSkills] = useAppStoreState("customSkills", EMPTY_CUSTOM_SKILLS);
   const [pan, setPan] = useState<Vec>({ x: 0, y: 0 });
@@ -9060,6 +9098,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
               selected={selected === node.id}
               targetMode={overTarget === node.id ? (drag?.payload.kind ?? (interaction?.type === "node" && interaction.isSkill ? "skill" : null)) : null}
               galleryVisual={node.kind === "skill" ? galleryVisuals[node.label] : undefined}
+              depthRoutingActive={depthRoutingActive}
               onPointerDown={onNodePointerDown}
               onDelete={removeNode}
             />
@@ -9165,12 +9204,18 @@ function NodeCard({
   selected,
   targetMode,
   galleryVisual,
+  depthRoutingActive,
   onPointerDown,
   onDelete
 }: {
   node: GraphNode;
   selected: boolean;
   targetMode: DragPayload["kind"] | null;
+  /** The GLOBAL depthRoutingEnabled flag. A node can carry a depth stack while
+   *  the flag is off, in which case the stack is configured but inert. Showing
+   *  it as live would be the same lie in the other direction as showing one
+   *  model when three are in play. */
+  depthRoutingActive: boolean;
   /** When this skill node matches a gallery board (by its `Gallery: <title>` label), its cover
    *  thumbnail + aggregated palette swatches — so the node renders as a moodboard step in the
    *  pipeline (owner idea "Gallery model-visualisation inside orchestration") instead of a plain
@@ -9181,13 +9226,22 @@ function NodeCard({
 }): JSX.Element {
   const provider = node.provider ? PROVIDERS[node.provider] : null;
   const isMoodboard = node.kind === "skill" && Boolean(galleryVisual);
+  // Depths change what the node IS, not a detail of it. With a depth stack
+  // configured, naming one model is describing something that will not happen:
+  // the router picks a rung by judged difficulty, so a node labelled "Fable 5"
+  // while L3 is pinned to Opus 4.8 tells you the opposite of the truth about
+  // your hardest tasks. Agent and router nodes only; a skill node has no model.
+  const depthRungs = node.depthsEnabled && node.kind !== "skill" ? resolveNodeDepths(node) : null;
   const sublabel = node.kind === "skill" ? (isMoodboard ? "Board · loads first" : "Skill · loads first") : `${provider?.label ?? "Unassigned"}${node.model ? ` · ${node.model}` : ""}`;
+  // The stack is what it reaches for, so the accessible name should say so too
+  // rather than announcing a single model the run may never touch.
+  const accessibleSublabel = depthRungs ? `routes by depth: ${depthRungs.map((rung) => `${rung.level} ${rung.label}`).join(", ")}` : sublabel;
   const fallbacks = node.fallbacks ?? [];
   const palette = galleryVisual?.palette ?? [];
 
   return (
     <article
-      aria-label={`${node.label} ${sublabel}`}
+      aria-label={`${node.label} ${accessibleSublabel}`}
       className={["graph-node", `${node.kind}-node`, isMoodboard ? "moodboard-node" : "", selected ? "selected" : "", targetMode === "model" ? "target-model" : "", targetMode === "skill" ? "target-skill" : ""]
         .filter(Boolean)
         .join(" ")}
@@ -9212,6 +9266,7 @@ function NodeCard({
           </button>
         ) : null}
         {node.kind === "router" ? <span className="node-tag">ROUTER</span> : null}
+        {depthRungs ? <span className={depthRoutingActive ? "node-tag depths" : "node-tag depths inert"}>DEPTHS</span> : null}
         {provider?.tier === "local" && node.kind !== "skill" ? <span className="node-pill">local</span> : null}
         {isMoodboard ? (
           <GalleryHorizontalEnd size={24} strokeWidth={1.8} />
@@ -9224,7 +9279,20 @@ function NodeCard({
 
       <span className="node-caption">
         <strong>{node.label}</strong>
-        <small>{sublabel}</small>
+        {depthRungs ? (
+          <span className={depthRoutingActive ? "node-depths" : "node-depths inert"}>
+            {depthRungs.map((rung) => (
+              <span className={rung.implied ? "node-depth-rung implied" : "node-depth-rung"} key={rung.level}>
+                <b>{rung.level}</b>
+                {rung.provider ? <img alt="" src={PROVIDERS[rung.provider].logo} /> : null}
+                <i>{rung.label}</i>
+              </span>
+            ))}
+            {!depthRoutingActive ? <em className="node-depths-off">depth routing is off, none of this applies yet</em> : null}
+          </span>
+        ) : (
+          <small>{sublabel}</small>
+        )}
         {isMoodboard && palette.length ? (
           <span className="node-palette-strip" aria-hidden="true">
             {palette.slice(0, 5).map((hex, index) => (
