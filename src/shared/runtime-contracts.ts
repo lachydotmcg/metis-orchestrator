@@ -693,6 +693,13 @@ export interface SessionRunInput {
    *  can cancel the other. Undefined for every ordinary caller, which keeps the
    *  project-path behaviour exactly as it was. */
   cancelScope?: string;
+  /** Set when this run is one turn of a Loop. Carried onto the SessionRun and
+   *  from there into the usage ledger, so spend can be attributed back to the
+   *  loop that caused it. Without attribution a token ceiling has nothing to
+   *  sum, which is why this lands before the budget feature rather than with
+   *  it: the ledger needs to be accumulating attributable rows already by the
+   *  time anything wants to read them. */
+  loopId?: string;
   rawPromptStorage?: "local-only" | "hash-only";
   /** When set, bypass Metis Policy routing and call this model directly. */
   modelOverride?: SessionModelOverride;
@@ -904,6 +911,10 @@ export interface SessionRun {
    *  (same pinned local model, same default sampling) instead of a fresh
    *  generation. The renderer labels these honestly. */
   oracleServed?: boolean;
+  /** The Loop this run was a turn of, when it was one. Copied from
+   *  SessionRunInput.loopId so the usage ledger can attribute spend back to the
+   *  loop that caused it. Undefined for every ordinary run. */
+  loopId?: string;
   /** Real suggested next messages (docs/DRILL_PLAN.md CORE.1) - written by
    *  the SAME model that answered, from the actual exchange, replacing the
    *  old canned heuristics ("Add a second page"). Two or three short things

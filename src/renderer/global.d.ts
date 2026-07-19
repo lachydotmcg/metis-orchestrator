@@ -264,6 +264,7 @@ declare global {
     metisLoops?: {
       list: () => Promise<LoopRecord[]>;
       create: (input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number }) => Promise<LoopRecord>;
+      usage: (id: string) => Promise<{ inputTokens: number; outputTokens: number; turns: number; estimated: boolean }>;
       stop: (id: string, reason?: string) => Promise<LoopRecord | undefined>;
       delete: (id: string) => Promise<LoopRecord[]>;
     };

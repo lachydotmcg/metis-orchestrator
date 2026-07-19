@@ -4790,6 +4790,15 @@ interface UsageLedgerEntry {
   outputTokens: number;
   estimated?: boolean;
   oracleServed?: boolean;
+  /** What caused this spend. Both undefined for an ordinary one-off chat turn.
+   *
+   *  Added before the budget feature that needs them, not with it: a ceiling
+   *  can only be enforced against rows that already carry attribution, and rows
+   *  written before this existed can never be attributed retroactively. Every
+   *  day this ships earlier is a day of ledger that a future budget can
+   *  actually read. */
+  conversationId?: string;
+  loopId?: string;
   /** Wall-clock run duration (B12.2 follow-up): powers the local-inference
    *  electricity estimate in the Usage tab. Capped at 30min so a stray clock
    *  jump or suspended laptop can never poison the sum. */
@@ -4814,11 +4823,38 @@ async function appendUsageLedgerEntry(run: SessionRun): Promise<void> {
     outputTokens: result.usage?.outputTokens ?? 0,
     estimated: result.usage?.estimated,
     oracleServed: run.oracleServed,
+    conversationId: run.conversationId,
+    loopId: run.loopId,
     durationMs
   };
   const current = await readStoreValue<UsageLedgerEntry[]>("usageLedger", []);
   const next = [...current, entry].slice(-5000);
   await writeStoreValue("usageLedger", next);
+}
+
+/** What one loop has actually spent, summed from the ledger.
+ *
+ *  This is the read side of the attribution above, and the thing a phase-3
+ *  token ceiling will check inside loopTerminalReason so the tick path and the
+ *  scheduler cannot disagree about whether a loop is out of budget.
+ *
+ *  Two honest caveats it does not hide. The ledger is capped at 5000 rows, so a
+ *  very long-lived loop on a busy machine can have its earliest turns rolled
+ *  off, and the total then understates. And rows only exist for runs that
+ *  actually reached a provider, which is correct for spend (a stub cost
+ *  nothing) but means turn count here can trail the loop's own iteration
+ *  count. */
+async function loopUsageTotals(loopId: string): Promise<{ inputTokens: number; outputTokens: number; turns: number; estimated: boolean }> {
+  const ledger = await readStoreValue<UsageLedgerEntry[]>("usageLedger", []);
+  const rows = ledger.filter((entry) => entry.loopId === loopId);
+  return {
+    inputTokens: rows.reduce((sum, entry) => sum + (entry.inputTokens || 0), 0),
+    outputTokens: rows.reduce((sum, entry) => sum + (entry.outputTokens || 0), 0),
+    turns: rows.length,
+    // Any estimated row makes the whole total an estimate. Presenting a mixed
+    // sum as exact would be the dishonest reading of it.
+    estimated: rows.some((entry) => entry.estimated)
+  };
 }
 
 /** DRILL_PLAN B12.1 Phase A — the learned router's preference log. This pass
@@ -9560,6 +9596,9 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     modelThoughts: providerResult.thoughts,
     ttftMs: providerResult.ttftMs,
     oracleServed: oracleServed || undefined,
+    // Carried so appendUsageLedgerEntry can attribute this turn back to the
+    // loop that caused it. Undefined for every ordinary run.
+    loopId: input.loopId,
     oracleNearMatch: servedSimilarity ?? undefined,
     depth: routeDepth,
     projectResult,
@@ -10406,6 +10445,8 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       // turn also aborted every in-flight loop call in that folder and marked
       // the loop failed with no retry.
       cancelScope: loopCancelScope(loaded.id),
+      // Attributes this turn's spend to the loop in the usage ledger.
+      loopId: loaded.id,
       conversationId: loaded.conversationId,
       projectPath: loaded.projectPath,
       // The mode captured at creation, never the current global — see
@@ -13077,6 +13118,7 @@ app.whenReady().then(async () => {
       // handling that belongs to a process that has since exited.
       createLoop({ ...input, origin: "app" })
   );
+  ipcMain.handle("metis-loops:usage", (_event, id: string) => loopUsageTotals(id));
   ipcMain.handle("metis-loops:stop", (_event, id: string, reason?: string) => stopLoop(id, reason));
   ipcMain.handle("metis-loops:delete", (_event, id: string) => deleteLoop(id));
   // DRILL_PLAN B12.2/B12.7 — usage metering + limits. summary is read-only
