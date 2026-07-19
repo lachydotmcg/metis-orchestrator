@@ -17,3 +17,15 @@ Thumbs.db
 # Private working log. It records session-by-session conversation context, so it
 # stays local. Untracked 2026-07-19; see the README roadmap for the public view.
 docs/DRILL_PLAN.md
+
+# Internal planning, handoff and audit docs. Useful to me, not to anyone cloning
+# the repo, and several record session-by-session context. Untracked 2026-07-19;
+# the public view is the README roadmap plus docs/LIMITATIONS.md.
+docs/FABLE_PLANS.md
+docs/HANDOFF.md
+docs/UI_HANDOFF.md
+docs/NEXT_STEPS.md
+docs/AGENTIC_ROADMAP.md
+docs/AGENT_CAPABILITY_RESEARCH.md
+docs/SHIP_V1.md
+docs/BUSINESS_PLAN.md

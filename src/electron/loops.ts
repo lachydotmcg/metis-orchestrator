@@ -291,18 +291,41 @@ export async function decideLoopContinuation(
     // running". Parsing it as a decision would turn an outage into a running loop.
     if (!result || result.source === "placeholder") return null;
 
-    const line = result.output
+    const cleaned = result.output
       .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      // An UNTERMINATED think block is a reasoning trace cut off by the token
+      // limit, and deliberation about this exact question reliably contains a
+      // line beginning "Continue..." long before any conclusion. Stripping only
+      // closed pairs left that raw thinking to be read as the answer.
+      .replace(/<think>[\s\S]*$/i, "");
+
+    const candidates = cleaned
       .split("\n")
       .map((entry) => entry.trim())
-      .find((entry) => /^(continue|stop)\b/i.test(entry));
-    if (!line) return null;
+      .filter((entry) => /^(continue|stop)\b/i.test(entry))
+      // Small models echo the option menu before answering, and the menu lists
+      // CONTINUE first, so an echo used to win outright. A line still carrying
+      // the prompt's placeholders is a quotation, not a decision.
+      .filter((entry) => !/<seconds>|<short reason>/i.test(entry));
 
-    if (/^stop\b/i.test(line)) {
-      const reason = line.replace(/^stop\b[\s:.-]*/i, "").trim();
+    if (!candidates.length) return null;
+
+    // AMBIGUITY RESOLVES TOWARD STOPPING, the same rule extractLoopDecision
+    // follows. Any stop line wins, even alongside a continue: we cannot tell
+    // which the model meant, and stopping is the recoverable mistake. This also
+    // catches prose like "Continue? No, the work is done, so we should stop",
+    // which begins with the word continue and means the opposite.
+    const stopLine = candidates.find((entry) => /^stop\b/i.test(entry));
+    const contradicted = candidates.find((entry) => /^continue\b/i.test(entry) && /\bstop\b/i.test(entry));
+    if (stopLine || contradicted) {
+      const source = stopLine ?? "";
+      const reason = source.replace(/^stop\b[\s:.-]*/i, "").trim();
       return { decision: "stop", reason: reason || undefined };
     }
 
+    // Otherwise the LAST continue line, mirroring extractLoopDecision's
+    // "the decision is the one it ends on".
+    const line = candidates[candidates.length - 1];
     const match = line.match(/^continue\b[\s:.-]*(\d+)?\s*(.*)$/i);
     if (!match) return null;
     const seconds = match[1] ? Number(match[1]) : LOOP_MIN_DELAY_SECONDS;

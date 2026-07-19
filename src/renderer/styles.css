@@ -14722,3 +14722,10 @@ a:focus-visible,
   font-size: 11px;
   line-height: 1.45;
 }
+
+/* A rung whose model cannot be mapped to a backend route. Amber, because the
+   level is not broken, it just falls through to its default: the honest reading
+   is "this is not what you think you configured". */
+.node-depth-rung.unroutable i {
+  color: #ffd8a3;
+}

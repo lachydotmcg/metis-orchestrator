@@ -8210,8 +8210,14 @@ function depthStageRefFor(ref: ModelRef | "router"): { provider: string; model: 
     const tag = localOllamaTagFor(ref);
     return tag ? { provider: "ollama", model: tag } : null;
   }
-  const direct = ["anthropic", "openai", "gemini", "deepseek", "openrouter", "nvidia", "groq"];
-  return direct.includes(ref.provider) ? { provider: ref.provider, model: ref.model } : null;
+  // Map the renderer BRAND id to the backend ProviderKey before checking it.
+  // This used to compare brand ids against backend keys directly, which happened
+  // to work for openai/gemini/deepseek because those names coincide, and
+  // silently returned null for "claude" and "grok" - so pinning Opus 4.8 to a
+  // depth level wrote nothing to the store and the engine kept its own default.
+  // The level looked configured and was not.
+  const key = PROVIDER_CONNECTIONS[ref.provider];
+  return key ? { provider: key, model: ref.model } : null;
 }
 
 /** Projects the depths-enabled node's level stack into the depthRoutes store
@@ -8241,7 +8247,7 @@ function projectDepthRoutes(nodes: GraphNode[]): Record<string, unknown> | null 
 /** One rung of a depths-enabled node, resolved for display.
  *  `implied` marks a rung the user did not pick explicitly, so the node can
  *  show it as inherited rather than chosen. */
-type DepthRung = { level: "L1" | "L2" | "L3"; label: string; provider?: ProviderId; implied: boolean };
+type DepthRung = { level: "L1" | "L2" | "L3"; label: string; provider?: ProviderId; implied: boolean; unroutable?: boolean };
 
 /** What a depths-enabled node will ACTUALLY reach for, resolved the same way
  *  projectDepthRoutes resolves it. Deliberately sitting next to that function:
@@ -8258,8 +8264,18 @@ function resolveNodeDepths(node: GraphNode): DepthRung[] {
 
   const describe = (level: DepthRung["level"], pick: ModelRef | "router" | undefined, fallback: string, impliedRef?: ModelRef): DepthRung => {
     if (pick === "router") return { level, label: "the router answers it", implied: false };
-    if (pick) return { level, label: pick.model, provider: pick.provider, implied: false };
-    if (impliedRef) return { level, label: impliedRef.model, provider: impliedRef.provider, implied: true };
+    // Resolved through the SAME function projectDepthRoutes writes with. Sitting
+    // next to it was not enough: depthStageRefFor silently drops a model it
+    // cannot map to a backend route, so the node cheerfully displayed rungs the
+    // engine never received. A rung that will not be applied must say so rather
+    // than look pinned.
+    const chosen = pick ?? impliedRef;
+    if (chosen) {
+      if (depthStageRefFor(chosen) === null) {
+        return { level, label: `${chosen.model} cannot be routed here, level default applies`, implied: true, unroutable: true };
+      }
+      return { level, label: chosen.model, provider: chosen.provider, implied: !pick };
+    }
     return { level, label: fallback, implied: true };
   };
 
@@ -9282,7 +9298,7 @@ function NodeCard({
         {depthRungs ? (
           <span className={depthRoutingActive ? "node-depths" : "node-depths inert"}>
             {depthRungs.map((rung) => (
-              <span className={rung.implied ? "node-depth-rung implied" : "node-depth-rung"} key={rung.level}>
+              <span className={["node-depth-rung", rung.implied ? "implied" : "", rung.unroutable ? "unroutable" : ""].filter(Boolean).join(" ")} key={rung.level}>
                 <b>{rung.level}</b>
                 {rung.provider ? <img alt="" src={PROVIDERS[rung.provider].logo} /> : null}
                 <i>{rung.label}</i>
