@@ -11,9 +11,10 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 - **A loop runs alone.** Phase 2 (spawning parallel workers, waking when one finishes) is not
   built. A loop is one goal, worked one turn at a time.
-- **No token ceiling.** Phase 3. The iteration cap (25) and wall-clock ceiling (12h) are the only
-  spend bounds. The prerequisite is smaller than the feature: `UsageLedgerEntry` has no loop or
-  conversation attribution, so a budget currently has nothing to sum.
+- **No token ceiling.** Phase 3. The iteration cap (25) and wall-clock ceiling (12h) are still the
+  only spend bounds. The prerequisite is now done: the ledger attributes each row to its loop and
+  conversation, and `loopUsageTotals` sums it, so what remains is enforcing a limit rather than
+  being able to measure one.
 - **No capable-model gate.** `docs/LOOPS.md` closes phase 1 on refusing to drive a loop with a
   model too small to reliably decide to *stop*, and that gate does not exist. A silent turn now
   names the model that went silent, which is the reporting half, not the preventing half. This is

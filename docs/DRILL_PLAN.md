@@ -187,9 +187,10 @@ gets done.
     The caps bound the damage; they do not make a 4B model good at knowing when it is done. Design
     note: prefer a clear warning with an override to a hard block, because Metis is local-first and
     a gate that only passes metered cloud models inverts the product argument.
-  - **STILL OPEN, phase 3 prerequisite:** UsageLedgerEntry has no loop/conversation attribution, so
-    a token ceiling has nothing to sum. Small change to appendUsageLedgerEntry, worth doing early so
-    the ledger accumulates attributable data before the budget feature needs it.
+  - **DONE 2026-07-19, phase 3 prerequisite:** UsageLedgerEntry now carries conversationId and
+    loopId, and loopUsageTotals sums a loop's real spend (exposed over metis-loops:usage). The
+    ceiling itself is still unbuilt, but the ledger is accumulating attributable rows from now on,
+    which was the part that could not be done retroactively.
   - Phase 2 (spawning workers, waking on a worker finishing) and the rest of phase 3 (token
     ceilings, tray presence for sleeping loops) remain untouched.
 - [ ] **CORE.8 - LOOPS: self-directed runs (Lachy, high want).** "You wake yourself up, spawn
