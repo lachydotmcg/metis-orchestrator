@@ -8,3 +8,8 @@ coverage/
 !.env.example
 profile.json
 decision.json
+
+# Windows Explorer folder-view artifacts. OneDrive drops these into any folder
+# whose icon or view has been customised; they are machine-local noise.
+desktop.ini
+Thumbs.db

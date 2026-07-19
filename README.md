@@ -10,7 +10,9 @@ Inside a frontier lab, nobody sends every request to one model. They route: a ch
 
 Metis gives you the wiring. You decide which model plans, which one writes the frontend, which one makes it work, which one you never send private code to. Drag them onto the canvas and connect them. Then point it at a real folder and it writes real files.
 
-Two things fall out of that. **Better results**, because a task routed to the right model beats the same task sent to whatever a vendor picked for you. And **faster ones**, because Oracle drafts your answer while you are still typing and can serve it the instant you hit enter.
+And routing by task is only half of it. Turn on Depths and every node becomes a ladder rather than a model: the router judges how heavy each individual turn is and sends it to the matching rung. Trivial work stays on something cheap or local, and only the genuinely hard turns reach your strongest model. Two questions instead of one, "what kind of work is this" and "how hard is this particular piece of it".
+
+**The whole point is to give you the best results, the fastest, and the cheapest.** Best, because a task routed to the right model beats the same task sent to whatever a vendor picked for you. Fastest, because Oracle drafts your answer while you are still typing and can serve it the instant you hit enter. Cheapest, because nothing expensive gets spent on work that did not need it.
 
 It runs on your machine, on your keys, with no account and no server of ours in the path. Local models are free to run, so the cheap parts genuinely cost nothing.
 
@@ -20,6 +22,14 @@ It runs on your machine, on your keys, with no account and no server of ours in 
 
 <p align="center">
   <em>A local Qwen router at the centre, deciding. Gemini plans, Claude does the frontend, DeepSeek does the backend,<br />GPT takes agentic work, Grok does research. Every route is labelled, and every one of those choices is yours.</em>
+</p>
+
+<p align="center">
+  <img src="public/assets/readmeimages/depths.png" alt="The Frontend node showing a depth ladder: L1 handled by the router itself, L2 DeepSeek V4 Pro, L3 Fable 5, with the Depths panel explaining that trivial work stays cheap and deep work goes to your strongest model" width="880" />
+</p>
+
+<p align="center">
+  <em>Depths, switched on. The node stops being one model and becomes three rungs: here L1 is answered by the router itself,<br />L2 goes to V4 Pro, and only the hardest turns reach Fable 5. Opt-in, and off until you enable it.</em>
 </p>
 
 <p align="center">
@@ -390,12 +400,37 @@ Store key `fanoutEnabled`, default off. A build request is decomposed by one che
 </details>
 
 <details>
-<summary><b>Model-driven routing and depth routing</b> · <code>FLAG OFF</code> · Let a model do the classifying instead of keyword rules.</summary>
+<summary><b>Depths: routing by how hard the turn is</b> · <code>FLAG OFF</code> · Trivial work stays cheap, only the deep questions reach your strongest model.</summary>
 
 <br />
 
-- **`modelDrivenRoutingEnabled`** (toggle in Settings > Chat > Experiments): a fast local model classifies each prompt as chat or build instead of the keyword rules. Falls back to the rules on any failure.
-- **`depthRoutingEnabled`**: a node can judge how hard each turn actually is and route it to a lighter or heavier model per level. Level 3, the hardest, defaults to the node's own model, so the model you dragged onto the node stays the honest fallback for the deep questions.
+Routing by task answers "what kind of work is this". Depths answers the other question: "how hard is this particular piece of it". With it on, a node stops being one model and becomes three rungs, and the router judges each turn's weight and sends it to the matching one.
+
+| Rung | Meant for | Default when you leave it unset |
+| --- | --- | --- |
+| **L1** | Trivial turns. A quick lookup, a one-line answer. | Your local model, so it costs nothing. |
+| **L2** | Ordinary work. | Whatever the router would have picked anyway. |
+| **L3** | The genuinely hard turns. | **The node's own model**, so whatever you dragged on stays the honest fallback for deep questions. |
+
+Any rung can also be set to **the router answers it**, meaning no re-route at all: the router model handles that level itself.
+
+This is where "cheapest" comes from. A pipeline where every turn hits your strongest model pays frontier prices for work a 4B local model would have finished correctly. Depths is the difference between paying for capability and paying for capability *you needed*.
+
+**The node shows this, rather than hiding it.** A depths-enabled node displays all three rungs with their providers instead of a single model name, because a node captioned "Fable 5" while L3 is pinned to Opus 4.8 tells you the opposite of the truth about your hardest tasks. Rungs you pinned read bright, inherited ones read quieter but stay legible, since an unset level is not an empty slot.
+
+**Honest limits:**
+
+- It is off by default (`depthRoutingEnabled`), and the toggle lives on the node's own Depths panel.
+- The node's stack mirrors into a single global `depthRoutes` store that the shipped engine reads, so with several depths-enabled nodes the last one projected wins. True per-node consumption inside the pipeline is the noted follow-up.
+- A stack configured while the flag is off is shown greyed out and labelled as inert, rather than pretending it is live.
+</details>
+
+<details>
+<summary><b>Model-driven routing</b> · <code>FLAG OFF</code> · Let a model do the classifying instead of keyword rules.</summary>
+
+<br />
+
+**`modelDrivenRoutingEnabled`** (toggle in Settings > Chat > Experiments): a fast local model classifies each prompt as chat or build instead of the keyword rules. Falls back to the rules on any failure, so turning it on cannot make routing worse than the rules it replaces.
 </details>
 
 <details>
