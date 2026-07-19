@@ -9266,7 +9266,6 @@ function NodeCard({
           </button>
         ) : null}
         {node.kind === "router" ? <span className="node-tag">ROUTER</span> : null}
-        {depthRungs ? <span className={depthRoutingActive ? "node-tag depths" : "node-tag depths inert"}>DEPTHS</span> : null}
         {provider?.tier === "local" && node.kind !== "skill" ? <span className="node-pill">local</span> : null}
         {isMoodboard ? (
           <GalleryHorizontalEnd size={24} strokeWidth={1.8} />

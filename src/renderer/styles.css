@@ -14655,14 +14655,6 @@ a:focus-visible,
    "a model" and becomes "a ladder the router climbs", so the caption shows the
    three rungs instead of one name. A node reading "Fable 5" while L3 is pinned
    to Opus 4.8 tells you the opposite of the truth about your hardest tasks. --- */
-.node-tag.depths {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
-}
-.node-tag.depths.inert {
-  color: var(--faint);
-  background: color-mix(in srgb, var(--faint) 14%, transparent);
-}
 .node-depths {
   display: flex;
   flex-direction: column;
