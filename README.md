@@ -568,10 +568,6 @@ marked, because "un-hide it" and "build it" are very different amounts of work.
 - **A spend ceiling for Loops.** The ledger now attributes every row to the loop that caused it,
   and `loopUsageTotals` sums it, so the measuring half is done. What remains is enforcing a limit
   and stopping a loop at `exhausted` when it is spent.
-- **A capability check before a Loop starts.** Nothing currently checks that the model driving a
-  loop can reliably decide to *stop*, which matters most on small local models. A silent turn
-  already names the model that went silent; the preventing half is still to do, and it should warn
-  with an override rather than hard-block, since refusing local models would invert the point.
 - **Sleeping loops in the tray.** With headless start the tray is the only surface a running loop
   has, and it is not listed there yet.
 

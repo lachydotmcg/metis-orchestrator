@@ -15,12 +15,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   only spend bounds. The prerequisite is now done: the ledger attributes each row to its loop and
   conversation, and `loopUsageTotals` sums it, so what remains is enforcing a limit rather than
   being able to measure one.
-- **No capable-model gate.** `docs/LOOPS.md` closes phase 1 on refusing to drive a loop with a
-  model too small to reliably decide to *stop*, and that gate does not exist. A silent turn now
-  names the model that went silent, which is the reporting half, not the preventing half. This is
-  deliberately not a hard block: Metis is local-first and the loop is the one place free local
-  inference is structurally enabling, so a gate that only passed metered cloud models would invert
-  the product's own argument.
+- **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
+  are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
+  is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the
+  protocol, only that nothing below it reliably does. Deliberately never refuses: Metis is
+  local-first, and a gate that only passed metered cloud models would invert the product's own
+  argument for the feature.
 - **No tray presence for sleeping loops.** With headless start, the tray is the only surface, and a
   sleeping loop does not appear there yet. It is visible in Settings > Privacy & Data and pausable
   from the tray, but not listed there.
