@@ -277,11 +277,44 @@ type NodeModelSlot = ModelRef & { gateway?: ProviderId; gatewayFallbacks?: Provi
  *  under the "modelGateways" app-store key as a map keyed by
  *  modelGatewayKey(ref), and baked into every graphPipeline projection so
  *  main.ts needs no extra lookup. */
-type ModelGatewayConfig = { gateway?: ProviderId; gatewayFallbacks?: ProviderId[] };
+type ModelGatewayConfig = {
+  gateway?: ProviderId;
+  gatewayFallbacks?: ProviderId[];
+  /** Other MODELS to try when this one fails outright, in order. Distinct from
+   *  gatewayFallbacks, which are other ROUTES to this same model: a gateway
+   *  fallback answers "reach GPT-5.1 another way", a model fallback answers
+   *  "GPT-5.1 is unreachable, use something else".
+   *
+   *  Per-MODEL for the same reason gateways became per-model (Lachy): a chain
+   *  is a property of the model, not of wherever you happened to drop it. Set
+   *  Claude's fallbacks once and every node using Claude inherits them, instead
+   *  of re-picking the same chain on each node and having them silently drift.
+   *  Node-level `fallbacks` stay as a legacy fallback so existing graphs route
+   *  exactly as they did. */
+  fallbacks?: ModelRef[];
+};
 const EMPTY_MODEL_GATEWAYS: Record<string, ModelGatewayConfig> = {};
 
 function modelGatewayKey(ref: ModelRef): string {
   return `${ref.provider}|${ref.model}`;
+}
+
+/** THE one place the fallback-chain precedence is decided: a model's own
+ *  configured chain wins, and the node's slot list is legacy carry-over used
+ *  only when the model has none.
+ *
+ *  Shared rather than duplicated on purpose. The Depths rungs were written with
+ *  their resolution logic merely ADJACENT to the projection's, on the reasoning
+ *  that adjacency would keep them honest, and they diverged anyway: the node
+ *  advertised rungs the engine never received. One function, two callers. */
+function resolveModelFallbacks(
+  primary: ModelRef,
+  nodeFallbacks: NodeModelSlot[] | undefined,
+  modelGateways: Record<string, ModelGatewayConfig>
+): NodeModelSlot[] {
+  if (!primary.provider || !primary.model?.trim()) return nodeFallbacks ?? [];
+  const configured = modelGateways[modelGatewayKey(primary)]?.fallbacks;
+  return configured?.length ? (configured as NodeModelSlot[]) : (nodeFallbacks ?? []);
 }
 
 type GraphNode = {
@@ -8313,7 +8346,12 @@ function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, 
     // Per-MODEL gateways: each model in the chain (primary + every fallback)
     // resolves its own gateway config and projects it alongside its model, so
     // main.ts routes every chain entry through that model's pinned gateways.
-    const fallback = (node.fallbacks ?? [])
+    // Per-MODEL fallbacks win over the node's own chain, same precedence rule
+    // gateways already use: the model's config is the editable home, the node
+    // slot is legacy carry-over. A node whose primary has a configured chain
+    // therefore inherits it without the chain being re-picked per node.
+    const chain: NodeModelSlot[] = resolveModelFallbacks({ provider: node.provider, model: node.model }, node.fallbacks, modelGateways);
+    const fallback = chain
       .filter((ref) => ref.model?.trim() && PROVIDER_CONNECTIONS[ref.provider])
       .map((ref) => {
         const config = gatewayConfigFor(ref, { gateway: ref.gateway, gatewayFallbacks: ref.gatewayFallbacks });
@@ -9026,8 +9064,16 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
         setModelGateways((current) => {
           const key = modelGatewayKey(modelInspect);
           // An all-Auto config is the same as no config - drop the key so the
-          // store only holds models the user actually pinned.
-          if (!next.gateway && (!next.gatewayFallbacks || next.gatewayFallbacks.length === 0)) {
+          // store only holds models the user actually pinned. This MUST list
+          // every field the config carries: it originally checked gateways
+          // only, so adding a model fallback and nothing else looked "empty"
+          // and the whole entry was deleted on save. The picker click appeared
+          // to do nothing at all.
+          const isEmpty =
+            !next.gateway &&
+            !(next.gatewayFallbacks && next.gatewayFallbacks.length > 0) &&
+            !(next.fallbacks && next.fallbacks.length > 0);
+          if (isEmpty) {
             const { [key]: _removed, ...rest } = current;
             return rest;
           }
@@ -9116,6 +9162,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
               targetMode={overTarget === node.id ? (drag?.payload.kind ?? (interaction?.type === "node" && interaction.isSkill ? "skill" : null)) : null}
               galleryVisual={node.kind === "skill" ? galleryVisuals[node.label] : undefined}
               depthRoutingActive={depthRoutingActive}
+              modelGateways={modelGateways}
               onPointerDown={onNodePointerDown}
               onDelete={removeNode}
             />
@@ -9222,6 +9269,7 @@ function NodeCard({
   targetMode,
   galleryVisual,
   depthRoutingActive,
+  modelGateways,
   onPointerDown,
   onDelete
 }: {
@@ -9233,6 +9281,9 @@ function NodeCard({
    *  it as live would be the same lie in the other direction as showing one
    *  model when three are in play. */
   depthRoutingActive: boolean;
+  /** The per-model config map, so a node shows the chain that will actually
+   *  run rather than only the one stored on the node itself. */
+  modelGateways: Record<string, ModelGatewayConfig>;
   /** When this skill node matches a gallery board (by its `Gallery: <title>` label), its cover
    *  thumbnail + aggregated palette swatches — so the node renders as a moodboard step in the
    *  pipeline (owner idea "Gallery model-visualisation inside orchestration") instead of a plain
@@ -9253,7 +9304,9 @@ function NodeCard({
   // The stack is what it reaches for, so the accessible name should say so too
   // rather than announcing a single model the run may never touch.
   const accessibleSublabel = depthRungs ? `routes by depth: ${depthRungs.map((rung) => `${rung.level} ${rung.label}`).join(", ")}` : sublabel;
-  const fallbacks = node.fallbacks ?? [];
+  // Resolved through the SAME function projectGraphPipeline uses, so a node
+  // cannot advertise a chain the pipeline will not run.
+  const fallbacks = resolveModelFallbacks({ provider: node.provider as ProviderId, model: node.model ?? "" }, node.fallbacks, modelGateways);
   const palette = galleryVisual?.palette ?? [];
 
   return (
@@ -17191,6 +17244,35 @@ function ModelGatewayInspector({
   }, [catalogModels, modelRef.provider, modelRef.model]);
 
   const gatewayFallbacks = config.gatewayFallbacks ?? [];
+
+  const modelFallbacks = config.fallbacks ?? [];
+  /** Every other model in the library, minus this one and anything already in
+   *  the chain. Offering the model itself would let a chain loop back to the
+   *  thing that just failed. */
+  const modelFallbackChoices = MODEL_LIBRARY.filter(
+    (entry) =>
+      !(entry.provider === modelRef.provider && entry.model === modelRef.model) &&
+      !modelFallbacks.some((ref) => ref.provider === entry.provider && ref.model === entry.model)
+  ).map((entry) => ({ provider: entry.provider, model: entry.model }));
+
+  function addModelFallback(ref: ModelRef): void {
+    onChange({ ...config, fallbacks: [...modelFallbacks, ref] });
+  }
+
+  function removeModelFallback(index: number): void {
+    onChange({ ...config, fallbacks: modelFallbacks.filter((_, i) => i !== index) });
+  }
+
+  /** Reorders within the chain rather than promoting to primary, unlike the
+   *  gateway list above. A model fallback has nowhere to be promoted TO: the
+   *  primary is whichever model you opened this panel for. */
+  function moveModelFallback(index: number, delta: number): void {
+    const target = index + delta;
+    if (target < 0 || target >= modelFallbacks.length) return;
+    const next = [...modelFallbacks];
+    [next[index], next[target]] = [next[target], next[index]];
+    onChange({ ...config, fallbacks: next });
+  }
   const gatewayFallbackChoices = gatewayOptions.filter((brand) => brand !== config.gateway);
 
   function setGateway(value: ProviderId | ""): void {
@@ -17288,6 +17370,56 @@ function ModelGatewayInspector({
                 </button>
               );
             })}
+          </div>
+        </div>
+
+        <div className="field">
+          <span>Model fallbacks · other models to try if this one is unreachable</span>
+          <p className="field-hint">
+            Different from gateway fallbacks above: those are other routes to <strong>{modelRef.model}</strong>, these are other models entirely.
+            Set here rather than on a node, so every node using {modelRef.model} inherits the same chain.
+          </p>
+          <ol className="fallback-list">
+            {modelFallbacks.length === 0 ? <li className="fallback-empty">No model fallbacks yet</li> : null}
+            {modelFallbacks.map((ref, index) => (
+              <li className="fallback-row" key={`${ref.provider}-${ref.model}-${index}`}>
+                <span className="fallback-rank">{index + 1}</span>
+                <span className="palette-icon logo small">
+                  <img alt="" src={PROVIDERS[ref.provider].logo} />
+                </span>
+                <span className="fallback-name">{ref.model}</span>
+                <button
+                  type="button"
+                  aria-label={`Move ${ref.model} earlier`}
+                  title="Try this sooner"
+                  disabled={index === 0}
+                  onClick={() => moveModelFallback(index, -1)}
+                >
+                  <ChevronUp size={14} />
+                </button>
+                <button type="button" aria-label={`Remove ${ref.model}`} title="Remove" onClick={() => removeModelFallback(index)}>
+                  <X size={14} />
+                </button>
+              </li>
+            ))}
+          </ol>
+          <div className="fallback-picker" aria-label="Add model fallback">
+            {modelFallbackChoices.map((ref) => (
+              <button
+                key={`${ref.provider}-${ref.model}`}
+                type="button"
+                className="fallback-option"
+                onClick={() => addModelFallback(ref)}
+              >
+                <span className="palette-icon logo small">
+                  <img alt="" src={PROVIDERS[ref.provider].logo} />
+                </span>
+                <span>
+                  <strong>{ref.model}</strong>
+                  <em>{PROVIDERS[ref.provider].label}</em>
+                </span>
+              </button>
+            ))}
           </div>
         </div>
       </div>
