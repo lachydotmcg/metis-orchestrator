@@ -5407,8 +5407,12 @@ function SessionComposer({
   // the strip promises is what will actually happen. The "/" template popover
   // cannot host this: it closes the moment a space is typed, which is exactly
   // when the arguments start.
+  const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
   const loopCommand = useMemo(() => parseLoopCommand(prompt), [prompt]);
   const loopHint = useMemo(() => describeLoopCommand(loopCommand), [loopCommand]);
+  // Clears the moment they change the prompt or the attachments, so a refusal
+  // never lingers as a stale accusation after it has been acted on.
+  useEffect(() => setAttachmentNotice(null), [prompt, attachments.length]);
 
   // Prompt template "/" popover (DRILL_PLAN Phase 8): only while the ENTIRE
   // prompt is a slash followed by a single space-free query token — i.e. it
@@ -5597,8 +5601,17 @@ function SessionComposer({
     // retype the goal. The hint strip is already showing why it will not run.
     if (loopCommand.isLoopCommand) {
       if (loopCommand.error || !loopCommand.parts?.goal) return;
+      // Attachments are NOT silently discarded. A loop has no path to carry
+      // images today (createLoop takes no attachments), so quietly dropping a
+      // file someone deliberately attached would lose their work with no sign
+      // it happened. Refuse and say why; they can send it as a normal message.
+      if (attachments.length) {
+        setAttachmentNotice(
+          `A loop cannot carry ${attachments.length === 1 ? "an attachment" : "attachments"} yet. Remove ${attachments.length === 1 ? "it" : "them"} to start the loop, or send this as an ordinary message instead.`
+        );
+        return;
+      }
       setPrompt("");
-      setAttachments([]);
       void onStartLoop(loopCommand.parts);
       return;
     }
@@ -5656,7 +5669,9 @@ function SessionComposer({
       ) : null}
       {loopCommand.isLoopCommand ? (
         <div className="composer-loop-hint" role="status">
-          {loopCommand.error ? (
+          {attachmentNotice ? (
+            <span className="composer-loop-error">{attachmentNotice}</span>
+          ) : loopCommand.error ? (
             <span className="composer-loop-error">{loopCommand.error}</span>
           ) : (
             <>
@@ -16499,9 +16514,11 @@ function SettingsNavGroup({
 
 /** Active loops surface (docs/LOOPS.md "Visibility and control").
  *  A loop runs when nobody is watching, so the one rule that matters here is
- *  that it can always be SEEN and always be killed in one click. Renders
- *  nothing when no loop has ever run, because an empty panel for a feature you
- *  are not using is just noise. */
+ *  that it can always be SEEN and always be killed in one click. Renders an
+ *  explanatory empty state rather than nothing: /loop is a typed command with
+ *  no button anywhere, so this panel is the only place in the app that says
+ *  loops exist, and it cannot be how you discover the feature if it hides until
+ *  you have already discovered it. */
 function ActiveLoopsPanel(): JSX.Element | null {
   const hasBridge = typeof window !== "undefined" && Boolean(window.metisLoops);
   const [loops, setLoops] = useState<LoopRecord[]>([]);
@@ -16610,6 +16627,7 @@ function ActiveLoopsPanel(): JSX.Element | null {
                 {loop.status === "sleeping" && loop.nextWakeAt ? (
                   <span>{wakeMs > 0 ? `wakes in ${formatLoopDelay(Math.round(wakeMs / 1000))}` : "waking now"}</span>
                 ) : null}
+                <span title="Frozen when the loop was created and never re-read from Settings">{loop.permissionMode} mode</span>
                 {loop.projectPath ? <span className="loop-project">{loop.projectPath}</span> : null}
               </div>
               {loop.lastReason && isLive ? <p className="loop-reason">“{loop.lastReason}”</p> : null}

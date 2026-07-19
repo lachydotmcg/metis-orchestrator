@@ -10098,20 +10098,28 @@ function isPermissionMode(value: unknown): value is PermissionMode {
   return value === "ask" || value === "edits" || value === "plan" || value === "auto" || value === "bypass";
 }
 
-/** Permission modes ordered from most restrictive to least. "plan" sits at the
- *  bottom because it writes nothing at all; "bypass" at the top because it asks
- *  for nothing. Used to clamp a requested mode down to a ceiling, never up. */
-const PERMISSION_MODE_LOOSENESS: PermissionMode[] = ["plan", "ask", "edits", "auto", "bypass"];
+/** Permission modes are NOT totally ordered, which a single "looseness" list
+ *  got wrong. "edits" lets file writes through with no prompt at all while
+ *  still asking for commands; "auto" asks once per new scope for BOTH. So
+ *  "edits" is looser than "auto" for writes and tighter for commands, and
+ *  neither is simply above the other. A linear ranking that put "edits" below
+ *  "auto" would have let a caller asking for "edits" past an "auto" ceiling and
+ *  silently gained it unprompted write access.
+ *
+ *  Ranked on the two axes that actually matter instead. A requested mode is
+ *  only honoured when it is no looser on EITHER axis. */
+const PERMISSION_WRITE_FREEDOM: Record<PermissionMode, number> = { plan: 0, ask: 1, auto: 2, edits: 3, bypass: 4 };
+const PERMISSION_COMMAND_FREEDOM: Record<PermissionMode, number> = { plan: 0, ask: 1, edits: 1, auto: 2, bypass: 3 };
 
-/** Returns whichever of the two is MORE restrictive. A caller can always ask
- *  for something tighter than the owner's global (a plan-only loop is a
- *  perfectly reasonable thing to want) but never for something looser. */
+/** Returns the requested mode when it is no looser than the ceiling on both
+ *  axes, and the ceiling otherwise. A caller can always ask for something
+ *  tighter (a plan-only loop is a perfectly reasonable thing to want), never
+ *  for something looser, and never for something that trades one freedom for
+ *  another. Incomparable pairs resolve to the ceiling, which is the safe side. */
 function clampPermissionMode(requested: PermissionMode, ceiling: PermissionMode): PermissionMode {
-  const requestedRank = PERMISSION_MODE_LOOSENESS.indexOf(requested);
-  const ceilingRank = PERMISSION_MODE_LOOSENESS.indexOf(ceiling);
-  if (requestedRank < 0) return ceiling;
-  if (ceilingRank < 0) return requested;
-  return requestedRank <= ceilingRank ? requested : ceiling;
+  const writeOk = PERMISSION_WRITE_FREEDOM[requested] <= PERMISSION_WRITE_FREEDOM[ceiling];
+  const commandOk = PERMISSION_COMMAND_FREEDOM[requested] <= PERMISSION_COMMAND_FREEDOM[ceiling];
+  return writeOk && commandOk ? requested : ceiling;
 }
 
 /** Read-modify-write of a single loop. Always re-reads first: a tick can take
