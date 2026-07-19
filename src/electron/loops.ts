@@ -159,6 +159,82 @@ function coerceSeconds(value: unknown): number {
 /** A true clamp: ±Infinity lands on the matching bound rather than being
  *  treated as garbage. Only NaN, which cannot be ordered against anything,
  *  falls back to the minimum. */
+/** Injected so this module keeps no import edge back into main.ts. Same shape
+ *  and same reasoning as FollowupInvoke in followups.ts. */
+export type LoopDecisionInvoke = (prompt: string) => Promise<{ output: string; source: string }>;
+
+/**
+ * Asks, as a SEPARATE small call, whether the loop should continue.
+ *
+ * This exists because of a specific live failure. A loop whose goal is real
+ * work ("add a JSDoc comment above each function, two per turn") correctly
+ * routes to the build/edit pipeline, and that pipeline's reply is a pipeline
+ * SUMMARY ("I ran this through the build pipeline and wrote 1 file"), not a
+ * model answer. There is nowhere for a metis-loop block to come from, so every
+ * working loop emitted no decision and stopped after exactly one turn. The loop
+ * did the work and then always gave up, which is the worst possible version of
+ * this feature: it looks like it works and quietly does one twelfth of the job.
+ *
+ * Separating the WORK from the DECISION fixes it generally rather than for one
+ * pipeline. It also matches what followups.ts already learned the hard way:
+ * small local models collapse when a single response has to carry both a task
+ * and a piece of protocol. One job per call.
+ *
+ * SILENCE STILL STOPS THE LOOP. This is a second chance to say continue, never
+ * a default toward continuing. Any failure, any unparseable answer, any
+ * placeholder result returns null and the caller ends the loop.
+ */
+export async function decideLoopContinuation(
+  invoke: LoopDecisionInvoke,
+  input: { goal: string; whatHappened: string; turnsLeft: number }
+): Promise<LoopDecision | null> {
+  try {
+    const prompt = [
+      "A background task just finished one turn of work. Decide whether it needs another turn.",
+      "",
+      "THE GOAL:",
+      input.goal,
+      "",
+      "WHAT THIS TURN DID:",
+      input.whatHappened || "(nothing was reported)",
+      "",
+      `Turns remaining if you continue: ${input.turnsLeft}`,
+      "",
+      "Answer with ONE line and nothing else:",
+      "  CONTINUE <seconds> <short reason>     if the goal is not finished yet",
+      "  STOP <short reason>                   if the goal is met, or another turn cannot help",
+      "",
+      "Example: CONTINUE 60 four functions still need comments",
+      "Example: STOP every function now has a comment"
+    ].join("\n");
+
+    const result = await invoke(prompt);
+    // A placeholder is main.ts's stub for "no key configured" / "Ollama is not
+    // running". Parsing it as a decision would turn an outage into a running loop.
+    if (!result || result.source === "placeholder") return null;
+
+    const line = result.output
+      .replace(/<think>[\s\S]*?<\/think>/gi, "")
+      .split("\n")
+      .map((entry) => entry.trim())
+      .find((entry) => /^(continue|stop)\b/i.test(entry));
+    if (!line) return null;
+
+    if (/^stop\b/i.test(line)) {
+      const reason = line.replace(/^stop\b[\s:.-]*/i, "").trim();
+      return { decision: "stop", reason: reason || undefined };
+    }
+
+    const match = line.match(/^continue\b[\s:.-]*(\d+)?\s*(.*)$/i);
+    if (!match) return null;
+    const seconds = match[1] ? Number(match[1]) : LOOP_MIN_DELAY_SECONDS;
+    const reason = (match[2] ?? "").trim();
+    return { decision: "continue", delaySeconds: clampLoopDelay(seconds), reason: reason || undefined };
+  } catch {
+    return null;
+  }
+}
+
 export function clampLoopDelay(seconds: number): number {
   if (Number.isNaN(seconds)) return LOOP_MIN_DELAY_SECONDS;
   if (seconds === Number.POSITIVE_INFINITY) return LOOP_MAX_DELAY_SECONDS;

@@ -89,6 +89,7 @@ import {
   LOOP_MAX_ITERATIONS_CEILING,
   LOOP_MIN_DELAY_SECONDS,
   composeWakePrompt,
+  decideLoopContinuation,
   extractLoopDecision,
   loopTerminalReason,
   summariseTurn,
@@ -10322,6 +10323,9 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
    *  decision branches below can name it, which is what makes a silent turn
    *  actionable rather than mysterious. */
   let answeringModel: string | undefined;
+  /** Passed to the decision call so it uses the same model that just did the
+   *  work, falling back to the local one when the work path produced none. */
+  let providerResultForDecision: ProviderInvokeResult | undefined;
   try {
     const run = await runSessionTracked({
       prompt: composeWakePrompt(loaded),
@@ -10349,6 +10353,7 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
     assistantText = run.assistantText ?? "";
     conversationId = run.conversationId ?? loaded.conversationId;
     answeringModel = run.providerResult?.model;
+    providerResultForDecision = run.providerResult;
   } catch (error) {
     runError = error instanceof Error ? error.message : String(error);
     runCancelled = isCancellationError(error);
@@ -10356,7 +10361,22 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
 
   // A failed turn produced no reply to read a decision out of, so it is never
   // parsed as one: an error is its own outcome, not a silent stop.
-  const decision = runError ? null : extractLoopDecision(assistantText);
+  // The work turn is asked for a decision block first, because a plain chat
+  // turn answers inline and that costs nothing extra. When there is no block,
+  // ask separately rather than giving up: a turn that routed to the build/edit
+  // pipeline replies with a pipeline SUMMARY, not a model answer, so there was
+  // never anywhere for a block to come from and every loop that did real work
+  // stopped after exactly one turn.
+  let decision = runError ? null : extractLoopDecision(assistantText);
+  let decisionAsked = false;
+  if (!runError && !decision) {
+    decisionAsked = true;
+    decision = await decideLoopContinuation(followupInvokerFor(providerResultForDecision), {
+      goal: loaded.goal,
+      whatHappened: summariseTurn(assistantText, 600),
+      turnsLeft: Math.max(0, loaded.maxIterations - index)
+    });
+  }
   const entry: LoopIterationRecord = {
     index,
     at: startedAt,
@@ -10416,8 +10436,8 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
     settled = {
       ...advanced,
       status: "stopped",
-      stoppedReason: answeringModel
-        ? `the model did not ask to continue (${answeringModel} answered without a decision block, which smaller models often miss)`
+      stoppedReason: decisionAsked
+        ? `the model did not ask to continue when asked directly${answeringModel ? ` (${answeringModel})` : ""}`
         : "the model did not ask to continue"
     };
     await appendAudit("info", "loop.stop", `Loop "${loopLabel(advanced)}" stopped: no continue was requested on iteration ${index}.`, {
