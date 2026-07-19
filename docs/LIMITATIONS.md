@@ -71,6 +71,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Closed
 
+- ~~**Loops could only ever do one turn of real work.**~~ Fixed 2026-07-19 (`4222546`): a turn
+  that routes to the build pipeline returns a pipeline summary rather than a model reply, so no
+  decision block existed and the loop always stopped after one turn, having looked like it worked.
+  The decision is now asked as a separate small call when the work turn cannot carry one. Verified:
+  14 of 14 functions documented across 4 self-directed turns, stopping itself when the job was done.
+
 - ~~**You cannot start a Loop from the app.**~~ Fixed 2026-07-19 (`62d49f5`): `/loop <goal>` with
   `--turns` and `--every`, plus a live hint strip in the composer.
 - ~~**Stopping a run erases the answer you were reading.**~~ Fixed 2026-07-19 (`b979a50`): a stop

@@ -170,6 +170,32 @@ constraints are therefore not decoration.
 - **Gating loop-driving to capable models. NOT BUILT, and it is an OPEN PHASE 1 ITEM.** See the
   open items section below. Any model the router picks can drive a loop right now.
 
+## The decision is asked separately when the work turn cannot carry it
+
+A loop turn whose goal is real work routes to the build/edit pipeline, and that pipeline replies
+with a summary of what it did rather than a model answer. There is nowhere in that reply for a
+```metis-loop block to come from, so before this was handled EVERY loop that did real work ran exactly
+one turn and stopped. That is the worst shape this feature could have: it looks like it works, and
+quietly does a fraction of the job.
+
+So the tick asks for the block first, since a plain chat turn answers inline and that costs nothing
+extra, and falls back to a separate small call when there is none: the goal, what this turn
+actually did, and how many turns remain, answered as a single line. `decideLoopContinuation` in
+loops.ts. It reuses `followupInvokerFor` so the question goes to the model that just did the work.
+
+This does not weaken the governing rule. The second call is a second chance to say continue, never
+a default toward continuing: a failed call, an unparseable answer, or a placeholder result (Ollama
+down, no key configured) all return null and the loop ends. An outage must never read as a reason
+to keep spending.
+
+It also matches what followups.ts already learned: small local models collapse when a single
+response has to carry both a task and a piece of protocol. One job per call.
+
+Proof run: "add a one-line JSDoc comment above each function in app.js, two per turn" ran four
+turns over the sandbox, reporting "four functions still need comments", then "two functions
+remain", then stopping itself with "every function now has a comment". 14 of 14 documented, file
+still valid JS.
+
 ## Visibility and control
 
 The rule from the taste sheet applies hardest here: honest UI, no fake buttons. If Metis is doing
