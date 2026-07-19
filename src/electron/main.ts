@@ -10083,6 +10083,51 @@ async function writeLoops(next: LoopRecord[]): Promise<void> {
   await writeStoreValue("loops", next);
 }
 
+/** Serialises every mutation of the loops store.
+ *
+ *  The store is one JSON key holding the whole array, and loops gained more
+ *  writers than that design ever had: the tick's start-of-turn and end-of-turn
+ *  writes, the 60s scheduler chain, createLoop, createLoop's immediate
+ *  fire-and-forget first tick, and stop/delete arriving over IPC from the
+ *  panel. Any two of those overlapping meant a read-modify-write on a stale
+ *  snapshot, and the observable result was the worst kind: a Stop the user
+ *  clicked during a turn could be silently overwritten by that turn's own final
+ *  write, and the loop would re-arm as if nothing had happened.
+ *
+ *  Every mutation now re-reads INSIDE the lock and returns the array it wants
+ *  persisted, so no caller can write from a snapshot it fetched earlier. Reads
+ *  are deliberately NOT queued: a stale read only ever renders a slightly old
+ *  panel, and blocking them behind in-flight turns would make the UI wait on a
+ *  model call.
+ *
+ *  Process-local. Two Metis processes sharing a store would still race, which
+ *  is why cli loops are given their own origin and never resumed by the app. */
+let loopMutationQueue: Promise<unknown> = Promise.resolve();
+
+/** Loop ids with a turn in flight RIGHT NOW. createLoop fires its first turn
+ *  without awaiting it, so that turn can still be running when the 60s chain
+ *  next sweeps, and the record is left at status "running" with a nextWakeAt
+ *  the sweep would honour. Two concurrent turns for one loop means two model
+ *  calls billed into the same conversation and two writes fighting over the
+ *  same record. */
+const loopsTicking = new Set<string>();
+
+function mutateLoops<T>(mutator: (current: LoopRecord[]) => { next: LoopRecord[]; result: T }): Promise<T> {
+  const run = loopMutationQueue.then(async () => {
+    const current = await readLoops();
+    const { next, result } = mutator(current);
+    await writeLoops(next);
+    return result;
+  });
+  // The chain must survive a failed mutation, or one throw wedges every later
+  // loop write for the life of the process.
+  loopMutationQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 /** Short one-line label for audit summaries. A goal is free text and can be a
  *  paragraph; the audit log is read as a list of one-liners. */
 function loopLabel(loop: LoopRecord): string {
@@ -10128,9 +10173,12 @@ function clampPermissionMode(requested: PermissionMode, ceiling: PermissionMode)
  *  not be clobbered by a stale in-memory list. Silently does nothing when the
  *  record has since been deleted, rather than resurrecting it. */
 async function persistLoop(loop: LoopRecord): Promise<void> {
-  const current = await readLoops();
-  if (!current.some((item) => item.id === loop.id)) return;
-  await writeLoops(current.map((item) => (item.id === loop.id ? loop : item)));
+  await mutateLoops((current) => ({
+    // Still a no-op when the record has since been deleted, rather than
+    // resurrecting it.
+    next: current.some((item) => item.id === loop.id) ? current.map((item) => (item.id === loop.id ? loop : item)) : current,
+    result: undefined
+  }));
 }
 
 async function listLoops(): Promise<LoopRecord[]> {
@@ -10192,7 +10240,7 @@ async function createLoop(input: {
     history: []
   };
 
-  await writeLoops([loop, ...(await readLoops())]);
+  await mutateLoops((current) => ({ next: [loop, ...current], result: undefined }));
   await appendAudit("info", "loop.create", `Created ${loop.origin} loop "${loopLabel(loop)}".`, {
     id: loop.id,
     maxIterations,
@@ -10236,16 +10284,18 @@ function normaliseFixedInterval(seconds: number | undefined): number | undefined
  *  record before its final write and honours a stop that landed during the
  *  run. */
 async function stopLoop(id: string, reason?: string): Promise<LoopRecord | undefined> {
-  const current = await readLoops();
-  const loop = current.find((item) => item.id === id);
-  if (!loop) return undefined;
-  const stopped: LoopRecord = {
-    ...loop,
-    status: "stopped",
-    stoppedReason: reason?.trim() || "stopped by the user",
-    nextWakeAt: undefined
-  };
-  await writeLoops(current.map((item) => (item.id === id ? stopped : item)));
+  const stopped = await mutateLoops<LoopRecord | undefined>((current) => {
+    const loop = current.find((item) => item.id === id);
+    if (!loop) return { next: current, result: undefined };
+    const marked: LoopRecord = {
+      ...loop,
+      status: "stopped",
+      stoppedReason: reason?.trim() || "stopped by the user",
+      nextWakeAt: undefined
+    };
+    return { next: current.map((item) => (item.id === id ? marked : item)), result: marked };
+  });
+  if (!stopped) return undefined;
   // Actually abort the turn if one is in flight, rather than only marking the
   // record and letting a model call the user just stopped run to completion on
   // their bill. fireLoopTick re-reads before its final write, so the stop still
@@ -10261,10 +10311,11 @@ async function stopLoop(id: string, reason?: string): Promise<LoopRecord | undef
 }
 
 async function deleteLoop(id: string): Promise<LoopRecord[]> {
-  const current = await readLoops();
-  const loop = current.find((item) => item.id === id);
-  const next = current.filter((item) => item.id !== id);
-  await writeLoops(next);
+  const { next, loop } = await mutateLoops<{ next: LoopRecord[]; loop?: LoopRecord }>((current) => {
+    const found = current.find((item) => item.id === id);
+    const remaining = current.filter((item) => item.id !== id);
+    return { next: remaining, result: { next: remaining, loop: found } };
+  });
   if (loop) {
     await appendAudit("info", "loop.delete", `Deleted loop "${loopLabel(loop)}".`, { id, iterations: loop.iterations });
   }
@@ -10278,8 +10329,21 @@ async function deleteLoop(id: string): Promise<LoopRecord[]> {
  *  fireRoutine's error discipline — nothing in here throws, because one bad
  *  loop must never wedge the tick chain for every other loop. */
 async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
+  // Refuse rather than queue: a second turn for a loop that is already mid-turn
+  // is never wanted, and the scheduler will pick it up on the next slice if it
+  // is still due once the current turn finishes.
+  if (loopsTicking.has(id)) return undefined;
   const loaded = (await readLoops()).find((item) => item.id === id);
   if (!loaded) return undefined;
+  loopsTicking.add(id);
+  try {
+    return await fireLoopTickInner(id, loaded);
+  } finally {
+    loopsTicking.delete(id);
+  }
+}
+
+async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRecord | undefined> {
 
   // Checked before anything is spent: the cheapest place to stop a loop that
   // has run out of iterations or wall-clock is before it costs a model call.
@@ -10498,32 +10562,42 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
   // record may have moved under us. A Stop the user clicked mid-run has to
   // win over whatever the model decided during that same run, otherwise the
   // click silently re-arms the loop it was meant to kill.
-  const afterRun = await readLoops();
-  const stored = afterRun.find((item) => item.id === id);
-  if (!stored) return undefined;
-  const finalRecord: LoopRecord =
-    stored.status === "stopped"
-      ? // Keep the user's stop and its reason, but keep the work too: the
-        // iteration really happened and its history is what stops a restart
-        // from repeating it.
-        { ...stored, conversationId, iterations: index, history: advanced.history, nextWakeAt: undefined }
-      : settled;
-  await writeLoops(afterRun.map((item) => (item.id === id ? finalRecord : item)));
-  return finalRecord;
+  // The whole read-decide-write happens inside the lock. It used to re-read and
+  // then write from that snapshot, which left a window where a Stop or a Delete
+  // landing between the two was overwritten by this turn's own final write, and
+  // the loop re-armed as though the user had never clicked.
+  return mutateLoops<LoopRecord | undefined>((current) => {
+    const stored = current.find((item) => item.id === id);
+    // Deleted mid-turn: stay deleted rather than being resurrected by the turn
+    // that was already in flight.
+    if (!stored) return { next: current, result: undefined };
+    const finalRecord: LoopRecord =
+      stored.status === "stopped"
+        ? // Keep the user's stop and its reason, but keep the work too: the
+          // iteration really happened and its history is what stops a restart
+          // from repeating it.
+          { ...stored, conversationId, iterations: index, history: advanced.history, nextWakeAt: undefined }
+        : settled;
+    return { next: current.map((item) => (item.id === id ? finalRecord : item)), result: finalRecord };
+  });
 }
 
 /** The scheduler chain, same shape and same 60s slice as the routine chain
  *  above: one live timer at a time, re-evaluated at least once a minute so
  *  system sleep or a clock change self-corrects rather than oversleeping. */
 function scheduleNextLoopTick(): void {
-  if (loopTimer) {
-    clearTimeout(loopTimer);
-    loopTimer = undefined;
-  }
   // See loopSchedulerStarted: in --cli mode the chain is never started, and
   // arming it here would let a CLI run fire the user's app loops.
   if (!loopSchedulerStarted) return;
+  // Deliberately does NOT reset a pending timer. createLoop, stopLoop and
+  // deleteLoop all call this, so clearing and re-arming meant a user busy in
+  // the Loops panel pushed the next slice out by a fresh 60s on every click,
+  // and a loop that was already due could be postponed indefinitely by
+  // activity that had nothing to do with it. The chain re-arms itself from
+  // runLoopTick's finally, so it only ever needs starting, never restarting.
+  if (loopTimer) return;
   loopTimer = setTimeout(() => {
+    loopTimer = undefined;
     void runLoopTick();
   }, 60_000);
 }
@@ -10548,6 +10622,10 @@ async function runLoopTick(): Promise<void> {
         loop.origin !== "cli" && loop.status === "sleeping" && loop.nextWakeAt && new Date(loop.nextWakeAt) <= now
     );
     for (const loop of due) {
+      // Re-checked per loop, not once per pass. A pass over several due loops
+      // runs a real model call each, so it can take minutes, and a pause
+      // clicked during it used to be ignored for every loop after the first.
+      if (await isRoutinesPaused()) return;
       await fireLoopTick(loop.id);
     }
   } finally {
