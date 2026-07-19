@@ -7607,7 +7607,13 @@ function abortLiveCalls(scope: string): void {
 }
 
 function requestSessionCancel(projectPath?: string): void {
-  const scope = directiveScopeKey(projectPath);
+  requestSessionCancelScope(directiveScopeKey(projectPath));
+}
+
+/** Cancels one scope directly. Loops use this with their own id so stopping a
+ *  loop aborts that loop's in-flight call and nothing else, and so the
+ *  composer's Stop cannot reach it. */
+function requestSessionCancelScope(scope: string): void {
   cancelledScopes.add(scope);
   // Real abort, not just a flag: kill every live fetch registered under this
   // scope right now, instead of waiting for the next stage/repair boundary.
@@ -7615,7 +7621,17 @@ function requestSessionCancel(projectPath?: string): void {
 }
 
 function clearSessionCancel(projectPath?: string): void {
-  cancelledScopes.delete(directiveScopeKey(projectPath));
+  clearSessionCancelScope(directiveScopeKey(projectPath));
+}
+
+function clearSessionCancelScope(scope: string): void {
+  cancelledScopes.delete(scope);
+}
+
+/** The cancel scope a loop's runs live in. Derived from the loop id so it can
+ *  never collide with a project path, which is what the composer's Stop uses. */
+function loopCancelScope(loopId: string): string {
+  return `loop:${loopId}`;
 }
 
 function throwIfCancelled(projectPath?: string): void {
@@ -8596,10 +8612,16 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const runStart = Date.now();
   const originalPrompt = input.prompt.trim();
   if (!originalPrompt) throw new Error("Session run requires a prompt.");
-  clearSessionCancel(input.projectPath);
   // Same key requestSessionCancel/abortLiveCalls use — threaded down to every
   // provider invoke this run makes so a Stop click can abort them directly.
-  const cancelScope = directiveScopeKey(input.projectPath);
+  // input.cancelScope lets a background run opt OUT of the shared project scope
+  // (see SessionRunInput.cancelScope): a loop running in the folder you happen
+  // to have open must not be killed by the Stop button you aimed at your chat.
+  const cancelScope = input.cancelScope?.trim() || directiveScopeKey(input.projectPath);
+  // Clearing is scoped the same way. Previously this always cleared by project
+  // path, so a loop tick starting up would erase a Stop the user had just
+  // requested for their own run in the same folder.
+  clearSessionCancelScope(cancelScope);
 
   // "/orchestration" (or "/orch") as the leading token is an explicit manual
   // command to run the build pipeline — it bypasses task-type inference
@@ -10215,6 +10237,11 @@ async function stopLoop(id: string, reason?: string): Promise<LoopRecord | undef
     nextWakeAt: undefined
   };
   await writeLoops(current.map((item) => (item.id === id ? stopped : item)));
+  // Actually abort the turn if one is in flight, rather than only marking the
+  // record and letting a model call the user just stopped run to completion on
+  // their bill. fireLoopTick re-reads before its final write, so the stop still
+  // wins the record even though the abort lands as an error inside the tick.
+  requestSessionCancelScope(loopCancelScope(id));
   await appendAudit("info", "loop.stop", `Stopped loop "${loopLabel(stopped)}".`, {
     id,
     iterations: stopped.iterations,
@@ -10280,6 +10307,9 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
   let assistantText = "";
   let conversationId = loaded.conversationId;
   let runError: string | undefined;
+  /** True when the turn ended because someone pressed Stop, not because it
+   *  broke. Kept separate so the branches below can tell them apart. */
+  let runCancelled = false;
   /** Which model actually answered this turn. Captured out of the try so the
    *  decision branches below can name it, which is what makes a silent turn
    *  actionable rather than mysterious. */
@@ -10294,6 +10324,12 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
       // lines to 10. The user's intent lives in the goal; the rest is
       // scaffolding Metis wrote to itself and must not be judged on.
       routingPrompt: loaded.goal,
+      // Its OWN cancel scope. A loop runs in whatever folder it was started from,
+      // which is usually the folder the user is actively chatting in, and the
+      // composer Stop cancels by project path. Without this, stopping a chat
+      // turn also aborted every in-flight loop call in that folder and marked
+      // the loop failed with no retry.
+      cancelScope: loopCancelScope(loaded.id),
       conversationId: loaded.conversationId,
       projectPath: loaded.projectPath,
       // The mode captured at creation, never the current global — see
@@ -10307,6 +10343,7 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
     answeringModel = run.providerResult?.model;
   } catch (error) {
     runError = error instanceof Error ? error.message : String(error);
+    runCancelled = isCancellationError(error);
   }
 
   // A failed turn produced no reply to read a decision out of, so it is never
@@ -10333,7 +10370,18 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
   };
 
   let settled: LoopRecord;
-  if (runError) {
+  if (runError && runCancelled) {
+    // A cancellation is not a failure, the same distinction the chat turn makes.
+    // This is reached when the user pressed Stop on the loop itself: stopLoop
+    // aborts the in-flight call, which surfaces here as an error. Recording it
+    // as "failed" would tell the owner their loop broke when in fact it did
+    // exactly what they asked.
+    settled = { ...advanced, status: "stopped", stoppedReason: "stopped by the user mid-turn" };
+    await appendAudit("info", "loop.stop", `Loop "${loopLabel(advanced)}" was stopped during iteration ${index}.`, {
+      id,
+      iteration: index
+    });
+  } else if (runError) {
     // Deliberately no retry. A loop that re-runs a failing turn every slice is
     // exactly the unattended runaway this feature has to design out, and a
     // failure the user can see and restart is better than one that hides

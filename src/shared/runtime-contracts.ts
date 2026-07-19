@@ -679,6 +679,20 @@ export interface SessionRunInput {
    *  protocol that does not look like code, so the loop passes its bare goal
    *  here and routing judges the intent rather than the scaffolding. */
   routingPrompt?: string;
+  /** Overrides the key this run's abort controllers are registered under.
+   *
+   *  Cancellation is normally scoped by project path, which is right for chat:
+   *  the composer's Stop means "stop what I am watching in this folder". It is
+   *  wrong for a background loop, which runs in the SAME folder but is not what
+   *  the user is looking at. Without this, clicking Stop on a chat turn aborts
+   *  every in-flight loop call in that folder as well, and the loop is marked
+   *  failed with no retry. It leaks the other way too: a loop tick starting up
+   *  clears a pending Stop the user had just aimed at their own run.
+   *
+   *  Loops pass their own id, so the two live in separate scopes and neither
+   *  can cancel the other. Undefined for every ordinary caller, which keeps the
+   *  project-path behaviour exactly as it was. */
+  cancelScope?: string;
   rawPromptStorage?: "local-only" | "hash-only";
   /** When set, bypass Metis Policy routing and call this model directly. */
   modelOverride?: SessionModelOverride;
