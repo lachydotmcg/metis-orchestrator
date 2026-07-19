@@ -49,8 +49,9 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   output (the loop decision layer at 41 assertions, the `/loop` grammar at 53, agent-tool
   containment at 8, path traversal, edit-intent routing at 14), but they live outside `src/` and
   are run by hand rather than by CI.
-- **The manual walkthrough in `docs/LIVE_TESTS.md` is unticked.** This is why most README sections
-  say `SHIPPED` rather than `VERIFIED`.
+- **The manual walkthrough checklist is unticked.** It is kept privately rather than in the repo,
+  but the consequence is public: it is why most README sections say `SHIPPED` rather than
+  `VERIFIED`.
 - **The Auto Router fix has not been proven in a packaged build.** It is in the live code path and
   it is what runs, but no recorded run backs it in a packaged installer yet. Given the original bug
   was "the router silently did nothing in every packaged build", that gap matters more here than

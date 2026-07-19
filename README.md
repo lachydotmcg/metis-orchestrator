@@ -625,9 +625,7 @@ marked, because "un-hide it" and "build it" are very different amounts of work.
 - [`docs/AGENTIC_TOOLS.md`](docs/AGENTIC_TOOLS.md) - the tool design, including why `run_command` ships last.
 - [`docs/ORACLE.md`](docs/ORACLE.md) - the speculative prewarm, draft, and serve engine end to end.
 - [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) - running Metis itself as an MCP server.
-- [`docs/SHIP_V1.md`](docs/SHIP_V1.md) - the audit behind what ships, what hides, and why.
 - [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) - every known gap, kept current, with closed items struck through rather than deleted.
-- [`docs/LIVE_TESTS.md`](docs/LIVE_TESTS.md) - the manual walkthrough checklist, still unticked.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) - dev setup, layout, code style, how a change lands.
 - [`CHANGELOG.md`](CHANGELOG.md) - what shipped, release by release.
 
