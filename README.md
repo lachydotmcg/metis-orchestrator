@@ -56,7 +56,7 @@ v1 deliberately ships less than the code contains. Some things are finished but 
 
 | Marker | Means |
 | --- | --- |
-| `VERIFIED` | Ships in v1, and there is a recorded run of it in [`docs/DRILL_PLAN.md`](docs/DRILL_PLAN.md). |
+| `VERIFIED` | Ships in v1, and there is a recorded run behind it, not just a green build. |
 | `SHIPPED` | Ships in v1 and is reachable from the nav. Works when driven by hand, but no recorded run behind it. |
 | `FLAG OFF` | Built and wired up, but the flag defaults to `false`. Nothing happens until you turn it on. |
 | `HIDDEN` | Built, code fully intact, not reachable from v1's navigation. Un-hiding it is deleting a string from one `Set`. |
@@ -557,6 +557,57 @@ Other scripts you will actually use:
 
 There is no separate lint script and there are no tests. `typecheck`, `build`, and the CLI harness are the gates.
 
+## Roadmap
+
+What is coming, roughly in the order it is likely to land. No dates: this is one person's project
+and a date would be a guess dressed up as a promise. Anything already built and merely hidden is
+marked, because "un-hide it" and "build it" are very different amounts of work.
+
+### Next
+
+- **A spend ceiling for Loops.** The ledger now attributes every row to the loop that caused it,
+  and `loopUsageTotals` sums it, so the measuring half is done. What remains is enforcing a limit
+  and stopping a loop at `exhausted` when it is spent.
+- **A capability check before a Loop starts.** Nothing currently checks that the model driving a
+  loop can reliably decide to *stop*, which matters most on small local models. A silent turn
+  already names the model that went silent; the preventing half is still to do, and it should warn
+  with an override rather than hard-block, since refusing local models would invert the point.
+- **Sleeping loops in the tray.** With headless start the tray is the only surface a running loop
+  has, and it is not listed there yet.
+
+### After that
+
+- **Loops phase 2: parallel workers.** A loop that can spawn helpers onto disjoint parts of a job
+  and wake when one finishes, instead of a timer. The fan-out engine and the agent bus both already
+  exist, off by default; this is wiring them to the loop rather than building them.
+- **Per-node Depths.** Today a node's depth stack mirrors into one global route table, so with
+  several depths-enabled nodes the last one projected wins. True per-node consumption inside the
+  pipeline is the follow-up.
+- **Un-hiding the Marketplace** (built, `HIDDEN`). Browse, install and publish skills, MCP
+  connections and orchestration presets. It works; it is held back because installing arbitrary
+  packages is a trust surface and the registry behind it is early. Un-hiding waits on the registry
+  having real content and on the install path getting a proper review.
+- **Un-hiding the Manager** (built, `HIDDEN`). The README used to sell this as an agent that gets
+  work moving while you are away. It is currently a todo board with a chat window, and it ships when
+  that stops being true.
+- **Un-hiding Routines** (built, `HIDDEN`), plus one-off scheduled wakeups. The scheduler already
+  runs and already survives sleep and clock changes; it needs a `{ kind: "once" }` schedule and a
+  visible surface that is not the hidden Routines view.
+- **Un-hiding Gallery and Graph View** (both built, `HIDDEN`).
+
+### Wanted, not yet designed
+
+- **Automated tests.** There are none in this repo, which is the single biggest gap in how this is
+  verified. Several subsystems have adversarial suites, but they live outside `src/` and run by
+  hand.
+- **A packaged-build run of the Auto Router.** It is what runs, but the original bug was that it
+  silently did nothing in a packaged build, so that specific proof matters more here than anywhere.
+- **Learned routing.** Metis already keeps a private local log of how you actually use it. Nothing
+  reads it back into a routing decision yet, and doing so without making routing unpredictable is
+  the hard part.
+- **A run-command tool for agentic runs.** Deliberately last. It is the only tool whose blast
+  radius is your whole machine rather than one folder.
+
 ## Architecture
 
 - `src/electron/main.ts` - the main process: every IPC handler, the run pipeline, providers, routing, the JSON stores, the audit log. Full Node and OS access.
@@ -579,7 +630,7 @@ There is no separate lint script and there are no tests. `typecheck`, `build`, a
 - [`docs/ORACLE.md`](docs/ORACLE.md) - the speculative prewarm, draft, and serve engine end to end.
 - [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) - running Metis itself as an MCP server.
 - [`docs/SHIP_V1.md`](docs/SHIP_V1.md) - the audit behind what ships, what hides, and why.
-- [`docs/DRILL_PLAN.md`](docs/DRILL_PLAN.md) - the work log, and where the `VERIFIED` markers above come from.
+- [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) - every known gap, kept current, with closed items struck through rather than deleted.
 - [`docs/LIVE_TESTS.md`](docs/LIVE_TESTS.md) - the manual walkthrough checklist, still unticked.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) - dev setup, layout, code style, how a change lands.
 - [`CHANGELOG.md`](CHANGELOG.md) - what shipped, release by release.

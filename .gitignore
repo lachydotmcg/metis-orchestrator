@@ -13,3 +13,7 @@ decision.json
 # whose icon or view has been customised; they are machine-local noise.
 desktop.ini
 Thumbs.db
+
+# Private working log. It records session-by-session conversation context, so it
+# stays local. Untracked 2026-07-19; see the README roadmap for the public view.
+docs/DRILL_PLAN.md
