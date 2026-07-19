@@ -178,7 +178,18 @@ Typing any of it renders a live breakdown under the composer naming what each pa
 
 Each wake replays a short digest of what previous turns already did, so iteration 4 does not redo iteration 2. The goal is always placed first and alone in the wake prompt, because routing classifies chat-versus-build from the prompt text: an earlier version buried the goal under scaffolding, and a read-only question ("how many functions does app.js define?") routed as a build and rewrote the file down from 171 lines to 10. That is fixed, and it is in the code comments so nobody undoes it.
 
-Live proof run: "count upward from 1, three new numbers each turn, stop at 9" produced 1,2,3 then 4,5,6 then 7,8,9 and stopped itself at iteration 3 of a possible 5.
+Live proof run, on a real file: "add a one-line JSDoc comment above each function in app.js, two per turn, keep going until every function has one." Four turns, against the 14-function sandbox:
+
+```
+iteration 1: continue - four functions still need comments
+iteration 2: continue - four functions still need comments
+iteration 3: continue - two functions remain without comments
+iteration 4: stop     - every function now has a comment
+```
+
+14 of 14 documented, file still valid JS, and it stopped itself when the job was actually done rather than running to its cap.
+
+A turn that does real work routes to the build pipeline, whose reply is a summary of what it did rather than a model answer, so there is nowhere for a decision block to come from. Before that was handled, every loop that did real work ran exactly one turn and stopped, which looked like working and was not. The decision is now asked as a separate small call when the work turn cannot carry one, and a failed or unreadable answer still ends the loop.
 
 The Loops panel (Settings > Privacy & Data) lists every loop with its status, iteration count, next wake time, and the model's own stated reason for the gap it chose, expands to show what each turn actually did, and can stop any live one in a single click. It lives there rather than under Routines specifically because Routines is hidden in v1, and a loop must never be running with no surface to see or stop it. The tray's "Pause background work" also halts every sleeping loop.
 
