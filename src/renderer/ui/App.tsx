@@ -8408,7 +8408,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
   // Read here rather than inside NodeCard so every node on the canvas agrees
   // about whether depths are live, instead of each one reading the store
   // separately and briefly disagreeing while they load.
-  const [depthRoutingActive] = useAppStoreState("depthRoutingEnabled", false);
+  const [depthRoutingActive, setDepthRoutingActive] = useAppStoreState("depthRoutingEnabled", false);
   const [installedSkills, setInstalledSkills] = useState<RegistryPackage[]>([]);
   const [customSkills, setCustomSkills] = useAppStoreState("customSkills", EMPTY_CUSTOM_SKILLS);
   const [pan, setPan] = useState<Vec>({ x: 0, y: 0 });
@@ -9067,6 +9067,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
       connectionStates={connectionStates}
       routeTest={routeTest?.agentId === selectedNode.id ? routeTest : null}
       onTest={runTest}
+      onDepthRoutingChange={setDepthRoutingActive}
     />
   ) : modelInspect ? (
     <ModelGatewayInspector
@@ -16879,9 +16880,13 @@ function NodeInspector({
   onDetachSkill,
   connectionStates,
   routeTest,
-  onTest
+  onTest,
+  onDepthRoutingChange
 }: {
   node: GraphNode;
+  /** Sets the GLOBAL depthRoutingEnabled flag through the canvas's own state,
+   *  so the canvas and this panel cannot disagree about whether depths are live. */
+  onDepthRoutingChange: (enabled: boolean) => void;
   nodes: GraphNode[];
   onClose: () => void;
   onUpdate: (id: string, patch: Partial<GraphNode>) => void;
@@ -16944,7 +16949,11 @@ function NodeInspector({
 
   function setDepthsEnabled(enabled: boolean): void {
     onUpdate(node.id, { depthsEnabled: enabled });
-    void window.metisStore?.set("depthRoutingEnabled", enabled).catch(() => {});
+    // Routed through the SAME setter the canvas reads from, rather than writing
+    // the store key directly. useAppStoreState has no change subscription, so an
+    // out-of-band write left the canvas holding a stale value and every node
+    // kept saying "depth routing is off" immediately after it was switched on.
+    onDepthRoutingChange(enabled);
   }
 
   function setDepthModel(level: "l1" | "l2" | "l3", value: ModelRef | "router" | null): void {
