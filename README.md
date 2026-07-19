@@ -4,99 +4,54 @@
 
 # Metis Orchestrator
 
-**An AI orchestrator that edits your real files, and can prove what it did to them.**
+**Every model you have, on one canvas, doing the part it is actually best at.**
 
-Metis is a local-first desktop app (Electron, React 18, TypeScript) that routes each task to whichever model is actually best for it, local or cloud, and can write the result straight into a project folder you choose. That last part is the reason this README opens with permissions instead of features. Software that edits your repo has to earn it first.
+Inside a frontier lab, nobody sends every request to one model. They route: a cheap fast model for the easy parts, a strong expensive one for the hard reasoning, a specialist for the frontend, all wired into a pipeline someone designed on purpose. That control is most of why lab output is good, and it is the part you never get handed. Every AI app you can download is a box that picks for you.
 
-So, the short version of the trust story: nothing gets written without a folder grant you gave explicitly, every generated write is backed up before it happens and refused outright if the backup fails, there is no account and no telemetry, and every API key is your own. Once that holds up, the capabilities are below.
+Metis gives you the wiring. You decide which model plans, which one writes the frontend, which one makes it work, which one you never send private code to. Drag them onto the canvas and connect them. Then point it at a real folder and it writes real files.
+
+Two things fall out of that. **Better results**, because a task routed to the right model beats the same task sent to whatever a vendor picked for you. And **faster ones**, because Oracle drafts your answer while you are still typing and can serve it the instant you hit enter.
+
+It runs on your machine, on your keys, with no account and no server of ours in the path. Local models are free to run, so the cheap parts genuinely cost nothing.
+
+<p align="center">
+  <img src="public/assets/readmeimages/Orchestration.png" alt="The orchestration canvas: a local Qwen router branching out to Gemini for planning, Claude for frontend, DeepSeek for backend, GPT for agentic tasks and Grok for research" width="880" />
+</p>
+
+<p align="center">
+  <em>A local Qwen router at the centre, deciding. Gemini plans, Claude does the frontend, DeepSeek does the backend,<br />GPT takes agentic work, Grok does research. Every route is labelled, and every one of those choices is yours.</em>
+</p>
+
+<p align="center">
+  <img src="public/assets/readmeimages/drag-drop-models.png" alt="Dragging Claude Opus 4.8 from the model library onto the Frontend node" width="880" />
+</p>
+
+<p align="center">
+  <em>Changing your mind is a drag. Here Opus 4.8 is being dropped onto the Frontend node to replace Sonnet 4.6.</em>
+</p>
+
+<p align="center">
+  <img src="public/assets/readmeimages/route-in-progress.png" alt="A live run: Metis reads the existing project, explains that it will edit rather than rebuild, and the side chat shows Anthropic going unavailable and DeepSeek picking the stage up" width="880" />
+</p>
+
+<p align="center">
+  <em>A run in progress. It read the 12 files already in the folder, decided this was an edit rather than a rebuild, and said so.<br />On the right, Anthropic went unavailable mid-stage and DeepSeek picked it up. You can watch the fallback happen.</em>
+</p>
+
+<sub>Screenshots predate the v1 navigation cut, so the sidebar shows a few entries that are hidden in v1. See "How to read this" below.</sub>
 
 ## How to read this
 
-v1 deliberately ships less than the code contains. A lot of work is finished but hidden, and a lot is present but off until you turn it on. Every section below carries one of four markers in its summary line, so you can tell what is real without opening anything:
+v1 deliberately ships less than the code contains. Some things are finished but hidden, some are present but off until you turn them on. Every section below carries one of four markers in its summary line, so you can tell what is real without opening anything:
 
 | Marker | Means |
 | --- | --- |
-| `VERIFIED` | Ships in v1, and there is a recorded run of it in [`docs/DRILL_PLAN.md`](docs/DRILL_PLAN.md). Four things have that. |
-| `SHIPPED` | Ships in v1 and is reachable from the nav or the live code path. Compiles, typechecks, works when driven by hand. Not proven end to end by a recorded run. |
+| `VERIFIED` | Ships in v1, and there is a recorded run of it in [`docs/DRILL_PLAN.md`](docs/DRILL_PLAN.md). |
+| `SHIPPED` | Ships in v1 and is reachable from the nav. Works when driven by hand, but no recorded run behind it. |
 | `FLAG OFF` | Built and wired up, but the flag defaults to `false`. Nothing happens until you turn it on. |
 | `HIDDEN` | Built, code fully intact, not reachable from v1's navigation. Un-hiding it is deleting a string from one `Set`. |
 
-On verification, honestly: there are no automated tests in this repo, zero test or spec files under `src/`. The real gates are `npm run typecheck`, `npm run build`, and the CLI harness, which drives the actual pipeline headlessly. The manual walkthrough checklist in [`docs/LIVE_TESTS.md`](docs/LIVE_TESTS.md) is still unticked, which is exactly why most sections here say `SHIPPED` and not `VERIFIED`.
-
-v1 navigation is exactly four items: New session, Orchestration, Benchmark, Settings.
-
----
-
-# Trust: the parts that decide whether you point this at a real repo
-
-<details>
-<summary><b>Permissions: the five modes</b> · <code>SHIPPED</code> · You pick how much Metis may do on its own, per run.</summary>
-
-<br />
-
-Every file write, command, and new network scope in a run passes through `gatePermission` (`src/electron/main.ts`), and it answers according to the mode you picked in the composer's permission pill.
-
-| Mode | Pill label | Behaviour |
-| --- | --- | --- |
-| `ask` | Manual | Every file write, command, and new network scope pauses the run and asks. |
-| `edits` | Accept edits | File writes proceed. Commands and new scopes still ask. |
-| `plan` | Plan | Read-only. The build pipeline runs the plan stage and stops before it can write anything. |
-| `auto` | Auto | Default. Proceeds, and asks once when there is no existing grant covering that scope and folder. |
-| `bypass` | Bypass | No prompts at all. Styled red in the UI for a reason. |
-
-Two properties worth knowing:
-
-- **Writes are authorised by the folder, not by a label.** A `filesystem.write` grant is matched against the resolved project path, so a grant for one folder can never widen to another one. Attaching a folder (either through "Choose folder" or "+ Add folder") is what creates that grant, and only one workspace is writable at a time. Attaching a new folder replaces the previous one.
-- **A prompt is a real pause.** In-run prompts stream to the renderer as a `permission_request` event and the run genuinely waits. Allow-once, always-allow, or deny. "Always" writes a persisted grant, nothing else does.
-
-Your mode selection persists across runs (store key `permissionMode`, default `auto`). A Loop freezes its mode at creation and never re-reads the global, so changing the setting later cannot escalate a loop that is already running.
-
-**Honest limits:**
-
-- `plan` mode short-circuits the build pipeline after the plan stage, and `gatePermission` returns "do not proceed" defensively for anything that still reaches it. It is a strong read-only guarantee for the build path specifically, not a kernel-level sandbox.
-- `gatePermission` is the gate for the run pipeline, and it is not the only code that touches disk. The Graph View document viewer's read and write IPCs are guarded separately by `assertMetisFilePathAllowed`, using grant-shape checks rather than a `gatePermission` call. Path containment is consolidated. A single permission gate for the whole app is not a claim this README will make.
-</details>
-
-<details>
-<summary><b>The snapshot safety net</b> · <code>VERIFIED</code> · Every generated write is backed up first, or it does not happen.</summary>
-
-<br />
-
-`src/electron/projectSnapshot.ts`. Permissions decide *whether* a write happens. This decides whether it is *recoverable*, because "trust the model" is not a recovery strategy.
-
-Every generated write in the app funnels through one function (`writeGeneratedFileSet`), so there is exactly one place the net belongs. Before a single byte is written:
-
-1. **Always:** the current contents of every file about to be touched are copied into a snapshot folder in app data, with a `snapshot.json` manifest recording which paths did not exist before (so a revert knows what was new). Bounded to just the files in the write set, so it is fast, and it works in a folder with no version control at all.
-2. **When the folder is a git repo:** additionally, a `git stash create` commit is recorded under `refs/metis/snapshot-<id>`, unless the tree is already clean, in which case HEAD is already the restore point and no ref is written. When it does run it captures the whole working tree, not just the touched files. `stash create` was chosen specifically because it writes a commit object without touching the index, the working tree, or your stash list, so it cannot disturb work in progress. Metis never runs `git init`, never commits to a branch, and never rewrites history.
-
-**Failure is closed.** If layer 1 throws, the write is abandoned and you get an error naming the folder: "Metis could not back up `<root>` before writing, so it did not write anything. Check the folder is readable and try again." That is the correct trade when the whole promise is recoverability. Layer 2 failing is ignored on purpose, because layer 1 already covers recovery.
-
-Undo lives in **Settings > Privacy & Data > Undo the last AI write**. It shows how many files were backed up, which project, when, and the git ref if there is one.
-
-**Honest limits, both deliberate:**
-
-- **A revert restores files that already existed. It does not delete files the run created.** Restoring content is safe and reversible, and deleting a file you may have edited by hand since is not. The panel says plainly that the new files will not be deleted, and leaves them for you to decide.
-- **Only the most recent write is revertable from the UI.** The store keeps one `lastProjectSnapshot`. Older snapshot folders still exist on disk with their manifests, but there is no history browser yet.
-</details>
-
-<details>
-<summary><b>Local-first, and bring your own keys</b> · <code>SHIPPED</code> · No account, no telemetry, no Metis server in the path.</summary>
-
-<br />
-
-There is no sign-up, no Metis backend, and no analytics. Conversations, routing decisions, the audit log, and your keys all live in the app's own data directory on your machine.
-
-Data leaves your device in exactly two situations, both yours to control:
-
-1. **You routed a task to a cloud provider you configured.** The prompt goes to that provider, on your key, under their privacy policy. Keep everything on Ollama and nothing leaves the machine.
-2. **The app fetches the public registry** (model catalog, marketplace packages, community feed) from a public GitHub repo. Ordinary read-only downloads, no personal data attached.
-
-Seven cloud provider keys, plus Ollama, which needs no key: Anthropic, OpenAI, Google Gemini, DeepSeek, OpenRouter, NVIDIA NIM, and Groq. Keys are entered in **Settings > Providers**, or picked up from the usual environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and so on) if you prefer that.
-
-**Honest limit on key storage:** keys go through Electron's `safeStorage` and are encrypted with the OS keychain **when `safeStorage.isEncryptionAvailable()` returns true**. When it does not, which happens on some Linux setups without a keyring, Metis falls back to base64 on disk, and that is encoding, not encryption. The app records which of the two was used and shows it back to you as the key's storage source. It does not pretend.
-
-There is also an audit log (`Settings > Audit`) that records permission grants, snapshots, workspace selections, routing fallbacks, and errors. Values of secrets are never written to it, only which fields changed.
-</details>
+v1 navigation is exactly four items: New session, Orchestration, Benchmark, Settings. The known gaps and rough edges live in [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) rather than here.
 
 ---
 
@@ -270,6 +225,79 @@ First launch walks you through your name, a Local / Cloud / Hybrid preference (t
 **Be clear about what the Benchmark is.** Its own button reads "Run benchmark (simulated)", and the decode and VRAM figures are simulated captures, not measured inference. It is a sizing guide with a progress bar, not a benchmark.
 
 **Also worth knowing:** navigation is gated until the Benchmark wizard completes. Until then only Benchmark and Settings are reachable. That is intentional, since an app with no model and no key cannot answer anything, but it does mean the first run has a required step rather than an optional one.
+</details>
+
+---
+
+# Trust: the parts that decide whether you point this at a real repo
+
+<details>
+<summary><b>Permissions: the five modes</b> · <code>SHIPPED</code> · You pick how much Metis may do on its own, per run.</summary>
+
+<br />
+
+Every file write, command, and new network scope in a run passes through `gatePermission` (`src/electron/main.ts`), and it answers according to the mode you picked in the composer's permission pill.
+
+| Mode | Pill label | Behaviour |
+| --- | --- | --- |
+| `ask` | Manual | Every file write, command, and new network scope pauses the run and asks. |
+| `edits` | Accept edits | File writes proceed. Commands and new scopes still ask. |
+| `plan` | Plan | Read-only. The build pipeline runs the plan stage and stops before it can write anything. |
+| `auto` | Auto | Default. Proceeds, and asks once when there is no existing grant covering that scope and folder. |
+| `bypass` | Bypass | No prompts at all. Styled red in the UI for a reason. |
+
+Two properties worth knowing:
+
+- **Writes are authorised by the folder, not by a label.** A `filesystem.write` grant is matched against the resolved project path, so a grant for one folder can never widen to another one. Attaching a folder (either through "Choose folder" or "+ Add folder") is what creates that grant, and only one workspace is writable at a time. Attaching a new folder replaces the previous one.
+- **A prompt is a real pause.** In-run prompts stream to the renderer as a `permission_request` event and the run genuinely waits. Allow-once, always-allow, or deny. "Always" writes a persisted grant, nothing else does.
+
+Your mode selection persists across runs (store key `permissionMode`, default `auto`). A Loop freezes its mode at creation and never re-reads the global, so changing the setting later cannot escalate a loop that is already running.
+
+**Honest limits:**
+
+- `plan` mode short-circuits the build pipeline after the plan stage, and `gatePermission` returns "do not proceed" defensively for anything that still reaches it. It is a strong read-only guarantee for the build path specifically, not a kernel-level sandbox.
+- `gatePermission` is the gate for the run pipeline, and it is not the only code that touches disk. The Graph View document viewer's read and write IPCs are guarded separately by `assertMetisFilePathAllowed`, using grant-shape checks rather than a `gatePermission` call. Path containment is consolidated. A single permission gate for the whole app is not a claim this README will make.
+</details>
+
+<details>
+<summary><b>The snapshot safety net</b> · <code>VERIFIED</code> · Every generated write is backed up first, or it does not happen.</summary>
+
+<br />
+
+`src/electron/projectSnapshot.ts`. Permissions decide *whether* a write happens. This decides whether it is *recoverable*, because "trust the model" is not a recovery strategy.
+
+Every generated write in the app funnels through one function (`writeGeneratedFileSet`), so there is exactly one place the net belongs. Before a single byte is written:
+
+1. **Always:** the current contents of every file about to be touched are copied into a snapshot folder in app data, with a `snapshot.json` manifest recording which paths did not exist before (so a revert knows what was new). Bounded to just the files in the write set, so it is fast, and it works in a folder with no version control at all.
+2. **When the folder is a git repo:** additionally, a `git stash create` commit is recorded under `refs/metis/snapshot-<id>`, unless the tree is already clean, in which case HEAD is already the restore point and no ref is written. When it does run it captures the whole working tree, not just the touched files. `stash create` was chosen specifically because it writes a commit object without touching the index, the working tree, or your stash list, so it cannot disturb work in progress. Metis never runs `git init`, never commits to a branch, and never rewrites history.
+
+**Failure is closed.** If layer 1 throws, the write is abandoned and you get an error naming the folder: "Metis could not back up `<root>` before writing, so it did not write anything. Check the folder is readable and try again." That is the correct trade when the whole promise is recoverability. Layer 2 failing is ignored on purpose, because layer 1 already covers recovery.
+
+Undo lives in **Settings > Privacy & Data > Undo the last AI write**. It shows how many files were backed up, which project, when, and the git ref if there is one.
+
+**Honest limits, both deliberate:**
+
+- **A revert restores files that already existed. It does not delete files the run created.** Restoring content is safe and reversible, and deleting a file you may have edited by hand since is not. The panel says plainly that the new files will not be deleted, and leaves them for you to decide.
+- **Only the most recent write is revertable from the UI.** The store keeps one `lastProjectSnapshot`. Older snapshot folders still exist on disk with their manifests, but there is no history browser yet.
+</details>
+
+<details>
+<summary><b>Local-first, and bring your own keys</b> · <code>SHIPPED</code> · No account, no telemetry, no Metis server in the path.</summary>
+
+<br />
+
+There is no sign-up, no Metis backend, and no analytics. Conversations, routing decisions, the audit log, and your keys all live in the app's own data directory on your machine.
+
+Data leaves your device in exactly two situations, both yours to control:
+
+1. **You routed a task to a cloud provider you configured.** The prompt goes to that provider, on your key, under their privacy policy. Keep everything on Ollama and nothing leaves the machine.
+2. **The app fetches the public registry** (model catalog, marketplace packages, community feed) from a public GitHub repo. Ordinary read-only downloads, no personal data attached.
+
+Seven cloud provider keys, plus Ollama, which needs no key: Anthropic, OpenAI, Google Gemini, DeepSeek, OpenRouter, NVIDIA NIM, and Groq. Keys are entered in **Settings > Providers**, or picked up from the usual environment variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and so on) if you prefer that.
+
+**Honest limit on key storage:** keys go through Electron's `safeStorage` and are encrypted with the OS keychain **when `safeStorage.isEncryptionAvailable()` returns true**. When it does not, which happens on some Linux setups without a keyring, Metis falls back to base64 on disk, and that is encoding, not encryption. The app records which of the two was used and shows it back to you as the key's storage source. It does not pretend.
+
+There is also an audit log (`Settings > Audit`) that records permission grants, snapshots, workspace selections, routing fallbacks, and errors. Values of secrets are never written to it, only which fields changed.
 </details>
 
 ---
@@ -482,23 +510,6 @@ Other scripts you will actually use:
 | `npm run dist` | Full build plus installers under `release/`. |
 
 There is no separate lint script and there are no tests. `typecheck`, `build`, and the CLI harness are the gates.
-
-## What this is not yet
-
-Plainly, so nothing here surprises you later:
-
-- **A Loop runs alone, and nothing checks the model is up to it.** Phase 2 (spawning parallel workers, waking when one finishes) and phase 3 (token ceilings, tray presence) are not built. Neither is the capable-model gate the design doc asks for, so a small local model that never reliably decides to stop will run until a cap catches it. The caps bound the damage, they do not make the model good at knowing when it is done.
-- **Two flags have no UI at all.** `agentToolsEnabled` and `fanoutEnabled` are store keys with no Settings toggle and no CLI flag, so in practice they are developer-only in v1.
-- **Undo is one deep.** Only the most recent generated write can be reverted from Settings, and a revert never deletes files the run created.
-- **There are no automated tests.** Zero test or spec files under `src/`, and the manual checklist in `docs/LIVE_TESTS.md` is unticked.
-- **The Auto Router fix has not been proven in a packaged build.** It is in the live code path and it is what runs, but no recorded run backs it yet, and `doctor` still prints stale wording about falling back to a static sample.
-- **The Benchmark is simulated.** A sizing guide, not measured inference.
-- **The router does not learn from you yet.** Metis keeps a private local log of how you actually use it, and shows it back as plain-sentence observations. Nothing in it changes routing. It is a record, not a decision.
-- **Fan-out is sequential.** Named sub-agents with real file territories, executed one at a time.
-- **Usage limits do not throttle.** They are display-only, and the section is hidden in v1 anyway.
-- **Key encryption depends on the OS.** `safeStorage` when the platform provides it, base64 on disk when it does not. The app shows you which.
-- **`plan` mode is a pipeline guarantee, not a sandbox.** It stops the build path before it can write. It is not OS-level isolation.
-- **The `v1.0.0` tag predates most of this.** Everything described here is on `main` and is not yet tagged.
 
 ## Architecture
 

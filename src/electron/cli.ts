@@ -580,8 +580,13 @@ async function runDoctor(deps: CliRuntime, json: boolean): Promise<number> {
     out(`  ${label.padEnd(16)} ${status.hasSecret ? `configured (${status.storage})` : "not configured"}`);
   }
   out("");
-  out("Routing engine (metis-policy CLI):");
-  out(`  ${policy.available ? "available" : "NOT available - decisions fall back to a static sample"} - ${policy.detail}`);
+  // Wording fixed 2026-07-19: this used to say decisions "fall back to a static
+  // sample", which stopped being true when builtinRouter.ts landed and was
+  // actively alarming, since it described the exact bug that had just been
+  // fixed. The optional CLI is an override, not the engine.
+  out("Routing engine:");
+  out(`  built-in router (builtinRouter.ts) - always available, classifies in-process`);
+  out(`  metis-policy CLI override: ${policy.available ? "available, and takes precedence" : "not present, so the built-in router decides"} - ${policy.detail}`);
   out("");
   out(`Active project workspace: ${workspace ? `${workspace.path} (selected ${workspace.selectedAt})` : "none set"}`);
   out("");

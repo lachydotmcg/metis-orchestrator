@@ -14862,6 +14862,7 @@ function SettingsWorkspace({
   // this to decide whether installed MCP servers' tools are exposed to runs.
   // OFF by default.
   const [mcpToolsEnabled, setMcpToolsEnabled] = useAppStoreState("mcpToolsEnabled", false);
+  const [agentToolsEnabled, setAgentToolsEnabled] = useAppStoreState("agentToolsEnabled", false);
   const [updateCheck, setUpdateCheck] = useState<UpdateCheckResult | null>(null);
   // CORE.5 safety net surface: what the last generated write backed up, and
   // the undo. Arm-then-confirm, same pattern as the destructive controls
@@ -15861,6 +15862,24 @@ function SettingsWorkspace({
             </button>
           </label>
           <p className="settings-hint">A fast local model classifies each prompt as chat or build instead of keyword rules. Falls back to the rules on any failure.</p>
+          <label className="settings-field toggle-field">
+            <span>Let models read your files (experimental)</span>
+            <button
+              type="button"
+              className={`toggle-switch ${agentToolsEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={agentToolsEnabled}
+              onClick={() => setAgentToolsEnabled(!agentToolsEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">
+            Gives the model three tools against your attached project: read a file, list files, and make one exact-match edit. It looks at the real
+            code instead of guessing, which is the difference between a correct edit and a plausible invented one. Secret-shaped files like
+            <code> .env</code> are refused outright, every path is contained inside the project folder, and every write still goes through the
+            snapshot safety net. There is deliberately no run-command tool.
+          </p>
           <label className="settings-field toggle-field">
             <span>Cloud Oracle via DeepSeek (paid, experimental)</span>
             <button
