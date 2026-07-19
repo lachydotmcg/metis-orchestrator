@@ -4162,7 +4162,7 @@ function NewSessionWorkspace({
   /** Result of the last "/loop" command. Dismissible and never auto-hidden:
    *  it names where the loop can be stopped, which is not something to flash
    *  past someone who has just started an unattended run. */
-  const [loopNotice, setLoopNotice] = useState<{ tone: "ok" | "error"; text: string } | null>(null);
+  const [loopNotice, setLoopNotice] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(null);
   const [previewRefreshTick, setPreviewRefreshTick] = useState(0);
   // Side-chat stack (docs/FABLE_PLANS.md §26): user-dismissable independent of
   // the underlying data — the cards themselves live on each turn's
@@ -4522,10 +4522,11 @@ function NewSessionWorkspace({
         fixedIntervalSeconds: parts.everySeconds
       });
       const pace = loop.fixedIntervalSeconds ? `every ${formatLoopDuration(loop.fixedIntervalSeconds)}` : "at its own pace";
-      setLoopNotice({
-        tone: "ok",
-        text: `Loop started, up to ${loop.maxIterations} turns ${pace}. It is working now. Watch or stop it in Settings > Privacy & Data.`
-      });
+      const base = `Loop started, up to ${loop.maxIterations} turns ${pace}. It is working now. Watch or stop it in Settings > Privacy & Data.`;
+      // A capability warning goes FIRST, before the reassurance. It is the part
+      // that changes what you should expect to happen, and burying it under
+      // "it is working now" would be the wrong order to read them in.
+      setLoopNotice(loop.capabilityWarning ? { tone: "warn", text: `${loop.capabilityWarning} ${base}` } : { tone: "ok", text: base });
     } catch (error) {
       setLoopNotice({ tone: "error", text: error instanceof Error ? error.message : String(error) });
     }
@@ -4982,7 +4983,7 @@ function NewSessionWorkspace({
           </ChatboxPopup>
         ) : null}
         {loopNotice ? (
-          <div className={loopNotice.tone === "ok" ? "loop-notice" : "loop-notice error"} role="status">
+          <div className={loopNotice.tone === "ok" ? "loop-notice" : loopNotice.tone === "warn" ? "loop-notice warn" : "loop-notice error"} role="status">
             <span>{loopNotice.text}</span>
             <button type="button" onClick={() => setLoopNotice(null)} aria-label="Dismiss">
               <X size={13} />
@@ -16697,6 +16698,7 @@ function ActiveLoopsPanel(): JSX.Element | null {
                 <span title="Frozen when the loop was created and never re-read from Settings">{loop.permissionMode} mode</span>
                 {loop.projectPath ? <span className="loop-project">{loop.projectPath}</span> : null}
               </div>
+              {loop.capabilityWarning ? <p className="loop-warning">{loop.capabilityWarning}</p> : null}
               {loop.lastReason && isLive ? <p className="loop-reason">“{loop.lastReason}”</p> : null}
               {loop.stoppedReason && !isLive ? <p className="loop-reason loop-reason-final">{loop.stoppedReason}</p> : null}
               {/* What it ACTUALLY did, turn by turn. Collapsed by default so a

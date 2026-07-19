@@ -14707,3 +14707,18 @@ a:focus-visible,
   font-size: 9.5px;
   font-style: normal;
 }
+
+/* A capability warning is not an error: the loop is running, it may just end
+   early. Amber rather than red, and it sits above the reassurance. */
+.loop-notice.warn {
+  color: #ffd8a3;
+  background: rgba(255, 216, 163, 0.09);
+  border-color: rgba(255, 216, 163, 0.28);
+}
+.loop-warning {
+  grid-column: 1 / -1;
+  margin: 2px 0 0;
+  color: #ffd8a3;
+  font-size: 11px;
+  line-height: 1.45;
+}

@@ -71,6 +71,10 @@ export interface LoopRecord {
   /** Inherited at creation and never re-read from settings, so a loop cannot
    *  gain permissions it did not start with by the user changing a global. */
   permissionMode: string;
+  /** Recorded at creation when nothing available is likely to drive this loop
+   *  well. Shown in the panel and in the confirmation, never used to refuse:
+   *  see assessLoopCapability for why this warns rather than blocks. */
+  capabilityWarning?: string;
   /** Set by "/loop --every 15m". Overrides the delay the model asks for, so the
    *  loop runs on the user's schedule instead of its own.
    *
@@ -159,6 +163,80 @@ function coerceSeconds(value: unknown): number {
 /** A true clamp: ±Infinity lands on the matching bound rather than being
  *  treated as garbage. Only NaN, which cannot be ordered against anything,
  *  falls back to the minimum. */
+/** Below this many billion parameters, a local model follows the loop protocol
+ *  unreliably: it does the work and then forgets to say whether to continue, or
+ *  answers in prose. Silence stops the loop, so the failure is safe but wasteful
+ *  - you get one turn of a job that needed six. A heuristic, and named as one. */
+export const LOOP_CAPABLE_LOCAL_PARAMS_B = 7;
+
+/** Reads the parameter count out of an Ollama tag: "qwen3:8b" is 8,
+ *  "qwen3:1.7b" is 1.7, "gemma4:e4b" is 4. Returns null for tags that do not
+ *  encode a size at all, like a quantisation-suffixed GGUF path, since guessing
+ *  from those would be worse than admitting we cannot tell. */
+export function ollamaParamBillions(tag: string): number | null {
+  if (typeof tag !== "string") return null;
+  const match = tag.toLowerCase().match(/:[a-z]*?(\d+(?:\.\d+)?)\s*b\b/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+export interface LoopCapability {
+  /** False only when we are confident nothing available can drive a loop well. */
+  capable: boolean;
+  /** Plain-English warning shown to the user. Undefined when there is nothing
+   *  worth saying. */
+  warning?: string;
+}
+
+/**
+ * Whether anything on this machine is likely to drive a loop reliably.
+ *
+ * docs/LOOPS.md closes phase 1 on this, and it is deliberately a WARNING rather
+ * than a refusal. Metis is local-first and the doc's own argument is that a loop
+ * is the one place free local inference is structurally enabling: nobody runs 25
+ * autonomous iterations on a metered API for fun, but on your own hardware it
+ * costs electricity. A gate that only passed cloud models would invert the
+ * product's own case for the feature. So it says the true thing and lets the
+ * owner decide.
+ *
+ * It cannot know exactly which model will answer, because a loop routes through
+ * the Auto Router at each tick. It reports on what is AVAILABLE, which is the
+ * honest scope: "nothing you have is likely to do this well" is a useful thing
+ * to hear before starting, and "your 8b will probably cope" is not a promise.
+ */
+export function assessLoopCapability(input: { installedLocal: string[]; cloudConfigured: boolean }): LoopCapability {
+  if (input.cloudConfigured) return { capable: true };
+
+  const sized = input.installedLocal.map((tag) => ({ tag, params: ollamaParamBillions(tag) }));
+  const bigEnough = sized.filter((entry) => entry.params !== null && entry.params >= LOOP_CAPABLE_LOCAL_PARAMS_B);
+  if (bigEnough.length) return { capable: true };
+
+  if (!input.installedLocal.length) {
+    return {
+      capable: false,
+      warning: "No models are available, so this loop cannot run. Pull a local model with Ollama, or add a provider key in Settings."
+    };
+  }
+
+  // Unknown sizes are treated as capable-but-unverified rather than failing,
+  // because refusing a model we simply could not measure would block perfectly
+  // good custom builds.
+  const unknown = sized.filter((entry) => entry.params === null);
+  if (unknown.length) {
+    return {
+      capable: true,
+      warning: `Could not tell how large ${unknown.length === 1 ? unknown[0].tag : "some of your models"} is, so this loop may or may not follow the protocol well. Watch the first turn.`
+    };
+  }
+
+  const largest = sized.reduce((best, entry) => ((entry.params ?? 0) > (best.params ?? 0) ? entry : best), sized[0]);
+  return {
+    capable: true,
+    warning: `Your largest local model is ${largest.tag}, under the ~${LOOP_CAPABLE_LOCAL_PARAMS_B}B where models reliably decide when to STOP. The loop will run, but it may do one turn and end early rather than finishing the job. Adding a provider key gives it something stronger to escalate to.`
+  };
+}
+
 /** Injected so this module keeps no import edge back into main.ts. Same shape
  *  and same reasoning as FollowupInvoke in followups.ts. */
 export type LoopDecisionInvoke = (prompt: string) => Promise<{ output: string; source: string }>;

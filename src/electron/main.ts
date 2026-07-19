@@ -90,6 +90,7 @@ import {
   LOOP_MIN_DELAY_SECONDS,
   composeWakePrompt,
   decideLoopContinuation,
+  assessLoopCapability,
   extractLoopDecision,
   loopTerminalReason,
   summariseTurn,
@@ -10260,6 +10261,16 @@ async function createLoop(input: {
   const requestedMode = isPermissionMode(input.permissionMode) ? input.permissionMode : ceiling;
   const permissionMode = clampPermissionMode(requestedMode, ceiling);
 
+  // Checked at creation because that is the only moment the owner is present
+  // to read it. A loop routes through the Auto Router at each tick, so this
+  // reports on what is AVAILABLE rather than predicting which model answers.
+  const ollama = await listOllamaModels().catch(() => ({ reachable: false, installed: [] as string[] }));
+  const secrets = await listSecrets().catch(() => []);
+  const capability = assessLoopCapability({
+    installedLocal: ollama.installed,
+    cloudConfigured: secrets.some((secret) => secret.hasSecret)
+  });
+
   const now = new Date();
   const loop: LoopRecord = {
     id: randomUUID(),
@@ -10268,6 +10279,7 @@ async function createLoop(input: {
     origin: input.origin ?? "app",
     permissionMode,
     fixedIntervalSeconds: normaliseFixedInterval(input.fixedIntervalSeconds),
+    capabilityWarning: capability.warning,
     status: "sleeping",
     iterations: 0,
     maxIterations,
