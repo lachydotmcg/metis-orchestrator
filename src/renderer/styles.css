@@ -14729,3 +14729,36 @@ a:focus-visible,
 .node-depth-rung.unroutable i {
   color: #ffd8a3;
 }
+
+/* The .md loader on the add-skill form. The note beneath it is load-bearing:
+   a skill without content is a label, and saying so up front beats the user
+   discovering their "skill" never did anything. */
+.palette-skill-file {
+  display: block;
+  cursor: pointer;
+}
+.palette-skill-file input[type="file"] {
+  display: none;
+}
+.palette-skill-file span {
+  display: block;
+  overflow: hidden;
+  padding: 7px 10px;
+  color: var(--muted);
+  background: var(--node);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.palette-skill-file:hover span {
+  color: var(--text);
+  border-color: var(--soft);
+}
+.palette-skill-note {
+  display: block;
+  color: #ffd8a3;
+  font-size: 10.5px;
+  line-height: 1.4;
+}

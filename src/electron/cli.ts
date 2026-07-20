@@ -155,7 +155,10 @@ function usageText(): string {
     "                             (same grant selectProjectWorkspace's \"Choose folder\" writes). Created",
     "                             on disk first if it doesn't exist yet. Without it, build writes into",
     "                             Metis's own app-managed workspace folder instead of a real project.",
-    "  --model <provider/model>  Pins a model instead of Auto Router, e.g. ollama/qwen3:8b or",
+    "  --model <provider/model>  Pins a model instead of Auto Router. IMPORTANT: a model tag with a",
+    "                             colon (every Ollama tag) must use the equals form, --model=ollama/qwen3:8b.",
+    "                             Space-separated, Windows Electron swallows all output when a bare",
+    "                             argument contains a colon. Cloud models work either way, e.g.",
     "                             anthropic/claude-sonnet-5. Maps onto SessionRunInput.modelOverride.",
     "                             chat/build only.",
     "  --max-iterations <n>      loop only. Hard cap on how many times the loop may wake. Default 8,",
@@ -197,7 +200,20 @@ function usageText(): string {
 
 function parseArgs(argv: string[]): ParsedArgs {
   const cliIndex = argv.indexOf("--cli");
-  const rest = cliIndex >= 0 ? argv.slice(cliIndex + 1) : argv.slice();
+  // "--flag=value" tokens are expanded to "--flag", "value" before parsing.
+  // This is not cosmetic: on Windows, Electron/Chromium silently swallows ALL
+  // console output when a BARE argv token contains a colon (it reads like a
+  // URL-ish positional), so `--model ollama/qwen3:8b` produced a blank run with
+  // exit 0 and no way to see why. A colon inside a `--switch=value` token is
+  // harmless, so the equals form is the only reliable way to pass an Ollama
+  // tag, and the usage text says so.
+  const rest = (cliIndex >= 0 ? argv.slice(cliIndex + 1) : argv.slice()).flatMap((token) => {
+    if (token.startsWith("--") && token.includes("=")) {
+      const eq = token.indexOf("=");
+      return [token.slice(0, eq), token.slice(eq + 1)];
+    }
+    return [token];
+  });
 
   let json = false;
   let timeoutSeconds = DEFAULT_TIMEOUT_SECONDS;

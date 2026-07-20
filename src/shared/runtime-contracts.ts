@@ -459,6 +459,11 @@ export interface GraphPipelineStage {
   label: string;
   provider: ProviderKey;
   model: string;
+  /** Skills attached to this stage node, WITH their content. The canvas has
+   *  always said a skill "loads first"; until this field existed that was
+   *  false, because no skill content ever left the renderer. Name plus text,
+   *  resolved at projection time so main.ts needs no store lookup. */
+  skills?: { name: string; content: string }[];
   /** Pinned route provider for this stage's primary model ("Gateway" node
    *  control, formerly "Access via"), if the user set one. Falls back to
    *  defaultGateways, then Auto.
@@ -970,6 +975,10 @@ export interface OrchestrationStage {
   provider: ProviderKey;
   model: string;
   output: string;
+  /** Skills that were injected into this stage's prompt, carried on the result
+   *  so downstream passes (extraction recovery rewrites this stage's files)
+   *  can apply the same standing instructions. */
+  skills?: { name: string; content: string }[];
   /** Think-tag / reasoning-field content stripped out of `output`, kept so the
    *  renderer can show it later (never leaks into extracted files or prompts). */
   thoughts?: string;

@@ -5614,7 +5614,17 @@ type StageModelRef = { provider: ProviderKey; model: string; routePreference?: P
 // stages keep the graph node's real id (for audit/result tracking) and pick
 // their prompt template by POSITION instead — first stage plans, second
 // builds the front end, the rest are functional/support passes.
-type StageConfig = { id: string; label: string; chain: StageModelRef[]; gatewayPreference?: ProviderKey[]; templateRole: "plan" | "frontend" | "functional" };
+type StageConfig = {
+  id: string;
+  label: string;
+  chain: StageModelRef[];
+  gatewayPreference?: ProviderKey[];
+  templateRole: "plan" | "frontend" | "functional";
+  /** Skills wired onto this stage node in the graph, with their content.
+   *  Injected ahead of the stage prompt, which is what the canvas's "loads
+   *  first" wording has promised since the day skills could be attached. */
+  skills?: { name: string; content: string }[];
+};
 
 function localStageRef(): StageModelRef {
   return { provider: "ollama", model: providerInfo.ollama.defaultModel ?? "qwen3:8b" };
@@ -5770,7 +5780,11 @@ function graphAgenticStages(config: GraphPipelineConfig, prompt: string, overrid
     // carry its own gateway + gateway fallbacks now that gateways live on the
     // model, not the node. They ride along as the chain entry's
     // routePreference so expandChainByRoutes applies them to THAT entry.
-    const fallbackRefs: StageModelRef[] = stage.fallback
+    // Guarded because graphPipeline is a plain JSON store key: the current
+    // renderer always emits `fallback` as an array, but older persisted data
+    // or anything else writing the key may omit it, and one absent field must
+    // not kill the whole run ("Cannot read properties of undefined").
+    const fallbackRefs: StageModelRef[] = (stage.fallback ?? [])
       .filter((ref) => isKnownProvider(ref.provider) && ref.model.trim().length > 0)
       .map((ref) => {
         const refGateway = ref.gateway && isKnownProvider(ref.gateway) ? ref.gateway : undefined;
@@ -5795,7 +5809,10 @@ function graphAgenticStages(config: GraphPipelineConfig, prompt: string, overrid
       label: stage.label || `Stage ${index + 1}`,
       chain: [primary, ...fallbackRefs, localStageRef()],
       gatewayPreference,
-      templateRole: templateRoleFor(index)
+      templateRole: templateRoleFor(index),
+      // Carried through from the graph projection so the prompt assembly can
+      // inject them. Undefined when the node had no content-bearing skills.
+      skills: stage.skills
     };
   });
 
@@ -7845,13 +7862,31 @@ async function runOrchestratedStages(
     } else {
       stagePrompt = `You are the FUNCTIONALITY model. Make the site actually work end to end.\n\nPlan:\n${plan}\n\nFront end so far:\n${frontend}\n\nReturn COMPLETE files (full contents, not diffs) for everything needed to run it — backend (e.g. \`server.js\`, \`package.json\`) and any updated front-end files. Before each fenced code block, put the file path in backticks on its own line. One short sentence of intro, then the files.`;
     }
-    if (metisBlock) stagePrompt = `${metisBlock}\n${stagePrompt}`;
+    // The singleFile overrides run BEFORE skills and the metis block, because
+    // the frontend one REASSIGNS stagePrompt from scratch. It used to run after,
+    // which silently discarded the user's global instructions on every
+    // single-file frontend build, and would have discarded injected skills the
+    // same way. Order: template, singleFile overrides, skills, metis block.
     if (stage.templateRole === "plan" && singleFile) {
       stagePrompt += "\n\nImportant constraint: this must remain one static index.html file. Do not plan a server, package.json, external local CSS file, or extra JS file.";
     }
     if (stage.templateRole === "frontend" && singleFile) {
       stagePrompt = `You are the FRONT-END model. Build the UI for this plan.\n\nPlan:\n${plan}\n\nReturn EXACTLY ONE complete file: \`index.html\`. Put the file path \`index.html\` on its own line before the fenced code block. All CSS must be inside a <style> tag. All JavaScript must be inside a <script> tag. Do not reference local files such as styles.css, script.js, package.json, server.js, images, or assets. No backend. One short sentence of intro, then the one file.\n\nAvoid the generic AI look — do not default to purple/violet gradients; choose a distinctive, coherent palette and typography that fit the subject.`;
     }
+    // SKILLS LOAD FIRST. The canvas has said so since skills could be attached;
+    // this block is where it becomes true. Each content-bearing skill wired
+    // onto this stage node is prepended ahead of the stage template, capped per
+    // skill so one enormous .md cannot starve the actual task of context.
+    if (stage.skills?.length) {
+      const skillBlocks = stage.skills
+        .map((skill) => `## Skill: ${skill.name}\n${skill.content.length > 6000 ? `${skill.content.slice(0, 6000)}\n[truncated at 6000 characters]` : skill.content}`)
+        .join("\n\n");
+      stagePrompt = `Apply the following skill${stage.skills.length === 1 ? "" : "s"} while doing this task. ${stage.skills.length === 1 ? "It is" : "They are"} standing instructions from the user:\n\n${skillBlocks}\n\n---\n\n${stagePrompt}`;
+      emitTimeline(stream, timelineText(`Loaded ${stage.skills.length === 1 ? `skill "${stage.skills[0].name}"` : `${stage.skills.length} skills`} for ${stage.label}.`));
+    }
+    if (metisBlock) stagePrompt = `${metisBlock}\n${stagePrompt}`;
+
+
     // Reference-image attachments: only the front-end stage gets images (never
     // plan/functionality) — see docs comment on runOrchestratedStages' images
     // param. No-op when there are no attachments.
@@ -7968,7 +8003,8 @@ async function runOrchestratedStages(
       thoughts: stageThoughts || undefined,
       fallbackNotes: attempt.notes,
       failed: attempt.failed,
-      criticPasses: criticPasses > 0 ? criticPasses : undefined
+      criticPasses: criticPasses > 0 ? criticPasses : undefined,
+      skills: stage.skills
     };
     results.push(completedStage);
     emitStream(stream, { kind: "stage", stage: completedStage });
@@ -8529,6 +8565,11 @@ async function runExtractionRecovery(args: {
   stream?: SessionStreamController;
   metisFile?: { content: string; chars: number } | null;
   scope?: string;
+  /** Skills wired onto the stage being recovered. Recovery rewrites that
+   *  stage's files, so its standing instructions still apply: without this, a
+   *  stage whose model call failed had its skills silently dropped by the very
+   *  path that then produced the files. */
+  skills?: { name: string; content: string }[];
 }): Promise<GeneratedFile[]> {
   // Graph-driven stages (docs/FABLE_PLANS.md section 25) keep the graph
   // node's own id, not "plan"/"frontend" — fall back to position (stage 0 is
@@ -8546,7 +8587,10 @@ async function runExtractionRecovery(args: {
       args.stream,
       timelineText(`The stages didn't include complete files — asking the build model to write them out properly (attempt ${attemptNumber} of ${EXTRACTION_RECOVERY_LIMIT}).`)
     );
-    const recoveryPrompt = `${await metisFilePromptBlock(args.metisFile ?? null)}Your previous output described the project but did not include complete writable files. Output ALL project files NOW, complete file contents (not diffs, not descriptions). Before each fenced code block put the file path in backticks on its own line (e.g. \`index.html\`). Plan and prior output follow:\n${planOutput}\n${frontendOutput.slice(0, 8000)}`;
+    const skillPrefix = args.skills?.length
+      ? `Apply the following standing instruction${args.skills.length === 1 ? "" : "s"} from the user while writing the files:\n\n${args.skills.map((skill) => `## Skill: ${skill.name}\n${skill.content.slice(0, 6000)}`).join("\n\n")}\n\n---\n\n`
+      : "";
+    const recoveryPrompt = `${skillPrefix}${await metisFilePromptBlock(args.metisFile ?? null)}Your previous output described the project but did not include complete writable files. Output ALL project files NOW, complete file contents (not diffs, not descriptions). Before each fenced code block put the file path in backticks on its own line (e.g. \`index.html\`). Plan and prior output follow:\n${planOutput}\n${frontendOutput.slice(0, 8000)}`;
     const recoveryStageId = `extract-recovery-${attemptNumber}`;
     const recoveryStageLabel = `File recovery ${attemptNumber}`;
     const attempt = await callStageWithFallback(chain, recoveryPrompt, undefined, {
@@ -8977,7 +9021,18 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     // again, explicitly, before conceding nothing was written.
     if (files.length === 0) {
       throwIfCancelled(input.projectPath);
-      files = await runExtractionRecovery({ prompt, stages, override: input.modelOverride, stream, metisFile, scope: cancelScope });
+      files = await runExtractionRecovery({
+        prompt,
+        stages,
+        override: input.modelOverride,
+        stream,
+        metisFile,
+        scope: cancelScope,
+        // Recovery rewrites the frontend stage's files, so it applies that
+        // stage's skills. Position fallback mirrors the plan/frontend lookup
+        // inside runExtractionRecovery itself.
+        skills: (stages.find((stage) => stage.id === "frontend") ?? stages[1])?.skills
+      });
     }
     if (files.length > 0) {
       const gate = await gatePermission({

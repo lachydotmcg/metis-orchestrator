@@ -368,7 +368,16 @@ type RouteSegment = { from: Vec; to: Vec };
 
 /** A user-authored local skill (text-based for now; file-based can follow later).
  *  Persisted under the `customSkills` app-store key (docs/FABLE_PLANS.md section 18). */
-type CustomSkill = { id: string; name: string; description?: string };
+type CustomSkill = {
+  id: string;
+  name: string;
+  description?: string;
+  /** The skill's actual text, loaded from a .md file the user picked (or typed).
+   *  This is what gets injected into a stage prompt when the skill is wired
+   *  onto a node. A skill without content is a LABEL, and the canvas saying it
+   *  "loads first" is only true when there is something to load. */
+  content?: string;
+};
 // Stable empty-array fallbacks for useAppStoreState: an inline `[] as T[]` literal is a fresh
 // reference every render, which re-fires the store's load effect and can stomp a just-written
 // update before it's ever persisted. Module-level constants keep the reference stable.
@@ -8334,7 +8343,7 @@ function resolveNodeDepths(node: GraphNode): DepthRung[] {
   ];
 }
 
-function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, ModelGatewayConfig>): GraphPipelineConfig {
+function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, ModelGatewayConfig>, customSkills: CustomSkill[]): GraphPipelineConfig {
   // Per-MODEL gateways (docs/DRILL_PLAN.md B11.3 v2): a model's gateway
   // config lives in the global modelGateways store (set from the Library
   // tab). Legacy node/slot-level fields still apply when no global config
@@ -8356,6 +8365,19 @@ function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, 
     if (!node.provider || !node.model?.trim()) continue;
     const providerKey = PROVIDER_CONNECTIONS[node.provider];
     if (!providerKey) continue;
+    // Resolve this node's attached skills to their CONTENT, not just names.
+    // The canvas has always drawn skills as "loads first"; nothing actually
+    // loaded until this existed, because no skill text ever left the renderer.
+    // Skills with no content (registry placeholders, plain labels) are skipped
+    // rather than injected as empty blocks.
+    const stageSkills = (node.skills ?? [])
+      .map((skillId) => nodes.find((candidate) => candidate.id === skillId))
+      .filter((skillNode): skillNode is GraphNode => Boolean(skillNode))
+      .map((skillNode) => {
+        const custom = customSkills.find((entry) => entry.name === skillNode.label);
+        return custom?.content?.trim() ? { name: custom.name, content: custom.content.trim() } : null;
+      })
+      .filter((entry): entry is { name: string; content: string } => entry !== null);
     // Per-MODEL gateways: each model in the chain (primary + every fallback)
     // resolves its own gateway config and projects it alongside its model, so
     // main.ts routes every chain entry through that model's pinned gateways.
@@ -8390,6 +8412,7 @@ function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, 
     stages.push({
       id: node.id,
       label: node.label,
+      skills: stageSkills.length ? stageSkills : undefined,
       provider: providerKey,
       model: node.model,
       // `accessVia` kept populated with the same value for back-compat with
@@ -8483,7 +8506,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
   useEffect(() => {
     if (!window.metisStore) return;
     const handle = window.setTimeout(() => {
-      const config = projectGraphPipeline(nodesRef.current, modelGateways);
+      const config = projectGraphPipeline(nodesRef.current, modelGateways, customSkills);
       void window.metisStore?.set("graphPipeline", config);
       // Depths mirror (B11.6): L3 defaults to the node's primary model, so a
       // drag-and-drop model swap on a depths-enabled node re-mirrors here too.
@@ -8491,7 +8514,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
       if (depthRoutes) void window.metisStore?.set("depthRoutes", depthRoutes);
     }, 1000);
     return () => window.clearTimeout(handle);
-  }, [nodes, modelGateways]);
+  }, [nodes, modelGateways, customSkills]);
 
   // Marketplace-installed skill packages, merged into the Skills palette (docs/FABLE_PLANS.md
   // section 18): "Installed skills -> Library". The graph itself only ever stores skill node
@@ -9437,6 +9460,8 @@ function Palette({
   const [addingSkill, setAddingSkill] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillDescription, setNewSkillDescription] = useState("");
+  const [newSkillContent, setNewSkillContent] = useState("");
+  const [newSkillFileName, setNewSkillFileName] = useState("");
   const [visionModel, setVisionModel] = useAppStoreState<string>("visionModel", DEFAULT_VISION_MODEL);
 
   const skills = useMemo<PaletteSkill[]>(() => {
@@ -9500,9 +9525,16 @@ function Palette({
   function submitCustomSkill(): void {
     const name = newSkillName.trim();
     if (!name) return;
-    onAddCustomSkill({ id: `custom-skill-${Date.now().toString(36)}`, name, description: newSkillDescription.trim() || undefined });
+    onAddCustomSkill({
+      id: `custom-skill-${Date.now().toString(36)}`,
+      name,
+      description: newSkillDescription.trim() || undefined,
+      content: newSkillContent.trim() || undefined
+    });
     setNewSkillName("");
     setNewSkillDescription("");
+    setNewSkillContent("");
+    setNewSkillFileName("");
     setAddingSkill(false);
   }
 
@@ -9633,6 +9665,32 @@ function Palette({
                   onChange={(event) => setNewSkillDescription(event.target.value)}
                   rows={2}
                 />
+                {/* The content is the part that makes a skill real: it is what
+                    gets injected into a stage prompt when the skill is wired
+                    onto a node. Loaded from a .md file because that is where
+                    people already keep this kind of instruction. */}
+                <label className="palette-skill-file">
+                  <input
+                    type="file"
+                    accept=".md,.markdown,.txt"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        setNewSkillContent(typeof reader.result === "string" ? reader.result : "");
+                        setNewSkillFileName(file.name);
+                        // A file named like a skill IS the name, until you type one.
+                        if (!newSkillName.trim()) setNewSkillName(file.name.replace(/\.(md|markdown|txt)$/i, ""));
+                      };
+                      reader.readAsText(file);
+                    }}
+                  />
+                  <span>{newSkillFileName ? `${newSkillFileName} (${newSkillContent.length.toLocaleString()} chars)` : "Load content from a .md file"}</span>
+                </label>
+                {!newSkillContent.trim() ? (
+                  <small className="palette-skill-note">Without content this is only a label: nothing will load into the run.</small>
+                ) : null}
                 <div className="panel-actions">
                   <button type="button" onClick={submitCustomSkill} disabled={!newSkillName.trim()}>
                     Save skill
