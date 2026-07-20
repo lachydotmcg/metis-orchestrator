@@ -1,0 +1,54 @@
+name: CI
+
+# The gates that actually catch things, run automatically instead of only when
+# someone remembers. The test suite is offline by design (no provider calls, no
+# API keys), so this workflow needs no secrets and costs nothing to run.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # So it can be kicked off by hand without pushing anything.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes an in-flight run pointless.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    # Generous enough for a cold install plus a full build, tight enough that a
+    # hang fails rather than idling.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # package.json requires >=20. Pinning the major keeps CI honest about
+          # what it actually verified rather than drifting with the runner image.
+          node-version: 22
+          cache: npm
+
+      # ci rather than install: installs exactly the lockfile, and fails loudly
+      # if package.json and package-lock.json have drifted apart.
+      - name: Install
+        run: npm ci
+
+      # Runs typecheck on both trees, then the renderer build, then the Electron
+      # main process. This is the gate the repo has always relied on.
+      - name: Build
+        run: npm run build
+
+      # The suites import from dist-electron, so they must run after the build.
+      # They exercise the compiled output, which is the point: what ships, not
+      # what TypeScript hoped for.
+      - name: Test
+        run: npm test
