@@ -99,6 +99,9 @@ import {
 } from "./loops.js";
 import { LOOP_COMMAND_MAX_INTERVAL_SECONDS } from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
+// Lifted out of this file so the test suite can exercise the REAL predicates
+// rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
+import { clampPermissionMode, isEditIntent, isPathInside, sameResolvedPath } from "../shared/intent-and-paths.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
 import { agentToolsPromptBlock, executeAgentTool, parseAgentToolCall } from "./agentTools.js";
@@ -1886,9 +1889,7 @@ async function removeProjectResource(id: string, key?: string): Promise<ProjectW
   return next;
 }
 
-function sameResolvedPath(a: string, b: string): boolean {
-  return resolve(a).toLowerCase() === resolve(b).toLowerCase();
-}
+
 
 async function resolveWritableProjectWorkspace(requestedPath?: string): Promise<ProjectWorkspace | null> {
   const workspace = await readProjectWorkspace();
@@ -2018,13 +2019,7 @@ async function gatePermission(args: {
   return { proceed: true, verdict };
 }
 
-function isPathInside(child: string, parent: string): boolean {
-  const parentResolved = resolve(parent);
-  const childResolved = resolve(child);
-  if (sameResolvedPath(childResolved, parentResolved)) return true;
-  const parentWithSep = parentResolved.endsWith("\\") || parentResolved.endsWith("/") ? parentResolved : `${parentResolved}\\`;
-  return childResolved.toLowerCase().startsWith(parentWithSep.toLowerCase()) || childResolved.toLowerCase().startsWith(`${parentResolved.toLowerCase()}/`);
-}
+
 
 const METIS_FILE_READ_MAX_BYTES = 200_000;
 
@@ -5969,19 +5964,7 @@ function wantsFreshBuild(prompt: string): boolean {
 // verbs on purpose — the caller only consults it when the folder actually has
 // files, and shouldRunBuildPipeline's opt-out/question guards run first, so a
 // plain question like "what does the header do?" never trips it.
-function isEditIntent(prompt: string): boolean {
-  // CORE.13: this list decides whether a request reaches the edit pipeline at
-  // all, and it was missing most refactoring vocabulary. A CLI sweep proved
-  // the cost: "Extract the repeated localStorage key into a constant" matched
-  // NOTHING, stayed in plain chat, never read the file, and the model
-  // HALLUCINATED a plausible-but-wrong key name. Reworded as "FIX the
-  // duplicated key..." it matched, routed correctly, and did a flawless
-  // surgical edit. Same intent, different verb, opposite outcome - and the
-  // failure mode was inventing rather than erroring, which is the worst kind.
-  // Verb-anchored on purpose (a bare noun like "the button" must not trigger
-  // an edit), just no longer blind to how engineers actually phrase changes.
-  return /\b(fix|repair|change|update|tweak|adjust|edit|modify|revise|rework|restyle|refactor|rename|resize|reposition|realign|recolou?r|re-?colour|move|replace|swap|add|remove|delete|insert|improve|polish|clean\s?up|shorten|expand|space\s?out|align|cent(er|re)|make\s+(it|the|them)|give\s+(it|the)|extract|consolidat(e|ing)|dedupe|deduplicat(e|ing)|simplify|streamline|tidy|rewrite|convert|migrat(e|ing)|split|merge|combine|unify|standardi[sz]e|normali[sz]e|rearrange|reorder|reorgani[sz]e|restructure|wrap|inline|hoist|pull\s+(it|the|this)?\s*(out|up)|factor\s+out|use\s+(a|an|one|the)\s+\w+\s+(instead|constant|variable|helper)|turn\s+(it|the|this)\s+into|implement|handle|support|ensure|prevent|disable|enable)\b/i.test(prompt);
-}
+
 
 const EDIT_CONTEXT_MAX_FILES = 12;
 const EDIT_CONTEXT_FILE_CAP = 8000;
@@ -10204,19 +10187,6 @@ function isPermissionMode(value: unknown): value is PermissionMode {
  *
  *  Ranked on the two axes that actually matter instead. A requested mode is
  *  only honoured when it is no looser on EITHER axis. */
-const PERMISSION_WRITE_FREEDOM: Record<PermissionMode, number> = { plan: 0, ask: 1, auto: 2, edits: 3, bypass: 4 };
-const PERMISSION_COMMAND_FREEDOM: Record<PermissionMode, number> = { plan: 0, ask: 1, edits: 1, auto: 2, bypass: 3 };
-
-/** Returns the requested mode when it is no looser than the ceiling on both
- *  axes, and the ceiling otherwise. A caller can always ask for something
- *  tighter (a plan-only loop is a perfectly reasonable thing to want), never
- *  for something looser, and never for something that trades one freedom for
- *  another. Incomparable pairs resolve to the ceiling, which is the safe side. */
-function clampPermissionMode(requested: PermissionMode, ceiling: PermissionMode): PermissionMode {
-  const writeOk = PERMISSION_WRITE_FREEDOM[requested] <= PERMISSION_WRITE_FREEDOM[ceiling];
-  const commandOk = PERMISSION_COMMAND_FREEDOM[requested] <= PERMISSION_COMMAND_FREEDOM[ceiling];
-  return writeOk && commandOk ? requested : ceiling;
-}
 
 /** Read-modify-write of a single loop. Always re-reads first: a tick can take
  *  minutes, and the user stopping a different loop from the UI meanwhile must

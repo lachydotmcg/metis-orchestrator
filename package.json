@@ -15,7 +15,8 @@
     "pack": "electron-builder --dir",
     "dist": "npm run build && electron-builder",
     "mcp": "node scripts/metis-mcp.mjs",
-    "cli": "electron . --cli"
+    "cli": "electron . --cli",
+    "test": "node tests/run.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

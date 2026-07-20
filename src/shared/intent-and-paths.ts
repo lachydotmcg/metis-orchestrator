@@ -1,0 +1,76 @@
+/**
+ * Two pure predicates lifted out of main.ts so they can be TESTED against the
+ * real implementation.
+ *
+ * They were being covered by suites that pasted a copy of each regex inline and
+ * asserted against that. Those suites passed whatever main.ts did, because they
+ * never touched it: change the real code and the copy still agrees with itself.
+ * A test that cannot fail when the code breaks is decoration.
+ *
+ * Both are pure (string in, boolean out) with no Electron or filesystem
+ * dependency, which is exactly why they were the two worth moving. main.ts
+ * imports them from here now, so the tests and the app read the same source.
+ */
+
+import { resolve } from "node:path";
+import type { PermissionMode } from "./runtime-contracts.js";
+
+/** Permission modes are NOT totally ordered, which a single "looseness" list
+ *  got wrong. "edits" lets file writes through with no prompt while still
+ *  asking for commands; "auto" asks once per new scope for BOTH. So "edits" is
+ *  looser than "auto" for writes and tighter for commands, and neither is
+ *  simply above the other. A linear ranking that put "edits" below "auto" let a
+ *  caller asking for "edits" past an "auto" ceiling and silently gain
+ *  unprompted write access on an unattended run. */
+export const PERMISSION_WRITE_FREEDOM: Record<PermissionMode, number> = { plan: 0, ask: 1, auto: 2, edits: 3, bypass: 4 };
+export const PERMISSION_COMMAND_FREEDOM: Record<PermissionMode, number> = { plan: 0, ask: 1, edits: 1, auto: 2, bypass: 3 };
+
+/** Returns the requested mode when it is no looser than the ceiling on BOTH
+ *  axes, and the ceiling otherwise. A caller can always ask for something
+ *  tighter (a plan-only loop is a perfectly reasonable thing to want), never
+ *  for something looser, and never for something that trades one freedom for
+ *  another. Incomparable pairs resolve to the ceiling, which is the safe side. */
+export function clampPermissionMode(requested: PermissionMode, ceiling: PermissionMode): PermissionMode {
+  const writeOk = PERMISSION_WRITE_FREEDOM[requested] <= PERMISSION_WRITE_FREEDOM[ceiling];
+  const commandOk = PERMISSION_COMMAND_FREEDOM[requested] <= PERMISSION_COMMAND_FREEDOM[ceiling];
+  return writeOk && commandOk ? requested : ceiling;
+}
+
+/** Whether a request is asking to CHANGE existing code rather than discuss it.
+ *
+ *  This list decides whether a request reaches the edit pipeline at all, and it
+ *  was once missing most refactoring vocabulary. A CLI sweep proved the cost:
+ *  "Extract the repeated localStorage key into a constant" matched NOTHING,
+ *  stayed in plain chat, never read the file, and the model HALLUCINATED a
+ *  plausible-but-wrong key name. Reworded as "FIX the duplicated key" it
+ *  matched, routed correctly, and did a clean surgical edit. Same intent,
+ *  different verb, opposite outcome, and the failure mode was inventing rather
+ *  than erroring, which is the worst kind.
+ *
+ *  Verb-anchored on purpose: a bare noun like "the button" must not trigger an
+ *  edit. It is just no longer blind to how engineers actually phrase changes. */
+export const EDIT_INTENT_PATTERN =
+  /\b(fix|repair|change|update|tweak|adjust|edit|modify|revise|rework|restyle|refactor|rename|resize|reposition|realign|recolou?r|re-?colour|move|replace|swap|add|remove|delete|insert|improve|polish|clean\s?up|shorten|expand|space\s?out|align|cent(er|re)|make\s+(it|the|them)|give\s+(it|the)|extract|consolidat(e|ing)|dedupe|deduplicat(e|ing)|simplify|streamline|tidy|rewrite|convert|migrat(e|ing)|split|merge|combine|unify|standardi[sz]e|normali[sz]e|rearrange|reorder|reorgani[sz]e|restructure|wrap|inline|hoist|pull\s+(it|the|this)?\s*(out|up)|factor\s+out|use\s+(a|an|one|the)\s+\w+\s+(instead|constant|variable|helper)|turn\s+(it|the|this)\s+into|implement|handle|support|ensure|prevent|disable|enable)\b/i;
+
+export function isEditIntent(prompt: string): boolean {
+  return EDIT_INTENT_PATTERN.test(prompt);
+}
+
+export function sameResolvedPath(a: string, b: string): boolean {
+  return resolve(a).toLowerCase() === resolve(b).toLowerCase();
+}
+
+/** Containment check for every path the app is asked to touch.
+ *
+ *  The separator is the whole point. A bare `startsWith` said
+ *  "C:\project-secrets" was inside "C:\project", because the string genuinely
+ *  starts with it. That is a real traversal: a sibling folder whose name merely
+ *  shares a prefix was readable. The trailing separator closes it, and both
+ *  slash styles are checked because Windows accepts either. */
+export function isPathInside(child: string, parent: string): boolean {
+  const parentResolved = resolve(parent);
+  const childResolved = resolve(child);
+  if (sameResolvedPath(childResolved, parentResolved)) return true;
+  const parentWithSep = parentResolved.endsWith("\\") || parentResolved.endsWith("/") ? parentResolved : `${parentResolved}\\`;
+  return childResolved.toLowerCase().startsWith(parentWithSep.toLowerCase()) || childResolved.toLowerCase().startsWith(`${parentResolved.toLowerCase()}/`);
+}

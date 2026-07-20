@@ -43,12 +43,10 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **There are no automated tests in the repo.** Zero test or spec files under `src/`. The real
-  gates are `npm run typecheck`, `npm run build`, and the CLI harness, which drives the actual
-  pipeline headlessly. Several subsystems do have adversarial suites written against their compiled
-  output (the loop decision layer at 41 assertions, the `/loop` grammar at 53, agent-tool
-  containment at 8, path traversal, edit-intent routing at 14), but they live outside `src/` and
-  are run by hand rather than by CI.
+- **There is no CI.** There IS now an offline test suite in `tests/`, 8 suites run with
+  `npm test`, covering the loop decision layer, the `/loop` grammar, the permission clamp, path
+  containment, edit-intent routing and the store-mutation race. Nothing runs them automatically on
+  push yet, so they are only as good as the habit of running them.
 - **The manual walkthrough checklist is unticked.** It is kept privately rather than in the repo,
   but the consequence is public: it is why most README sections say `SHIPPED` rather than
   `VERIFIED`.
