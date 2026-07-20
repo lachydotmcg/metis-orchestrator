@@ -4,7 +4,7 @@
 
 # Metis Orchestrator
 
-**Every model you have, on one canvas, doing the part it is actually best at.**
+**Every model you have, on one canvas, doing the part it is actually best at!**
 
 Inside a frontier lab, nobody sends every request to one model. They route: a cheap fast model for the easy parts, a strong expensive one for the hard reasoning, a specialist for the frontend, all wired into a pipeline someone designed on purpose. That control is most of why lab output is good, and it is the part you never get handed. Every AI app you can download is a box that picks for you.
 
