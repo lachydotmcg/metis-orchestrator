@@ -465,9 +465,9 @@ Depends on a remote feed that is still mostly empty. An honest empty state is st
 </details>
 
 <details>
-<summary><b>Flowchart Loops</b> · <code>PLANNED</code> · A loop that runs an orchestration graph each turn instead of a single routed call.<br />Designed only. No code exists, nothing in the app does this today.</summary>
+<summary><b>Flowchart Loops</b> · <code>PLANNED</code> · A loop given an ordered chain of steps, written as text.<br />Designed only. No code exists, nothing in the app does this today.</summary>
 
 <br />
 
-Design notes live in [`FLOWCHART_LOOPS.md`](FLOWCHART_LOOPS.md). Read that as a proposal, not a description of behaviour: nothing in v1 implements it, there is no flag to turn on, and `doctor` will not list one.
+Design notes live in [`FLOWCHART_LOOPS_DESIGN.md`](FLOWCHART_LOOPS_DESIGN.md). Read that as a proposal, not a description of behaviour: nothing in v1 implements it, there is no flag to turn on, and `doctor` will not list one.
 </details>

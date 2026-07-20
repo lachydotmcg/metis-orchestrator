@@ -53,7 +53,7 @@ It runs on your machine, on your keys, with no account and no server of ours in 
 
 ## What it does
 
-Everything below is real code in this repo. The marker says how real: **VERIFIED** has a recorded run behind it, **SHIPPED** works when driven by hand, **FLAG OFF** is built but defaults to off, **PLANNED** is designed and not built. Full detail on any of them, including the honest limits, is in [`docs/FEATURES.md`](docs/FEATURES.md).
+v1 navigation is exactly four items: New session, Orchestration, Benchmark, Settings. Everything below is real code in this repo. The marker says how real: **VERIFIED** has a recorded run behind it, **SHIPPED** works when driven by hand, **FLAG OFF** is built but defaults to off, **PLANNED** is designed and not built. Full detail on any of them, including the honest limits, is in [`docs/FEATURES.md`](docs/FEATURES.md).
 
 **Use it today:**
 
