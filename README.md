@@ -94,7 +94,30 @@ Built and complete but not reachable from v1's four-item navigation: Manager, Ma
 
 ---
 
-## Getting started
+## Install it
+
+Download the installer for your machine from the [latest release](https://github.com/lachydotmcg/metis-orchestrator/releases/latest). No Node, no terminal, no build step.
+
+| | |
+| --- | --- |
+| **Windows** | `Metis-Orchestrator-Setup-<version>.exe` |
+| **macOS** | `Metis-Orchestrator-<version>-arm64.dmg` (Apple Silicon) or `-x64.dmg` (Intel) |
+| **Linux** | `Metis-Orchestrator-<version>.AppImage` |
+
+The installers are not code-signed, so Windows SmartScreen will warn you and macOS needs right-click then Open the first time. That is what an unsigned build from one person looks like: certificates cost money and this does not have one yet.
+
+Before your first run, install [Ollama](https://ollama.com) and pull a model, or Metis has nothing local to route to:
+
+```bash
+ollama pull qwen3:8b
+ollama pull nomic-embed-text   # knowledge banks and Oracle near-match both need this
+```
+
+Cloud provider keys are optional, and go in the app under **Settings > Providers** rather than in your environment. Everything works local-only with no key at all.
+
+## Building from source
+
+Only needed if you want to change Metis, not to use it.
 
 Prerequisites:
 
@@ -111,14 +134,9 @@ npm run dev
 
 `npm run dev` starts Vite on `127.0.0.1:5177`, waits for it, compiles the Electron main process, and launches the app against that dev server. The renderer hot-reloads through Vite. A change under `src/electron` needs a restart.
 
-Pull a local model before your first run:
+You still need the Ollama models from the install section above.
 
-```bash
-ollama pull qwen3:8b
-ollama pull nomic-embed-text   # knowledge banks and Oracle near-match both need this
-```
-
-Then check the environment without running anything:
+Check the environment without running anything:
 
 ```bash
 npm run cli -- doctor
