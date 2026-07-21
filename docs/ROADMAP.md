@@ -9,8 +9,10 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
 - ~~**A spend ceiling for Loops.**~~ Shipped: `/loop --budget 200k` (and the CLI's `--budget`) sets
   a token ceiling summed from the ledger's per-loop attribution, checked before and after every
   turn, settling the loop at `exhausted` with both numbers in the reason. See docs/LOOPS.md.
-- **Sleeping loops in the tray.** With headless start the tray is the only surface a running loop
-  has, and it is not listed there yet.
+- ~~**Sleeping loops in the tray.**~~ Shipped: live loops get their own tray section — status
+  ("working now" / "wakes in 12m"), turn count, budget, and a Stop item that calls the same
+  stopLoop the panel uses. The menu rebuilds on every loop write, and the one-line status says
+  "idle, 2 loops waiting" instead of a flat "idle" while something is armed to spend money later.
 
 ### After that
 

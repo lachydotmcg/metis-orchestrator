@@ -10255,6 +10255,12 @@ function mutateLoops<T>(mutator: (current: LoopRecord[]) => { next: LoopRecord[]
     const current = await readLoops();
     const { next, result } = mutator(current);
     await writeLoops(next);
+    // Every loop state change flows through here, so this is the one hook the
+    // tray needs to never show a stale loop list (roadmap: with headless start
+    // the tray is the only surface a running loop has). Fire-and-forget, same
+    // as every other refreshTrayMenu call site — a menu rebuild must never
+    // slow down or fail a loop write.
+    void refreshTrayMenu();
     return result;
   });
   // The chain must survive a failed mutation, or one throw wedges every later
@@ -12510,13 +12516,30 @@ async function setCloseToTray(enabled: boolean): Promise<void> {
 // this so close-to-tray can never trap the real quit path behind a hide.
 let isQuitting = false;
 
-function trayStatusLabel(paused: boolean): string {
+function trayStatusLabel(paused: boolean, liveLoopCount: number): string {
   if (activeSessionRunCount > 0) return "running";
   // "background work", not "routines": the pause covers loops as well, and the
   // tray is the only surface a headless/tray-mode Metis has, so this label is
   // the whole report.
   if (paused) return "background work paused";
+  // A sleeping loop is not "idle" — something is armed and will spend money
+  // later. The count keeps the one-line status honest about that.
+  if (liveLoopCount > 0) return `idle, ${liveLoopCount} loop${liveLoopCount === 1 ? "" : "s"} waiting`;
   return "idle";
+}
+
+/** "wakes in 12m" for a sleeping loop's tray row. Goes stale between menu
+ *  rebuilds exactly like the recent-run "Nm ago" labels do — acceptable for
+ *  the same reason: the menu rebuilds on every loop write, and a tray row is
+ *  a glance, not a countdown. */
+function loopTrayStatus(loop: LoopRecord): string {
+  if (loop.status === "running") return "working now";
+  if (!loop.nextWakeAt) return "waiting";
+  const ms = new Date(loop.nextWakeAt).getTime() - Date.now();
+  if (ms <= 30_000) return "waking now";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 60) return `wakes in ${Math.max(1, minutes)}m`;
+  return `wakes in ${Math.round(minutes / 6) / 10}h`;
 }
 
 function formatRunAgo(completedAt: string): string {
@@ -12543,10 +12566,28 @@ async function refreshTrayMenu(): Promise<void> {
   try {
     const paused = await isRoutinesPaused();
     const closeToTray = await isCloseToTrayEnabled();
-    const status = trayStatusLabel(paused);
+    // Live loops surface as their own section (roadmap: "sleeping loops in
+    // the tray") — with headless start or close-to-tray, this menu is the
+    // only place a background loop is visible or stoppable at all.
+    const liveLoops = (await readLoops()).filter((loop) => loop.status === "sleeping" || loop.status === "running");
+    const status = trayStatusLabel(paused, liveLoops.length);
     const recentRuns = (await readSessionRuns())
       .filter((run) => Boolean(run.completedAt))
       .slice(0, 3);
+
+    const loopItems: MenuItemConstructorOptions[] = liveLoops.map((loop) => ({
+      label: `${loopTrayStatus(loop)} · ${loopLabel(loop)}`,
+      submenu: [
+        {
+          label: `Turn ${loop.iterations} of ${loop.maxIterations}${loop.budgetTokens ? ` · ${loop.budgetTokens.toLocaleString("en-US")}-token budget` : ""}`,
+          enabled: false
+        },
+        // The same stopLoop the panel's Stop button calls: marks the record,
+        // aborts any in-flight turn, and the mutateLoops hook rebuilds this
+        // menu so the row disappears immediately.
+        { label: "Stop this loop", click: () => void stopLoop(loop.id, "stopped from the tray") }
+      ]
+    }));
 
     const recentRunItems: MenuItemConstructorOptions[] = recentRuns.length
       ? recentRuns.map((run) => {
@@ -12570,6 +12611,13 @@ async function refreshTrayMenu(): Promise<void> {
         click: () => void setCloseToTray(!closeToTray)
       },
       { type: "separator" },
+      ...(liveLoops.length
+        ? ([
+            { label: `Loops (${liveLoops.length} active)`, enabled: false },
+            ...loopItems,
+            { type: "separator" }
+          ] as MenuItemConstructorOptions[])
+        : []),
       { label: "Recent runs", submenu: recentRunItems },
       { type: "separator" },
       {

@@ -252,11 +252,13 @@ tracking, and bus-completion wakeups so the loop sleeps until a worker finishes.
 exists: there is no `spawn_agent`, no `spawnedAgents` field, and nothing subscribes a loop to the
 bus. The "waking on events, not just timers" section above is a plan, not a description.
 
-**Phase 3, budget and polish. PARTLY BUILT.** ~~Token ceilings drawn from the usage ledger~~:
-shipped as `/loop --budget` (see the limits list above). Still open: tray presence for sleeping
-loops, and loop templates the user can start with one click. ~~Wall-clock ceilings~~: filed here
-originally, actually shipped in phase 1 as `LOOP_MAX_AGE_HOURS`, because an iteration cap on its
-own does not bound a loop whose every turn is slow.
+**Phase 3, budget and polish. MOSTLY BUILT.** ~~Token ceilings drawn from the usage ledger~~:
+shipped as `/loop --budget` (see the limits list above). ~~Tray presence for sleeping loops~~:
+shipped — live loops are a tray section with status, turn count, budget and a Stop item, rebuilt
+on every loop write via the mutateLoops hook. Still open: loop templates the user can start with
+one click. ~~Wall-clock ceilings~~: filed here originally, actually shipped in phase 1 as
+`LOOP_MAX_AGE_HOURS`, because an iteration cap on its own does not bound a loop whose every turn
+is slow.
 
 ## What actually shipped, verified by running it
 
