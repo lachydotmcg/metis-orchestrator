@@ -19,9 +19,11 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
 - **Loops phase 2: parallel workers.** A loop that can spawn helpers onto disjoint parts of a job
   and wake when one finishes, instead of a timer. The fan-out engine and the agent bus both already
   exist, off by default; this is wiring them to the loop rather than building them.
-- **Per-node Depths.** Today a node's depth stack mirrors into one global route table, so with
-  several depths-enabled nodes the last one projected wins. True per-node consumption inside the
-  pipeline is the follow-up.
+- ~~**Per-node Depths.**~~ Shipped for the pipeline: each depths-enabled node's L1-L3 stack now
+  projects onto its own GraphPipelineStage, and the build/edit/fan-out paths judge the run's depth
+  once and let every stage lead its chain with its OWN rung (prepended, so the normal chain stays
+  the safety net; a pinned model still outranks it). The single global table remains only for
+  plain chat turns, which have no per-node anything to consume.
 - **Un-hiding the Marketplace** (built, `HIDDEN`). Browse, install and publish skills, MCP
   connections and orchestration presets. It works; it is held back because installing arbitrary
   packages is a trust surface and the registry behind it is early. Un-hiding waits on the registry

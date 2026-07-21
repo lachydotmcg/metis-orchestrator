@@ -47,6 +47,7 @@ import type {
   ProjectWorkspaceSelectionResult,
   CatalogModel,
   GraphPipelineConfig,
+  GraphPipelineStage,
   ModelAccessRoute,
   ModelCatalogState,
   OllamaListResult,
@@ -5786,7 +5787,27 @@ function resolveGraphStageModel(provider: ProviderKey, rawModel: string): string
  *  (first = plan, second = frontend, rest = functional), not by node id/label,
  *  since graph node ids are arbitrary. Every chain still ends in the local
  *  model so the run always completes even if every configured route fails. */
-function graphAgenticStages(config: GraphPipelineConfig, prompt: string, override?: SessionModelOverride): StageConfig[] | null {
+/** The model a stage's OWN depth stack picks for this run's depth, or null
+ *  when the stage's normal chain should stand (roadmap "Per-node Depths").
+ *  Mirrors depthRouteFor's semantics rung for rung: "router" means the local
+ *  router model handles the level itself; an unpinned L1 defaults to the
+ *  local model (the free tier the node UI promises); an unpinned L2/L3 leaves
+ *  the chain untouched — for L3 the renderer already projects the node's
+ *  primary as the default, so an absent deep rung only happens when nothing
+ *  was mappable. Every value is re-validated here because graphPipeline is a
+ *  plain JSON store key anyone could have written. */
+function stageDepthRef(stage: GraphPipelineStage, depth: 1 | 2 | 3): StageModelRef | null {
+  const depths = stage.depths;
+  if (!depths) return null;
+  const choice = depth === 3 ? depths.deep : depth === 2 ? depths.standard : depths.shallow;
+  if (choice === "router") return localStageRef();
+  if (choice && isKnownProvider(choice.provider) && typeof choice.model === "string" && choice.model.trim()) {
+    return { provider: choice.provider, model: resolveGraphStageModel(choice.provider, choice.model) };
+  }
+  return depth === 1 ? localStageRef() : null;
+}
+
+function graphAgenticStages(config: GraphPipelineConfig, prompt: string, override?: SessionModelOverride, depth?: RouteDepth | null): StageConfig[] | null {
   const usable = config.stages.filter((stage) => isKnownProvider(stage.provider) && stage.model.trim().length > 0);
   if (usable.length < 2) return null;
 
@@ -5823,10 +5844,21 @@ function graphAgenticStages(config: GraphPipelineConfig, prompt: string, overrid
     const gateway = stage.gateway && isKnownProvider(stage.gateway) ? stage.gateway : stage.accessVia && isKnownProvider(stage.accessVia) ? stage.accessVia : undefined;
     const gatewayFallbacks = (stage.gatewayFallbacks ?? []).filter((provider): provider is ProviderKey => isKnownProvider(provider));
     const gatewayPreference = gateway ? [gateway, ...gatewayFallbacks.filter((provider) => provider !== gateway)] : gatewayFallbacks.length > 0 ? gatewayFallbacks : undefined;
+    // Per-node depths (roadmap): when the run has a judged depth and THIS
+    // stage carries its own stack, the matching rung leads the stage's chain.
+    // Prepended rather than replacing, so a depth pick that fails at call
+    // time still falls through to the stage's normal models — a depth rung
+    // is a preference, and the chain remains the safety net. A composer-
+    // pinned model (applied below) still outranks it.
+    const baseChain: StageModelRef[] = [primary, ...fallbackRefs, localStageRef()];
+    const depthRef = depth ? stageDepthRef(stage, depth) : null;
+    const chain = depthRef
+      ? [depthRef, ...baseChain.filter((ref) => ref.provider !== depthRef.provider || ref.model !== depthRef.model)]
+      : baseChain;
     return {
       id: stage.id,
       label: stage.label || `Stage ${index + 1}`,
-      chain: [primary, ...fallbackRefs, localStageRef()],
+      chain,
       gatewayPreference,
       templateRole: templateRoleFor(index),
       // Carried through from the graph projection so the prompt assembly can
@@ -5876,7 +5908,15 @@ async function graphRouteLabelFor(provider: ProviderKey, model: string): Promise
 async function resolveAgenticStages(prompt: string, override?: SessionModelOverride): Promise<{ stages: StageConfig[]; source: "graph" | "default" }> {
   const graphConfig = await readStoreValue<GraphPipelineConfig | null>("graphPipeline", null);
   if (graphConfig && Array.isArray(graphConfig.stages)) {
-    const graphStages = graphAgenticStages(graphConfig, prompt, override);
+    // Per-node depths (roadmap): judged here, once, for the whole pipeline —
+    // every caller of this function is a build/edit/fan-out path that never
+    // reaches the chat path's own depth block. A pinned model means no depth
+    // routing at all (PF3), same guard the chat path uses; the keyword
+    // classifier is the only judge available this early, which matches the
+    // chat path's fallback. Flag off (default) → null → byte-identical chains
+    // to before this existed.
+    const depth = !override && (await readStoreValue<boolean>("depthRoutingEnabled", false)) ? classifyRouteDepth(prompt) : null;
+    const graphStages = graphAgenticStages(graphConfig, prompt, override, depth);
     if (graphStages && graphStages.length >= 2) return { stages: graphStages, source: "graph" };
   }
   return { stages: defaultAgenticStages(prompt, override), source: "default" };

@@ -8314,20 +8314,44 @@ function depthStageRefFor(ref: ModelRef | "router"): { provider: string; model: 
  *  primary swap re-mirrors L3 without the inspector even being open. Returns
  *  null when no node has depths enabled (nothing is written, the store keeps
  *  its last value and the depthRoutingEnabled flag governs whether it's used). */
+/** One node's own depth stack, in the wire shape GraphPipelineStage.depths
+ *  carries (roadmap "Per-node Depths"). Identical resolution to the global
+ *  depthRoutes mirror below — same depthStageRefFor mapping, same
+ *  "L3 defaults to the node's primary" rule — so the stack a node DISPLAYS,
+ *  the stack the global mirror writes, and the stack each pipeline stage
+ *  consumes can never disagree. Returns undefined for a node with depths
+ *  disabled or nothing mappable. */
+function projectNodeDepthStack(node: GraphNode): GraphPipelineStage["depths"] {
+  if (!node.depthsEnabled) return undefined;
+  const models = node.depthModels ?? {};
+  const primary: ModelRef | undefined = node.provider && node.model ? { provider: node.provider, model: node.model } : undefined;
+  const rung = (pick: ModelRef | "router" | undefined, implied?: ModelRef): NonNullable<GraphPipelineStage["depths"]>["deep"] => {
+    const chosen = pick ?? implied;
+    if (!chosen) return undefined;
+    const mapped = chosen === "router" ? "router" : depthStageRefFor(chosen);
+    // depthStageRefFor maps renderer brand ids to backend ProviderKeys, so the
+    // cast only ever narrows a string it produced itself.
+    return mapped === null ? undefined : (mapped as NonNullable<GraphPipelineStage["depths"]>["deep"]);
+  };
+  const shallow = rung(models.l1);
+  const standard = rung(models.l2);
+  const deep = rung(models.l3, primary);
+  if (!shallow && !standard && !deep) return undefined;
+  return {
+    ...(shallow ? { shallow } : {}),
+    ...(standard ? { standard } : {}),
+    ...(deep ? { deep } : {})
+  };
+}
+
 function projectDepthRoutes(nodes: GraphNode[]): Record<string, unknown> | null {
   const node = nodes.find((n) => n.depthsEnabled && (n.kind === "agent" || n.kind === "router"));
   if (!node) return null;
-  const models = node.depthModels ?? {};
-  const primary: ModelRef | undefined = node.provider && node.model ? { provider: node.provider, model: node.model } : undefined;
-  const l3 = models.l3 ?? primary;
-  const next: Record<string, unknown> = {};
-  const deep = l3 ? depthStageRefFor(l3) : null;
-  const standard = models.l2 ? depthStageRefFor(models.l2) : null;
-  const shallow = models.l1 ? depthStageRefFor(models.l1) : null;
-  if (deep) next.deep = deep;
-  if (standard) next.standard = standard;
-  if (shallow) next.shallow = shallow;
-  return next;
+  // Same resolution as the per-stage projection above. This global mirror
+  // remains what the CHAT path's depthRouteFor reads; pipeline stages now
+  // carry their own stacks, so "first depths-enabled node wins" only ever
+  // applies to single-model chat turns, where there is no per-node anything.
+  return (projectNodeDepthStack(node) as Record<string, unknown> | undefined) ?? {};
 }
 
 /** One rung of a depths-enabled node, resolved for display.
@@ -8444,6 +8468,10 @@ function projectGraphPipeline(nodes: GraphNode[], modelGateways: Record<string, 
       id: node.id,
       label: node.label,
       skills: stageSkills.length ? stageSkills : undefined,
+      // Per-node depth stack (roadmap "Per-node Depths") — each stage carries
+      // its OWN L1-L3 picks so the pipeline can honour every depths-enabled
+      // node instead of one global table.
+      depths: projectNodeDepthStack(node),
       provider: providerKey,
       model: node.model,
       // `accessVia` kept populated with the same value for back-compat with

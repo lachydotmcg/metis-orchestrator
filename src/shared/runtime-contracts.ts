@@ -475,6 +475,20 @@ export interface GraphPipelineStage {
    *  falling through to the model's remaining access routes by health. */
   gateway?: ProviderKey;
   gatewayFallbacks?: ProviderKey[];
+  /** Per-NODE depth stack (roadmap "Per-node Depths"): this node's own L1-L3
+   *  picks, projected exactly as the global depthRoutes mirror resolves them
+   *  (same depthStageRefFor mapping, same "L3 defaults to the node's primary"
+   *  rule). "router" means the local router model handles that level itself.
+   *  Consumed by graphAgenticStages when depth routing is enabled: the rung
+   *  matching the run's judged depth is PREPENDED to this stage's chain, so
+   *  every depths-enabled node reaches for its own model instead of the last
+   *  projected node winning a single global table. Absent when the node has
+   *  depths disabled. */
+  depths?: {
+    shallow?: { provider: ProviderKey; model: string } | "router";
+    standard?: { provider: ProviderKey; model: string } | "router";
+    deep?: { provider: ProviderKey; model: string } | "router";
+  };
   /** Fallback models for this stage. Each entry may carry its OWN gateway +
    *  gateway fallbacks (docs/DRILL_PLAN.md B11.3): gateways are a property of
    *  a specific model, not the node, since a node now holds several models
