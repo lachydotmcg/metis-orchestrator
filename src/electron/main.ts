@@ -10926,8 +10926,13 @@ async function runLoopWorker(loopId: string, request: LoopSpawnRequest): Promise
   // finished helper wakes the sleeping loop NOW, and the 60s chain becomes
   // the fallback heartbeat. fireLoopTick's own loopsTicking guard makes
   // several helpers finishing together collapse into one tick.
+  //
+  // Never for a cli loop: those are driven in the FOREGROUND by their own
+  // process (see LoopRecord.origin), which is already awake and will tick on
+  // its own schedule — a background wake here would race that driver for the
+  // same iteration and make the CLI's pacing and final report lie.
   const latest = (await readLoops()).find((item) => item.id === loopId);
-  if (latest?.status === "sleeping") {
+  if (latest?.status === "sleeping" && latest.origin !== "cli") {
     void fireLoopTick(loopId).catch(async (error) => {
       await appendAudit("error", "loop.error", `Helper-completion wake of loop "${loopLabel(latest)}" failed.`, {
         id: loopId,
