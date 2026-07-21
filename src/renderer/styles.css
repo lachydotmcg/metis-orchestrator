@@ -14306,36 +14306,19 @@ a:focus-visible,
   box-shadow: none;
 }
 
-/* Model-written follow-up chips above the composer (DRILL_PLAN CORE.1).
-   Quiet by default so they read as an offer, not a demand; they brighten on
-   hover like every other bare control in the composer row. */
-.followup-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 0 6px;
-  margin-bottom: 6px;
+/* The active CHAT is what the sidebar highlights (Lachy) — not the project
+   folder it lives under. Same tint grammar as .project-row.active had. */
+.project-conversation-row.active {
+  color: white;
+  background: var(--active);
 }
-.followup-chip {
-  max-width: 100%;
-  padding: 5px 11px;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: left;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: color 130ms ease, border-color 130ms ease, background 130ms ease;
+.project-conversation-row.active strong {
+  color: white;
 }
-.followup-chip:hover {
-  color: var(--text);
-  border-color: var(--soft);
-  background: var(--node);
-}
+
+/* (The follow-up chip row above the composer is gone — model follow-ups now
+   render as the greyed-out ghost text inside the prompt bar itself, via
+   .composer-suggestion.) */
 
 /* --- Active loops (docs/LOOPS.md). Lives inside the Routines view. The status
    badge is the load-bearing element: a loop that is working right now must look

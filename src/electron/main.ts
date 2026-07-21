@@ -102,6 +102,7 @@ import { runCliMode, type CliRuntime } from "./cli.js";
 // Lifted out of this file so the test suite can exercise the REAL predicates
 // rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
 import { clampPermissionMode, isEditIntent, isPathInside, sameResolvedPath } from "../shared/intent-and-paths.js";
+import { lineDiffCounts } from "../shared/line-diff.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
 import { agentToolsPromptBlock, executeAgentTool, parseAgentToolCall } from "./agentTools.js";
@@ -3483,12 +3484,18 @@ function sessionActionProtocolBlock(): string {
   return [
     `You may also PROPOSE actions for the owner to approve — you never execute anything yourself, the owner reviews and approves each one in the UI. Propose actions ONLY when the user clearly wants something done (not for general chat, advice, or discussion). If no action is called for, do not include the block at all.`,
     `To propose actions, end your reply with a fenced block, exactly this shape, after your normal conversational reply:`,
-    '```metis-actions\n[ { "kind": "add_todo", "title": "...", "reason": "..." } ]\n```',
+    '```metis-actions\n[ { "kind": "run_in_project", "prompt": "...", "reason": "..." } ]\n```',
     `Rules for the block: it must be the LAST thing in your reply; it must contain a JSON array (even if it has one item); do not add commentary inside or after it. Keep your actual conversational answer above the block, as normal prose.`,
+    // "add_todo" is deliberately NOT advertised on the general-chat path while
+    // the To Do board is cut from v1 (renderer V1_HIDDEN_NAV): proposing a
+    // write to a board the owner cannot open is an offer the UI would have to
+    // hide anyway (and RunProposedActions does hide it, for old persisted
+    // runs). Same for the hidden views in open_view's list. The Manager tab's
+    // own prompt (managerSystemPrompt) keeps the full set — that surface
+    // ships together with the board.
     `Available action kinds and their fields:`,
     `- "run_in_project": { "prompt": string, "projectPath"?: string, "reason"?: string } — projectPath is optional and defaults to the current project workspace.`,
-    `- "add_todo": { "title": string, "assignee"?: "manager" | "fable", "reason"?: string } — adds a card to the to-do board.`,
-    `- "open_view": { "view": string, "reason"?: string } — view is one of: orchestration, marketplace, gallery, benchmark, todo, routines, graph, session, manager, settings, pulse.`,
+    `- "open_view": { "view": string, "reason"?: string } — view is one of: orchestration, benchmark, session, settings.`,
     `Every action should carry a short "reason" explaining why you're proposing it. Propose at most a few actions per reply — do not flood the user with proposals.`
   ].join("\n\n");
 }
@@ -4061,19 +4068,20 @@ function fullArtifactPath(root: string, relativePath: string): string | null {
 }
 
 async function writeTextArtifact(path: string, value: string): Promise<ProjectArtifact> {
-  let removedLines = 0;
+  // Unreadable-but-existing files (permissions, encoding) fall back to "" —
+  // the display then overcounts adds rather than lying about removals.
+  let previous = "";
   const existed = await exists(path);
   if (existed) {
     try {
-      const previous = await readFile(path, "utf8");
-      removedLines = previous.length ? previous.split(/\r?\n/).length : 0;
+      previous = await readFile(path, "utf8");
     } catch {
-      removedLines = 0;
+      previous = "";
     }
   }
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, value, "utf8");
-  const addedLines = value.length ? value.split(/\r?\n/).length : 0;
+  const { addedLines, removedLines } = lineDiffCounts(previous, value);
   return {
     kind: existed ? "file" : "file_create",
     label: path.split(/[\\/]/).pop() ?? path,
@@ -5833,6 +5841,27 @@ function graphAgenticStages(config: GraphPipelineConfig, prompt: string, overrid
  *  falls back to the hardcoded defaultAgenticStages. The model override
  *  (composer pin) applies identically either way — it still prepends every
  *  chain, outranking both the graph and the defaults. */
+/** The user's own name for the route a chat turn actually took (Lachy: "Routed
+ *  via coding" is meaningless — 'coding' is the router's internal task_type,
+ *  not the name of any route he authored). When the selected provider+model
+ *  matches a node in the orchestration graph, that node's label ("backend",
+ *  or whatever the user typed on the canvas) IS the route's name. Undefined
+ *  when there's no graph or no matching node — the caller then falls back to
+ *  the honest provider+model pair rather than the task-type framing. */
+async function graphRouteLabelFor(provider: ProviderKey, model: string): Promise<string | undefined> {
+  const config = await readStoreValue<GraphPipelineConfig | null>("graphPipeline", null);
+  if (!config || !Array.isArray(config.stages)) return undefined;
+  const match = config.stages.find(
+    (stage) =>
+      isKnownProvider(stage.provider) &&
+      stage.provider === provider &&
+      typeof stage.model === "string" &&
+      (stage.model === model || resolveGraphStageModel(stage.provider, stage.model) === model)
+  );
+  const label = match?.label?.trim();
+  return label || undefined;
+}
+
 async function resolveAgenticStages(prompt: string, override?: SessionModelOverride): Promise<{ stages: StageConfig[]; source: "graph" | "default" }> {
   const graphConfig = await readStoreValue<GraphPipelineConfig | null>("graphPipeline", null);
   if (graphConfig && Array.isArray(graphConfig.stages)) {
@@ -9231,7 +9260,17 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const override = input.modelOverride;
   const provider = override ? override.provider : depthRoute ? depthRoute.provider : providerFromRoute(route.provider, route.runtime, route.kind);
   const model = override ? resolveOverrideModel(override) : depthRoute ? depthRoute.model : route.model ?? providerInfo[provider].defaultModel ?? "auto";
-  const effectiveRouteLabel = override ? overrideDisplayLabel(override) : depthRoute ? `${providerInfo[depthRoute.provider].label} ${depthRoute.model}` : routeLabel;
+  // The route line names the route ACTUALLY taken (Lachy): an explicit
+  // prompt/continuation label first, else the user's own graph-node name for
+  // the selected model ("backend"), else the honest provider+model pair —
+  // never the router's internal task_type ("coding"), which names no route
+  // the user ever authored.
+  const effectiveRouteLabel =
+    override
+      ? overrideDisplayLabel(override)
+      : depthRoute
+        ? `${providerInfo[depthRoute.provider].label} ${depthRoute.model}`
+        : routeLabel ?? (await graphRouteLabelFor(provider, model)) ?? `${providerInfo[provider].label} ${model}`;
   const writableWorkspace = await resolveActiveProjectWorkspace(input.projectPath, input.conversationId);
   // Fast lane (bug L4b): a short, plain general_chat turn ("Test", "hi") skips
   // the project-snapshot walk and knowledge-bank retrieval below — both add

@@ -2143,6 +2143,7 @@ export function App(): JSX.Element {
       {activeNav !== "settings" ? (
         <Sidebar
           activeNav={activeNav}
+          activeConversationId={openConversation?.id}
           expandedProjects={expandedProjects}
           archivedConversations={archivedConversations}
           benchmarkLocked={benchmarkGateLocked}
@@ -2950,6 +2951,7 @@ type RowMenuTarget = { kind: "conversation"; id: string } | { kind: "project"; p
 
 function Sidebar({
   activeNav,
+  activeConversationId,
   expandedProjects,
   archivedConversations,
   benchmarkLocked,
@@ -2974,6 +2976,9 @@ function Sidebar({
   projects
 }: {
   activeNav: NavKey;
+  /** The chat currently open in the session view — its sidebar row gets the
+   *  active highlight (Lachy: highlight the chat you're on, not the folder). */
+  activeConversationId?: string;
   expandedProjects: string[];
   archivedConversations: { id: string; title: string; age: string }[];
   benchmarkLocked: boolean;
@@ -3132,8 +3137,11 @@ function Sidebar({
             return (
               <div className={`project-group ${expanded ? "expanded" : ""}`} key={project.name}>
                 <div className="project-row-wrap row-menu-wrap">
+                  {/* Expansion is shown by the caret alone — the row tint is
+                      reserved for the ACTIVE CHAT below (Lachy: highlight the
+                      chat you're on, not the project folder it lives in). */}
                   <button
-                    className={`project-row ${expanded ? "active" : ""}`}
+                    className="project-row"
                     type="button"
                     disabled={benchmarkLocked}
                     title={benchmarkLocked ? "Finish the benchmark wizard first" : undefined}
@@ -3212,7 +3220,7 @@ function Sidebar({
                               }}
                             />
                           ) : (
-                            <button className="project-conversation-row" type="button" onClick={() => onConversationOpen(conversation.id)} title={conversation.summary || conversation.title}>
+                            <button className={`project-conversation-row ${conversation.id === activeConversationId ? "active" : ""}`} type="button" onClick={() => onConversationOpen(conversation.id)} title={conversation.summary || conversation.title}>
                               {/* Title only (B12 sidebar simplification) - the
                                   summary moved to the tooltip rather than a
                                   second line under every row. */}
@@ -4361,12 +4369,18 @@ function NewSessionWorkspace({
     if (lastConversationPrompt) return lastConversationPrompt;
     return [...history].reverse().find((turn) => turn.role === "user")?.content;
   }, [conversation, history]);
-  // Real follow-ups (docs/DRILL_PLAN.md CORE.1): written by the model that
-  // answered, from the actual exchange. The old canned heuristic stays ONLY
-  // as the fallback for runs that predate this (or whose model gave nothing
-  // usable), so existing conversations do not suddenly lose their hint.
-  const composerSuggestion = useMemo(() => suggestNextStep(lastRun, lastUserMessage), [lastRun, lastUserMessage]);
-  const followups = useMemo(() => (sessionBusy ? [] : lastRun?.suggestions ?? []), [lastRun, sessionBusy]);
+  // Composer ghost suggestion (Lachy: suggestions should sit IN the prompt
+  // bar as greyed-out typed-looking text, not as a chip row above it). The
+  // run-state heuristic (a failed verify/repair has one obviously-right next
+  // step) outranks the model-written follow-ups (docs/DRILL_PLAN.md CORE.1);
+  // the first follow-up is the ghost otherwise. Tab or click adopts it into
+  // the prompt — it is a draft the user finishes sending, never auto-sent.
+  const composerSuggestion = useMemo(() => {
+    const heuristic = suggestNextStep(lastRun, lastUserMessage);
+    if (heuristic) return heuristic;
+    if (sessionBusy) return null;
+    return lastRun?.suggestions?.[0] ?? null;
+  }, [lastRun, lastUserMessage, sessionBusy]);
 
   useEffect(() => {
     const el = homeScrollRef.current;
@@ -5052,8 +5066,6 @@ function NewSessionWorkspace({
           onChooseProjectFolder={chooseProjectFolder}
           activeConversationId={activeConversationId}
           suggestion={composerSuggestion}
-          followups={followups}
-          onFollowup={(text) => void submitPrompt(text)}
           suggestionResetKey={`${lastRun?.id ?? "none"}::${activeConversationId ?? "none"}`}
           onSubmit={submitPrompt}
           onStartLoop={startLoopFromCommand}
@@ -5124,8 +5136,6 @@ function SessionComposer({
   activeConversationId,
   suggestion,
   suggestionResetKey,
-  followups,
-  onFollowup,
   onSubmit,
   onStartLoop,
   permissionMode,
@@ -5164,12 +5174,10 @@ function SessionComposer({
   /** Active conversation id, passed to Oracle warm/draft as context so the
    *  backend can assemble the same prompt the real run will send (O3). */
   activeConversationId?: string;
+  /** Ghost text shown greyed-out inside the prompt bar (heuristic next step,
+   *  else the model-written follow-up — CORE.1). Tab/click adopts it. */
   suggestion: string | null | undefined;
   suggestionResetKey: string;
-  /** Real model-written follow-ups for the last completed run (CORE.1). */
-  followups: string[];
-  /** Sends a follow-up chip straight through as the next message. */
-  onFollowup: (text: string) => void;
   onSubmit: (text: string, attachments?: SessionAttachment[]) => void | Promise<void>;
   /** Starts a background loop from a parsed "/loop" command. */
   onStartLoop: (parts: LoopCommandParts) => void | Promise<void>;
@@ -5680,18 +5688,6 @@ function SessionComposer({
 
   return (
     <>
-    {followups.length > 0 && !prompt.trim() ? (
-      // Real follow-ups (CORE.1): what the model that just answered thinks
-      // you might say next, phrased as YOU would type it. Clicking sends it
-      // straight through. Hidden the moment you start typing your own.
-      <div className="followup-row" aria-label="Suggested next messages">
-        {followups.map((text) => (
-          <button type="button" className="followup-chip" key={text} onClick={() => onFollowup(text)} title={text}>
-            {text}
-          </button>
-        ))}
-      </div>
-    ) : null}
     {!hasConversation ? (
       // B12 revisions (Lachy): on the NEW SESSION page only, the conversation
       // folder sits right above the prompt box, with a + to its right to add
@@ -7421,10 +7417,17 @@ function AssistantResponse({ children, source }: { children: string; source: Ret
  *  re-implements that logic. Renders once, directly under the run's assistant
  *  text, regardless of which CompletedRun branch produced that text. */
 function RunProposedActions({ run, onNavigate }: { run: SessionRun; onNavigate: (nav: NavKey) => void }): JSX.Element | null {
-  if (!run.actions?.length) return null;
+  // While the To Do List surface is cut from v1 (V1_HIDDEN_NAV), an "Add
+  // todo" card would offer to write to a board the user cannot open — so
+  // those proposals are hidden here rather than shown-but-stranded. The
+  // filter reads nav visibility (not action validity) so the cards come back
+  // automatically the day the board ships. Same spirit as ManagerActionCard's
+  // open_view refusal for hidden views.
+  const visibleActions = (run.actions ?? []).filter((action) => action.kind !== "add_todo" || isNavVisible("todo"));
+  if (!visibleActions.length) return null;
   return (
     <div className="manager-action-list">
-      {run.actions.map((action, actionIndex) => (
+      {visibleActions.map((action, actionIndex) => (
         <ManagerActionCard key={actionIndex} action={action} onNavigate={onNavigate} />
       ))}
     </div>
