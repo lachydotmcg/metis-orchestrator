@@ -9624,7 +9624,17 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // Found by id, not assumed at index 2 — a pinned run's minimal step list
   // (route, provider, finalize) still has "provider" at index 1, not 2.
   const providerIndex = steps.findIndex((step) => step.id === "provider");
-  if (providerIndex >= 0) steps[providerIndex] = completeStep(steps[providerIndex], providerResult.auditId);
+  if (providerIndex >= 0) {
+    // The step's detail was written from the POLICY route before depth
+    // routing could override it (initialPipelineSteps runs earlier), so a
+    // depth-routed turn used to complete a step still claiming "Send the
+    // task to ollama / qwen3:8b" while DeepSeek answered — caught by the
+    // 2026-07-21 packaged-build proof run. Name what actually ran.
+    steps[providerIndex] = completeStep(
+      { ...steps[providerIndex], detail: `Send the task to ${providerResult.provider} / ${providerResult.model}.` },
+      providerResult.auditId
+    );
+  }
 
   let projectResult: ProjectToolResult | undefined = agentToolProjectResult;
   let noProjectFilesWritten = false;

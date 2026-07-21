@@ -1,6 +1,9 @@
 node_modules/
 dist/
 dist-electron/
+# electron-builder output (electron-builder.yml directories.output). Nearly
+# committed once — 359k lines of Electron binaries in one packaged build.
+release/
 coverage/
 *.log
 .env

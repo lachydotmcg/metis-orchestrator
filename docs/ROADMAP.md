@@ -43,8 +43,11 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
   intent, path containment and the line-diff counts — but they cover the adversarially-important
   slices, not the breadth of `src/`. The session pipeline, the build path and the renderer remain
   untested by machine.
-- **A packaged-build run of the Auto Router.** It is what runs, but the original bug was that it
-  silently did nothing in a packaged build, so that specific proof matters more here than anywhere.
+- ~~**A packaged-build run of the Auto Router.**~~ Recorded 2026-07-21 (see docs/LIMITATIONS.md):
+  an `electron-builder --dir` build answered `--cli chat` with a real metis-policy-cli decision and
+  a routed provider reply. Still open in narrower form: the same proof against the actual NSIS
+  installer output. (Packing note: winCodeSign needs symlink privileges Windows denies without
+  admin/dev-mode — `--config.win.signAndEditExecutable=false` packs cleanly without it.)
 - **Learned routing.** Metis already keeps a private local log of how you actually use it. Nothing
   reads it back into a routing decision yet, and doing so without making routing unpredictable is
   the hard part.

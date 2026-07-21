@@ -42,7 +42,7 @@ You can also skip routing entirely and pin a model in the composer.
 - The classification is keyword matching plus a length rule, not a learned model. Confidence values are fixed constants (0.72 on a keyword hit, 0.6 for a long prompt, 0.55 for the general fallback), so treat them as a category label rather than a calibrated probability.
 - It never names a local model you have not pulled. For cloud it checks that you have a key for the provider, not that your account can actually reach that specific model.
 - Real decisions are tagged `builtin-router-0.1.0`. The `sample` source you may see in a browser preview is a demo decision for the settings panel, not something a real run produces.
-- There is no recorded run of this in a packaged build yet, which is why the marker is `SHIPPED` and not `VERIFIED`. Given what the original bug was, that distinction matters here more than anywhere else in this document.
+- Packaged-build proof recorded 2026-07-21: an `electron-builder --dir` build ran `--cli chat` headless and produced a real `metis-policy-cli` decision plus a routed provider answer end to end. The caveat that remains is narrower than the old one: the run used the unpacked directory target, not the NSIS installer output.
 </details>
 
 <details>

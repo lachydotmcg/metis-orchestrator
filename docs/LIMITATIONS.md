@@ -43,17 +43,20 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **There is no CI.** There IS now an offline test suite in `tests/`, 8 suites run with
-  `npm test`, covering the loop decision layer, the `/loop` grammar, the permission clamp, path
-  containment, edit-intent routing and the store-mutation race. Nothing runs them automatically on
-  push yet, so they are only as good as the habit of running them.
+- **CI now runs the offline suites on every push** (`.github/workflows`), 10 suites via
+  `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
+  permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
+  line-diff counts and the per-node depth rung rule. They cover the adversarially-important
+  slices, not the breadth of `src/`.
 - **The manual walkthrough checklist is unticked.** It is kept privately rather than in the repo,
   but the consequence is public: it is why most README sections say `SHIPPED` rather than
   `VERIFIED`.
-- **The Auto Router fix has not been proven in a packaged build.** It is in the live code path and
-  it is what runs, but no recorded run backs it in a packaged installer yet. Given the original bug
-  was "the router silently did nothing in every packaged build", that gap matters more here than
-  anywhere else.
+- ~~**The Auto Router fix has not been proven in a packaged build.**~~ Proven 2026-07-21: an
+  `electron-builder --dir` build (`release/win-unpacked/Metis Orchestrator.exe --cli chat … --json`)
+  produced a real `metis-policy-cli` decision — deterministic ruleset, full evidence and scores —
+  and a real routed provider answer, end to end inside the packaged executable. The remaining
+  narrower caveat: that run used the unpacked directory target, not the NSIS installer output,
+  which shares the same asar/app layout but is not literally the installed artifact.
 - **The `v1.0.0` tag predates almost everything described in the README.** It is all on `main` and
   is not yet tagged.
 
