@@ -12,6 +12,43 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Added (2026-07-21)
+
+- **Loop spend ceiling.** `/loop --budget 200k` (CLI: `--budget`, alias
+  `--tokens`) caps a loop's total token spend, summed from the usage
+  ledger's per-loop attribution and checked before and after every turn.
+  The loop settles as `exhausted` with both numbers in the reason.
+- **Loops in the tray.** Sleeping and running loops are listed in the tray
+  menu with status, turn count, budget, and a Stop item — with headless
+  start or close-to-tray, this is the only surface a background loop has.
+- **Per-node depths.** Each depths-enabled orchestration node's L1-L3
+  stack now applies to that node's own pipeline stage, instead of one
+  global table where a single node's stack won. The run's judged depth
+  picks each stage's rung; the stage's normal chain stays the fallback.
+- **/loop in the "/" popover.** The slash popover now offers /loop
+  alongside /orchestration, /export, /summarize and /handoff.
+
+### Changed (2026-07-21)
+
+- **Suggestions are ghost text now.** Model-written follow-ups render as
+  greyed-out text inside the prompt bar (Tab or click adopts them),
+  replacing the chip row that used to sit above the composer.
+- **The sidebar highlights the chat you're on,** not the project folder
+  it lives under.
+- **"Routed via" names the route actually taken** — your own graph-node
+  label when the selected model matches one, else the provider and model.
+  Never the router's internal task_type ("coding").
+
+### Fixed (2026-07-21)
+
+- **File-edit line counts are a real diff.** Every overwrite used to
+  count the whole old file as removed and the whole new file as added, so
+  a one-line tweak to a 189-line file displayed as "+189 -189". Counts
+  now come from a prefix/suffix line diff (`shared/line-diff.ts`).
+- **"Add todo" proposals no longer appear** while the To Do board is
+  hidden from v1's navigation, and the chat prompt stops advertising the
+  action kind entirely.
+
 ### Added (2026-07-17)
 
 - **Per-model gateways.** Click a model in the orchestration Library to set
