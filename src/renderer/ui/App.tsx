@@ -246,7 +246,7 @@ type PromptTemplate = { id: string; name: string; text: string };
 // commands added alongside it. Unlike "template", these three never carry
 // deletable user data, they're fixed rows the popover always offers (subject
 // to their own bridge/availability checks at render time).
-type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "handoff" } | { kind: "newTemplate" } | { kind: "template"; template: PromptTemplate };
+type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "handoff" } | { kind: "loop" } | { kind: "newTemplate" } | { kind: "template"; template: PromptTemplate };
 // Canned prompt /summarize submits verbatim through the normal onSubmit path
 // (DRILL_PLAN I9.9) — no new backend, it just reuses the same pipeline a
 // hand-typed message would use, so the reply lands as an ordinary assistant turn.
@@ -5510,6 +5510,8 @@ function SessionComposer({
   const summarizeRowMatches = !templateFilter || "summarize".includes(templateFilter) || "summary".includes(templateFilter);
   // Built-in /handoff row (DRILL_PLAN I9.10) — same discoverability idiom.
   const handoffRowMatches = !templateFilter || "handoff".includes(templateFilter) || "continue".includes(templateFilter);
+  // Built-in /loop row — same discoverability idiom.
+  const loopRowMatches = !templateFilter || "loop".includes(templateFilter);
   // New template row (B12 declutter - replaces the old toolbar save button).
   const newTemplateRowMatches = !templateFilter || "template".includes(templateFilter) || "new".includes(templateFilter) || "save".includes(templateFilter);
   const templateRows: TemplateRow[] = [
@@ -5517,6 +5519,7 @@ function SessionComposer({
     ...(exportRowMatches ? [{ kind: "export" as const }] : []),
     ...(summarizeRowMatches ? [{ kind: "summarize" as const }] : []),
     ...(handoffRowMatches ? [{ kind: "handoff" as const }] : []),
+    ...(loopRowMatches ? [{ kind: "loop" as const }] : []),
     ...filteredTemplates.map((template) => ({ kind: "template" as const, template })),
     ...(newTemplateRowMatches ? [{ kind: "newTemplate" as const }] : [])
   ];
@@ -5563,6 +5566,10 @@ function SessionComposer({
     if (row.kind === "handoff") {
       setPrompt("");
       void onSubmit(SLASH_HANDOFF_PROMPT);
+      return;
+    }
+    if (row.kind === "loop") {
+      setPrompt("/loop ");
       return;
     }
     if (row.kind === "newTemplate") {
@@ -5920,6 +5927,25 @@ function SessionComposer({
                           <span>
                             <strong>/handoff</strong>
                             <small>Generates a continue-from-here brief for a fresh session or another model</small>
+                          </span>
+                        </button>
+                      );
+                    }
+                    if (row.kind === "loop") {
+                      return (
+                        <button
+                          key="builtin-loop"
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => selectTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>/loop</strong>
+                            <small>Starts a background goal it works on across turns · flags --turns, --every, --budget</small>
                           </span>
                         </button>
                       );
