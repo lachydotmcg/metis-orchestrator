@@ -36,9 +36,11 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
 
 ### Wanted, not yet designed
 
-- **Automated tests.** There are none in this repo, which is the single biggest gap in how this is
-  verified. Several subsystems have adversarial suites, but they live outside `src/` and run by
-  hand.
+- **Broader automated tests.** The repo now has offline suites (`npm test`, tests/suites/, run on
+  every push by CI) covering the loop decision layer, the /loop grammar, permission clamping, edit
+  intent, path containment and the line-diff counts — but they cover the adversarially-important
+  slices, not the breadth of `src/`. The session pipeline, the build path and the renderer remain
+  untested by machine.
 - **A packaged-build run of the Auto Router.** It is what runs, but the original bug was that it
   silently did nothing in a packaged build, so that specific proof matters more here than anywhere.
 - **Learned routing.** Metis already keeps a private local log of how you actually use it. Nothing
