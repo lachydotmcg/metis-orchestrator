@@ -97,7 +97,7 @@ import {
   type LoopIterationRecord,
   type LoopRecord
 } from "./loops.js";
-import { LOOP_COMMAND_MAX_INTERVAL_SECONDS } from "../shared/loop-command.js";
+import { LOOP_COMMAND_MAX_INTERVAL_SECONDS, LOOP_COMMAND_MIN_BUDGET_TOKENS } from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 // Lifted out of this file so the test suite can exercise the REAL predicates
 // rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
@@ -4859,6 +4859,17 @@ async function loopUsageTotals(loopId: string): Promise<{ inputTokens: number; o
     // sum as exact would be the dishonest reading of it.
     estimated: rows.some((entry) => entry.estimated)
   };
+}
+
+/** The single number the budget check compares: input + output, because both
+ *  cost money and a budget that only counted one side would be a ceiling with
+ *  a hole in it. Same understatement caveats as loopUsageTotals — which cut
+ *  the safe way: a rolled-off ledger row makes a budgeted loop stop LATER
+ *  than exact accounting would, never earlier, and the iteration/wall-clock
+ *  caps still bound it absolutely. */
+async function loopSpentTokens(loopId: string): Promise<number> {
+  const totals = await loopUsageTotals(loopId);
+  return totals.inputTokens + totals.outputTokens;
 }
 
 /** DRILL_PLAN B12.1 Phase A — the learned router's preference log. This pass
@@ -10311,6 +10322,7 @@ async function createLoop(input: {
   permissionMode?: string;
   origin?: LoopRecord["origin"];
   fixedIntervalSeconds?: number;
+  budgetTokens?: number;
 }): Promise<LoopRecord> {
   const goal = typeof input.goal === "string" ? input.goal.trim() : "";
   if (!goal) throw new Error("A loop needs a goal.");
@@ -10353,6 +10365,7 @@ async function createLoop(input: {
     origin: input.origin ?? "app",
     permissionMode,
     fixedIntervalSeconds: normaliseFixedInterval(input.fixedIntervalSeconds),
+    budgetTokens: normaliseBudgetTokens(input.budgetTokens),
     capabilityWarning: capability.warning,
     status: "sleeping",
     iterations: 0,
@@ -10371,7 +10384,8 @@ async function createLoop(input: {
     maxIterations,
     permissionMode,
     origin: loop.origin,
-    fixedIntervalSeconds: loop.fixedIntervalSeconds
+    fixedIntervalSeconds: loop.fixedIntervalSeconds,
+    budgetTokens: loop.budgetTokens
   });
   scheduleNextLoopTick();
   // Start the first turn NOW rather than waiting up to a full 60s slice. A loop
@@ -10401,6 +10415,18 @@ function normaliseFixedInterval(seconds: number | undefined): number | undefined
   const rounded = Math.round(Number(seconds));
   if (rounded <= 0) return undefined;
   return Math.min(LOOP_COMMAND_MAX_INTERVAL_SECONDS, Math.max(LOOP_MIN_DELAY_SECONDS, rounded));
+}
+
+/** A user-set token budget from "/loop --budget". Floored here as well as in
+ *  the command parser, for the same reason as normaliseFixedInterval: this is
+ *  reachable over IPC, and a garbage or sub-floor budget must become "no
+ *  budget" or the floor — never a loop that exhausts before its first turn
+ *  lands. No upper bound: it is the owner's own spend to cap. */
+function normaliseBudgetTokens(tokens: number | undefined): number | undefined {
+  if (tokens === undefined || !Number.isFinite(tokens)) return undefined;
+  const rounded = Math.round(Number(tokens));
+  if (rounded <= 0) return undefined;
+  return Math.max(LOOP_COMMAND_MIN_BUDGET_TOKENS, rounded);
 }
 
 /** Stops a loop immediately and unconditionally: the record is terminal from
@@ -10473,9 +10499,14 @@ async function fireLoopTick(id: string): Promise<LoopRecord | undefined> {
 
 async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRecord | undefined> {
 
+  // The ledger is only read when a budget exists to check against — most loops
+  // have none, and the read costs a store round-trip per tick.
+  const spentBefore = loaded.budgetTokens ? await loopSpentTokens(loaded.id) : undefined;
+
   // Checked before anything is spent: the cheapest place to stop a loop that
-  // has run out of iterations or wall-clock is before it costs a model call.
-  const terminalBefore = loopTerminalReason(loaded, new Date());
+  // has run out of iterations, wall-clock or token budget is before it costs
+  // a model call.
+  const terminalBefore = loopTerminalReason(loaded, new Date(), spentBefore);
   if (terminalBefore) {
     const alreadyTerminal = loaded.status === "stopped" || loaded.status === "exhausted" || loaded.status === "failed";
     const settled: LoopRecord = {
@@ -10563,10 +10594,14 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   // stopped after exactly one turn.
   let decision = runError ? null : extractLoopDecision(assistantText);
   let decisionAsked = false;
+  // Re-measured AFTER the work turn: runSessionTracked just appended this
+  // turn's ledger rows, and the budget must count the spend that already
+  // happened, not the total as of one turn ago.
+  const spentAfter = loaded.budgetTokens ? await loopSpentTokens(loaded.id) : undefined;
   // Terminal check BEFORE paying for the fallback call. The record is about to
   // be settled as exhausted either way, so asking costs a model call whose
   // answer is discarded.
-  const alreadyTerminal = loopTerminalReason({ ...loaded, iterations: index }, new Date()) !== null;
+  const alreadyTerminal = loopTerminalReason({ ...loaded, iterations: index }, new Date(), spentAfter) !== null;
   if (!runError && !decision && !alreadyTerminal) {
     decisionAsked = true;
     decision = await decideLoopContinuation(followupInvokerFor(providerResultForDecision), {
@@ -10664,13 +10699,15 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // top: the iteration just spent may have been the last one the cap
     // allows, and honouring the model's wakeup here would arm a tick that can
     // only ever bounce straight back off the terminal check.
-    const terminalAfter = loopTerminalReason(advanced, finishedAt);
+    const terminalAfter = loopTerminalReason(advanced, finishedAt, spentAfter);
     if (terminalAfter) {
       settled = { ...advanced, status: "exhausted", stoppedReason: `the loop ${terminalAfter}` };
       await appendAudit("info", "loop.exhausted", `Loop "${loopLabel(advanced)}" ${terminalAfter}.`, {
         id,
         iterations: index,
-        maxIterations: advanced.maxIterations
+        maxIterations: advanced.maxIterations,
+        budgetTokens: advanced.budgetTokens,
+        spentTokens: spentAfter
       });
     } else {
       // A user-set interval ("/loop --every 15m") wins over the delay the model
@@ -13210,7 +13247,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-loops:list", () => listLoops());
   ipcMain.handle(
     "metis-loops:create",
-    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number }) =>
+    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number }) =>
       // origin is forced here, never taken from the caller: a renderer must not
       // be able to mint a "cli" loop and inherit the never-resume-on-launch
       // handling that belongs to a process that has since exited.

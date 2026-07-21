@@ -69,6 +69,19 @@ check("expired is terminal", loopTerminalReason(base, new Date("2026-07-20T00:00
 check("stopped stays terminal", loopTerminalReason({ ...base, status: "stopped" }, now), "stopped");
 check("failed stays terminal", loopTerminalReason({ ...base, status: "failed" }, now), "failed");
 
+// The token budget (roadmap: spend ceiling for loops). The property that costs
+// money if it breaks: a budgeted loop whose measured spend has reached the
+// ceiling must be terminal, and a caller that did not measure must not
+// accidentally exhaust a healthy loop.
+const budgeted = { ...base, budgetTokens: 10_000 };
+check("under budget is not terminal", loopTerminalReason(budgeted, now, 9_999), null);
+check("at budget is terminal", loopTerminalReason(budgeted, now, 10_000) !== null, true);
+check("over budget is terminal", loopTerminalReason(budgeted, now, 250_000) !== null, true);
+check("budget reason names the numbers", /10,000.*250,000/.test(loopTerminalReason(budgeted, now, 250_000) ?? ""), true);
+check("unmeasured spend never exhausts", loopTerminalReason(budgeted, now, undefined), null);
+check("no budget ignores spend", loopTerminalReason(base, now, 9_999_999), null);
+check("zero budget ignores spend", loopTerminalReason({ ...base, budgetTokens: 0 }, now, 5), null);
+
 console.log("\nWAKE PROMPT");
 const realGoal = { ...base, goal: "Read app.js and count the functions." };
 const p1 = composeWakePrompt(realGoal);

@@ -39,6 +39,13 @@ export const LOOP_COMMAND_MAX_INTERVAL_SECONDS = 6 * 3600;
 export const LOOP_COMMAND_MAX_TURNS = 25;
 export const LOOP_COMMAND_DEFAULT_TURNS = 8;
 
+/** Floor on "--budget". Not protection of the user's money — that is the whole
+ *  point of the flag — protection against a typo'd "--budget 2" creating a
+ *  loop whose first turn always exhausts it, which reads as broken rather
+ *  than as the clamp doing its job. One real turn of a small local model runs
+ *  a few thousand tokens; 1000 is the smallest budget that can mean anything. */
+export const LOOP_COMMAND_MIN_BUDGET_TOKENS = 1000;
+
 export interface LoopCommandParts {
   /** The goal, with the command token and every flag stripped out. */
   goal: string;
@@ -48,6 +55,11 @@ export interface LoopCommandParts {
    *  asks for. Undefined means the model chooses, which is the default because
    *  a self-paced loop is the thing that makes this different from a cron job. */
   everySeconds?: number;
+  /** Token ceiling (input + output, summed from the usage ledger). The loop
+   *  settles as `exhausted` once its attributed spend reaches this. Undefined
+   *  means no token ceiling — the iteration cap and wall-clock limit still
+   *  apply, so "no budget" never means "unbounded". */
+  budgetTokens?: number;
 }
 
 export interface LoopCommandParse {
@@ -81,6 +93,29 @@ export function formatLoopDuration(seconds: number): string {
   if (seconds % 3600 === 0) return `${seconds / 3600}h`;
   if (seconds % 60 === 0) return `${seconds / 60}m`;
   return `${seconds}s`;
+}
+
+/** Accepts 50000, 200k, or 1.5m — the units people actually use for token
+ *  counts. Returns null for anything it cannot read, same contract as
+ *  parseLoopDuration: the caller shows an error instead of guessing. */
+export function parseTokenCount(raw: string): number | null {
+  const text = raw.trim().toLowerCase().replace(/,/g, "");
+  if (!text) return null;
+  const match = text.match(/^(\d+(?:\.\d+)?)\s*(k|m)?(?:\s*tok(?:ens?)?)?$/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const multiplier = match[2] === "m" ? 1_000_000 : match[2] === "k" ? 1000 : 1;
+  return Math.round(value * multiplier);
+}
+
+/** 200000 → "200k", 1500000 → "1.5m", 4321 → "4321". Round numbers only get
+ *  the short form; anything else is printed exactly, because a budget display
+ *  that rounds is a budget display that lies. */
+export function formatTokenCount(tokens: number): string {
+  if (tokens >= 1_000_000 && tokens % 100_000 === 0) return `${tokens / 1_000_000}m`;
+  if (tokens >= 1000 && tokens % 1000 === 0) return `${tokens / 1000}k`;
+  return String(tokens);
 }
 
 /** Never throws. Anything malformed comes back as an `error` string written for
@@ -131,11 +166,29 @@ export function parseLoopCommand(text: string): LoopCommandParse {
       continue;
     }
 
+    if (lower === "--budget" || lower === "--tokens") {
+      const value = tokens[index + 1];
+      if (value === undefined) return { isLoopCommand: true, error: "--budget needs a token count, like --budget 200k." };
+      const budget = parseTokenCount(value);
+      if (budget === null) {
+        return { isLoopCommand: true, error: `--budget could not read "${value}". Try 50000, 200k or 1.5m.` };
+      }
+      if (budget < LOOP_COMMAND_MIN_BUDGET_TOKENS) {
+        return {
+          isLoopCommand: true,
+          error: `--budget must be at least ${formatTokenCount(LOOP_COMMAND_MIN_BUDGET_TOKENS)} tokens — anything smaller exhausts on the first turn.`
+        };
+      }
+      parts.budgetTokens = budget;
+      index += 1;
+      continue;
+    }
+
     // An unrecognised --flag is an error rather than goal text. Swallowing it
     // into the goal would mean a typo like "--turn 5" silently becomes part of
     // what the model is asked to do, and the loop runs with the default cap.
     if (lower.startsWith("--")) {
-      return { isLoopCommand: true, error: `I do not know the flag "${token}". Supported: --turns, --every.` };
+      return { isLoopCommand: true, error: `I do not know the flag "${token}". Supported: --turns, --every, --budget.` };
     }
 
     goalWords.push(token);
@@ -181,6 +234,12 @@ export function describeLoopCommand(parse: LoopCommandParse): LoopCommandHintSeg
     parts.everySeconds !== undefined
       ? { label: `every ${formatLoopDuration(parts.everySeconds)}`, meaning: "fixed gap between turns", typed: true }
       : { label: "self-paced", meaning: "it picks its own gap, set with --every", typed: false }
+  );
+
+  segments.push(
+    parts.budgetTokens !== undefined
+      ? { label: `${formatTokenCount(parts.budgetTokens)} tokens`, meaning: "spend ceiling, then it stops", typed: true }
+      : { label: "no token budget", meaning: "cap spend with --budget", typed: false }
   );
 
   return segments;

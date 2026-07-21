@@ -4575,10 +4575,12 @@ function NewSessionWorkspace({
         goal: parts.goal,
         projectPath: projectWorkspace?.path,
         maxIterations: parts.turns,
-        fixedIntervalSeconds: parts.everySeconds
+        fixedIntervalSeconds: parts.everySeconds,
+        budgetTokens: parts.budgetTokens
       });
       const pace = loop.fixedIntervalSeconds ? `every ${formatLoopDuration(loop.fixedIntervalSeconds)}` : "at its own pace";
-      const base = `Loop started, up to ${loop.maxIterations} turns ${pace}. It is working now. Watch or stop it in Settings > Privacy & Data.`;
+      const budget = loop.budgetTokens ? ` and a ${formatTokenCount(loop.budgetTokens)}-token budget` : "";
+      const base = `Loop started, up to ${loop.maxIterations} turns ${pace}${budget}. It is working now. Watch or stop it in Settings > Privacy & Data.`;
       // A capability warning goes FIRST, before the reassurance. It is the part
       // that changes what you should expect to happen, and burying it under
       // "it is working now" would be the wrong order to read them in.
@@ -16840,6 +16842,11 @@ function ActiveLoopsPanel(): JSX.Element | null {
                   <span>{wakeMs > 0 ? `wakes in ${formatLoopDelay(Math.round(wakeMs / 1000))}` : "waking now"}</span>
                 ) : null}
                 <span title="Frozen when the loop was created and never re-read from Settings">{loop.permissionMode} mode</span>
+                {loop.budgetTokens ? (
+                  <span title="Token ceiling across every iteration together — the loop stops as exhausted once its ledger-attributed spend reaches it">
+                    {formatTokenCount(loop.budgetTokens)}-token budget
+                  </span>
+                ) : null}
                 {loop.projectPath ? <span className="loop-project">{loop.projectPath}</span> : null}
               </div>
               {loop.capabilityWarning ? <p className="loop-warning">{loop.capabilityWarning}</p> : null}

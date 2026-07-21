@@ -54,9 +54,12 @@ import type {
 import { LOOP_MAX_ITERATIONS_CEILING, type LoopRecord } from "./loops.js";
 import {
   LOOP_COMMAND_MAX_INTERVAL_SECONDS,
+  LOOP_COMMAND_MIN_BUDGET_TOKENS,
   LOOP_COMMAND_MIN_INTERVAL_SECONDS,
   formatLoopDuration,
-  parseLoopDuration
+  formatTokenCount,
+  parseLoopDuration,
+  parseTokenCount
 } from "../shared/loop-command.js";
 
 /** Structural twin of main.ts's private `SessionStreamController` type
@@ -84,6 +87,7 @@ export interface CliRuntime {
     permissionMode?: string;
     origin?: LoopRecord["origin"];
     fixedIntervalSeconds?: number;
+    budgetTokens?: number;
   }): Promise<LoopRecord>;
   fireLoopTick(id: string): Promise<LoopRecord | undefined>;
   establishWritableWorkspace(path: string): Promise<ProjectWorkspace>;
@@ -138,6 +142,7 @@ interface ParsedArgs {
   maxIterations?: number;
   respectDelays: boolean;
   everySeconds?: number;
+  budgetTokens?: number;
 }
 
 function usageText(): string {
@@ -148,7 +153,7 @@ function usageText(): string {
     '  npm run cli -- doctor [--json]',
     '  npm run cli -- chat "<prompt>" [--project <path>] [--model <provider/model>] [--json] [--timeout <seconds>]',
     '  npm run cli -- build "<prompt>" --project <path> [--model <provider/model>] [--json] [--timeout <seconds>]',
-    '  npm run cli -- loop "<goal>" [--max-iterations <n>] [--every <duration>] [--project <path>] [--respect-delays] [--json]',
+    '  npm run cli -- loop "<goal>" [--max-iterations <n>] [--every <duration>] [--budget <tokens>] [--project <path>] [--respect-delays] [--json]',
     "",
     "Flags:",
     "  --project <path>          Establishes <path> as the writable project workspace for this run",
@@ -164,6 +169,10 @@ function usageText(): string {
     "  --max-iterations <n>      loop only. Hard cap on how many times the loop may wake. Default 8,",
     `                             clamped to at most ${LOOP_MAX_ITERATIONS_CEILING} (src/electron/loops.ts). The loop can still stop`,
     "                             itself earlier, and usually should.",
+    "  --budget <tokens>         loop only. Token ceiling across every iteration together (input +",
+    "                             output, summed from the usage ledger). Accepts 50000, 200k or 1.5m.",
+    '                             The loop settles as "exhausted" once its spend reaches it. No budget',
+    "                             means no token ceiling; the iteration cap and 12h wall-clock still apply.",
     "  --respect-delays          loop only. Actually sleep the delay the model asked for between",
     "                             iterations. Off by default: a loop that asks for 900s three times",
     "                             would otherwise take 45 minutes to exercise three ticks.",
@@ -223,6 +232,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let maxIterations: number | undefined;
   let respectDelays = false;
   let everySeconds: number | undefined;
+  let budgetTokens: number | undefined;
   let helpRequested = false;
   const positionals: string[] = [];
 
@@ -251,6 +261,23 @@ function parseArgs(argv: string[]): ParsedArgs {
         );
       }
       everySeconds = seconds;
+      continue;
+    }
+    // Same flag, same floor and same shared parser as the composer's
+    // "/loop --budget", so the CLI and the app cannot drift on what a token
+    // count means.
+    if (token === "--budget" || token === "--tokens") {
+      const value = rest[++i];
+      const parsed = value === undefined ? null : parseTokenCount(value);
+      if (parsed === null) {
+        throw new CliUsageError(`--budget needs a token count like 50000, 200k or 1.5m, got "${value ?? ""}".`);
+      }
+      if (parsed < LOOP_COMMAND_MIN_BUDGET_TOKENS) {
+        throw new CliUsageError(
+          `--budget must be at least ${formatTokenCount(LOOP_COMMAND_MIN_BUDGET_TOKENS)} tokens — anything smaller exhausts on the first turn.`
+        );
+      }
+      budgetTokens = parsed;
       continue;
     }
     if (token === "--max-iterations") {
@@ -324,8 +351,8 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (subcommand === "loop" && model) {
     throw new CliUsageError('"loop" does not support --model: every loop iteration routes through the Auto Router.');
   }
-  if (subcommand !== "loop" && (maxIterations !== undefined || respectDelays || everySeconds !== undefined)) {
-    throw new CliUsageError(`--max-iterations and --respect-delays only apply to "loop", not "${subcommand}".`);
+  if (subcommand !== "loop" && (maxIterations !== undefined || respectDelays || everySeconds !== undefined || budgetTokens !== undefined)) {
+    throw new CliUsageError(`--max-iterations, --respect-delays, --every and --budget only apply to "loop", not "${subcommand}".`);
   }
 
   // A loop's budget covers EVERY iteration together, so the single-run default
@@ -336,7 +363,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (subcommand === "loop" && !timeoutExplicit) {
     timeoutSeconds = DEFAULT_LOOP_TIMEOUT_SECONDS;
   }
-  return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays, everySeconds };
+  return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays, everySeconds, budgetTokens };
 }
 
 function parseModelOverride(raw: string, providerInfo: CliRuntime["providerInfo"]): SessionModelOverride {
@@ -838,6 +865,7 @@ async function runLoop(parsed: ParsedArgs, deps: CliRuntime): Promise<number> {
     loop = await deps.createLoop({
       goal: parsed.prompt as string,
       fixedIntervalSeconds: parsed.everySeconds,
+      budgetTokens: parsed.budgetTokens,
       projectPath: resolvedProjectPath,
       maxIterations: parsed.maxIterations,
       // Pinned for the same reason chat/build pin it (see the module doc
@@ -858,6 +886,7 @@ async function runLoop(parsed: ParsedArgs, deps: CliRuntime): Promise<number> {
     out(`Loop ${loop.id}`);
     out(`Goal:        ${loop.goal}`);
     out(`Iterations:  up to ${loop.maxIterations}`);
+    if (loop.budgetTokens) out(`Budget:      ${formatTokenCount(loop.budgetTokens)} tokens across all iterations, then it stops as exhausted`);
     out(`Permissions: ${loop.permissionMode} (no human in CLI mode - an ungranted action is denied outright, not queued)`);
     out(`Delays:      ${parsed.respectDelays ? "honoured as the model asks for them" : "skipped - pass --respect-delays for a realistic run"}`);
     out("");

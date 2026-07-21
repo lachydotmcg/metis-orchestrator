@@ -6,9 +6,9 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
 
 ### Next
 
-- **A spend ceiling for Loops.** The ledger now attributes every row to the loop that caused it,
-  and `loopUsageTotals` sums it, so the measuring half is done. What remains is enforcing a limit
-  and stopping a loop at `exhausted` when it is spent.
+- ~~**A spend ceiling for Loops.**~~ Shipped: `/loop --budget 200k` (and the CLI's `--budget`) sets
+  a token ceiling summed from the ledger's per-loop attribution, checked before and after every
+  turn, settling the loop at `exhausted` with both numbers in the reason. See docs/LOOPS.md.
 - **Sleeping loops in the tray.** With headless start the tray is the only surface a running loop
   has, and it is not listed there yet.
 

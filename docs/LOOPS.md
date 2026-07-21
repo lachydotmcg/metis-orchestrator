@@ -63,6 +63,7 @@ export interface LoopRecord {
   origin: "app" | "cli";         // decides who may resume it after a restart
   permissionMode: string;        // frozen at creation, never re-read from settings
   fixedIntervalSeconds?: number; // "/loop --every 15m", overrides the GAP only
+  budgetTokens?: number;         // "/loop --budget 200k", spend ceiling from the usage ledger
   status: "sleeping" | "running" | "stopped" | "exhausted" | "failed";
   iterations: number;
   maxIterations: number;         // default 8, ceiling 25
@@ -79,8 +80,11 @@ Four things in the draft above this section did not survive contact with the bui
 to show them as if they had:
 
 - **`spawnedAgents` does not exist.** That is phase 2 and nothing about it is built.
-- **`budget` does not exist.** Token ceilings are phase 3 and nothing about them is built. Nothing
-  in a loop reads the usage ledger today.
+- **`budget` shipped later, as `budgetTokens`.** The draft's name did not survive but the idea did:
+  `/loop --budget 200k` sets a token ceiling, the tick path sums the loop's ledger-attributed spend
+  (input + output) before and after each turn, and `loopTerminalReason` settles the loop as
+  `exhausted` the moment spend reaches the ceiling. No budget still means no token ceiling — but
+  never unbounded, because the iteration cap and wall-clock limit apply regardless.
 - **`stopRequestedByUser` does not exist.** A user stop sets `status: "stopped"` plus a
   `stoppedReason`, and `fireLoopTick` re-reads the record before its final write so a stop clicked
   mid-turn wins over whatever the model decided during that same turn. One field, not two.
@@ -164,9 +168,13 @@ constraints are therefore not decoration.
   the user has forgotten it exists.
 - **Nothing autonomous writes without CORE.5. SHIPPED.** The snapshot and path containment landed
   first.
-- **Token budget. NOT BUILT.** Still the phase 3 plan: the B12.7 usage ledger already meters every
-  run, so a loop could take a token ceiling and stop at `exhausted` when it is spent. Today nothing
-  in the loop path reads the ledger, and a loop's only cost bounds are iterations and wall clock.
+- **Token budget. SHIPPED.** `/loop --budget 200k` (CLI: `--budget`, alias `--tokens`; accepts
+  50000, 200k, 1.5m, floored at 1000 so a typo cannot create a loop that exhausts before its first
+  turn). The tick path sums the loop's ledger-attributed spend before the turn — the cheapest place
+  to stop — and again after it, and `loopTerminalReason` settles the loop as `exhausted` once spend
+  reaches the ceiling, naming both numbers in the stopped reason. The ledger's own caveats cut the
+  safe way: a rolled-off row can only make a budgeted loop stop LATER than exact accounting would,
+  and the iteration/wall-clock caps still bound it absolutely.
 - **Gating loop-driving to capable models. SHIPPED, as a warning rather than a block.**
   `assessLoopCapability` checks what models are AVAILABLE at creation, since a loop routes through
   the Auto Router at every tick and the answering model is not knowable up front. A cloud key or any
@@ -244,11 +252,11 @@ tracking, and bus-completion wakeups so the loop sleeps until a worker finishes.
 exists: there is no `spawn_agent`, no `spawnedAgents` field, and nothing subscribes a loop to the
 bus. The "waking on events, not just timers" section above is a plan, not a description.
 
-**Phase 3, budget and polish. NOT BUILT,** minus one item that turned out to belong in phase 1.
-Token ceilings drawn from the usage ledger, tray presence for sleeping loops, and loop templates the
-user can start with one click. ~~Wall-clock ceilings~~: filed here originally, actually shipped in
-phase 1 as `LOOP_MAX_AGE_HOURS`, because an iteration cap on its own does not bound a loop whose
-every turn is slow.
+**Phase 3, budget and polish. PARTLY BUILT.** ~~Token ceilings drawn from the usage ledger~~:
+shipped as `/loop --budget` (see the limits list above). Still open: tray presence for sleeping
+loops, and loop templates the user can start with one click. ~~Wall-clock ceilings~~: filed here
+originally, actually shipped in phase 1 as `LOOP_MAX_AGE_HOURS`, because an iteration cap on its
+own does not bound a loop whose every turn is slow.
 
 ## What actually shipped, verified by running it
 
@@ -282,7 +290,8 @@ has not shown that the decision layer works at all.
   `loopDecisionPromptBlock` is kept terse and free of words like build, make or create. Worth
   keeping in mind because it is a class of bug, not a single one: anything appended to a loop's
   prompt is a routing signal.
-- **Token ceilings, worker spawning and event wakeups** all remain unbuilt, as above.
+- **Worker spawning and event wakeups** remain unbuilt, as above. ~~Token ceilings~~ shipped as
+  `/loop --budget` — see the limits list.
 
 ## Two decisions taken during phase 1 that changed the design above
 

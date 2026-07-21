@@ -83,6 +83,11 @@ export interface LoopRecord {
    *  allowed to become a way to make a loop run forever: that would turn the
    *  one governing rule of this feature into an option. */
   fixedIntervalSeconds?: number;
+  /** Set by "/loop --budget 200k". Token ceiling (input + output) summed from
+   *  the usage ledger's per-loop attribution; the loop settles as `exhausted`
+   *  once its spend reaches it. Undefined means no token ceiling — the
+   *  iteration cap and wall-clock limit still bound the loop either way. */
+  budgetTokens?: number;
   status: LoopStatus;
   iterations: number;
   maxIterations: number;
@@ -350,13 +355,28 @@ export function clampLoopDelay(seconds: number): number {
 }
 
 /** Every reason a loop must not tick, in one place, so the tick path and the
- *  scheduler cannot disagree about whether a loop is alive. */
-export function loopTerminalReason(loop: LoopRecord, now: Date): string | null {
+ *  scheduler cannot disagree about whether a loop is alive.
+ *
+ *  `spentTokens` is the loop's ledger-attributed spend (input + output),
+ *  passed in by the caller because this function stays synchronous and the
+ *  ledger read is async. Callers that did not measure pass undefined and the
+ *  budget check simply does not run that time — the tick path measures before
+ *  AND after each turn, so a budget can be missed by at most the turn already
+ *  in flight, never by a scheduler that forgot to look. */
+export function loopTerminalReason(loop: LoopRecord, now: Date, spentTokens?: number): string | null {
   if (loop.status === "stopped") return "stopped";
   if (loop.status === "exhausted") return "exhausted";
   if (loop.status === "failed") return "failed";
   if (loop.iterations >= loop.maxIterations) return `reached its ${loop.maxIterations}-iteration limit`;
   if (new Date(loop.expiresAt) <= now) return `passed its ${LOOP_MAX_AGE_HOURS}-hour wall-clock limit`;
+  if (
+    typeof loop.budgetTokens === "number" &&
+    loop.budgetTokens > 0 &&
+    typeof spentTokens === "number" &&
+    spentTokens >= loop.budgetTokens
+  ) {
+    return `spent its ${loop.budgetTokens.toLocaleString("en-US")}-token budget (${spentTokens.toLocaleString("en-US")} used)`;
+  }
   return null;
 }
 

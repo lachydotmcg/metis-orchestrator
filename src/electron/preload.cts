@@ -224,7 +224,7 @@ contextBridge.exposeInMainWorld("metisRoutines", {
 // autonomous run.
 contextBridge.exposeInMainWorld("metisLoops", {
   list: () => ipcRenderer.invoke("metis-loops:list") as Promise<LoopRecord[]>,
-  create: (input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number }) =>
+  create: (input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number }) =>
     ipcRenderer.invoke("metis-loops:create", input) as Promise<LoopRecord>,
   usage: (id: string) =>
     ipcRenderer.invoke("metis-loops:usage", id) as Promise<{ inputTokens: number; outputTokens: number; turns: number; estimated: boolean }>,

@@ -6,7 +6,7 @@
 // thing, so every malformed input must be caught BEFORE the user presses enter.
 import { fromBuild } from "../harness.mjs";
 const m = await fromBuild("shared/loop-command.js");
-const { parseLoopCommand, parseLoopDuration, formatLoopDuration, describeLoopCommand } = m;
+const { parseLoopCommand, parseLoopDuration, formatLoopDuration, describeLoopCommand, parseTokenCount, formatTokenCount } = m;
 
 let pass = 0, total = 0;
 function check(label, got, want) {
@@ -52,6 +52,14 @@ check("--every 2h now allowed (user is not a confused model)", parseLoopCommand(
 check("--every beyond 6h refused", Boolean(parseLoopCommand("/loop --every 9h go").error), true);
 check("--every at min ok", parseLoopCommand("/loop --every 60s go").parts?.everySeconds, 60);
 check("--every at max ok", parseLoopCommand("/loop --every 6h go").parts?.everySeconds, 21600);
+check("--budget with no value", Boolean(parseLoopCommand("/loop --budget").error), true);
+check("--budget unreadable", Boolean(parseLoopCommand("/loop --budget lots go").error), true);
+check("--budget below floor refused", Boolean(parseLoopCommand("/loop --budget 500 go").error), true);
+check("--budget 200k", parseLoopCommand("/loop --budget 200k go").parts, { goal: "go", budgetTokens: 200000 });
+check("--budget 1.5m", parseLoopCommand("/loop --budget 1.5m go").parts?.budgetTokens, 1500000);
+check("--budget bare number", parseLoopCommand("/loop --budget 50000 go").parts?.budgetTokens, 50000);
+check("--tokens alias", parseLoopCommand("/loop --tokens 12k go").parts?.budgetTokens, 12000);
+check("--budget composes with other flags", parseLoopCommand("/loop --turns 3 --budget 20k go").parts, { goal: "go", turns: 3, budgetTokens: 20000 });
 
 console.log("\nDURATION PARSING");
 check("90s", parseLoopDuration("90s"), 90);
@@ -67,16 +75,32 @@ check("format 900", formatLoopDuration(900), "15m");
 check("format 3600", formatLoopDuration(3600), "1h");
 check("format 90", formatLoopDuration(90), "90s");
 
+console.log("\nTOKEN COUNT PARSING");
+check("bare 50000", parseTokenCount("50000"), 50000);
+check("200k", parseTokenCount("200k"), 200000);
+check("1.5m", parseTokenCount("1.5m"), 1500000);
+check("commas stripped", parseTokenCount("50,000"), 50000);
+check("'200k tokens' unit word ok", parseTokenCount("200k tokens"), 200000);
+check("garbage", parseTokenCount("lots"), null);
+check("zero", parseTokenCount("0"), null);
+check("negative", parseTokenCount("-5k"), null);
+check("empty", parseTokenCount(""), null);
+check("format 200000", formatTokenCount(200000), "200k");
+check("format 1500000", formatTokenCount(1500000), "1.5m");
+check("format non-round exact", formatTokenCount(4321), "4321");
+
 console.log("\nLIVE HINT (what the user reads while typing)");
 const bare = describeLoopCommand(parseLoopCommand("/loop"));
-check("bare shows 3 segments", bare.length, 3);
+check("bare shows 4 segments", bare.length, 4);
 check("bare prompts for a goal", bare[0].typed, false);
 check("bare shows default cap", bare[1].label, "8 turns");
 check("bare shows self-paced default", bare[2].label, "self-paced");
-const full = describeLoopCommand(parseLoopCommand("/loop --turns 3 --every 15m watch the build"));
+check("bare shows no-budget default", bare[3].label, "no token budget");
+const full = describeLoopCommand(parseLoopCommand("/loop --turns 3 --every 15m --budget 200k watch the build"));
 check("typed goal marked typed", full[0].typed, true);
 check("typed turns shown", full[1].label, "3 turns");
 check("typed interval shown", full[2].label, "every 15m");
+check("typed budget shown", full[3].label, "200k tokens");
 check("error yields no hint", describeLoopCommand(parseLoopCommand("/loop --turn 5 go")).length, 0);
 check("non-command yields no hint", describeLoopCommand(parseLoopCommand("hello")).length, 0);
 check("every segment explains itself", full.every((s) => s.meaning.length > 0), true);
