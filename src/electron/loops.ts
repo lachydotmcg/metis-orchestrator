@@ -42,6 +42,40 @@ export const LOOP_MAX_AGE_HOURS = 12;
 
 export type LoopStatus = "sleeping" | "running" | "stopped" | "exhausted" | "failed";
 
+/** How many helpers one turn may ask for. Three is enough to parallelise a
+ *  real job; more is a model misunderstanding its goal, the same reasoning as
+ *  the iteration ceiling. */
+export const LOOP_MAX_SPAWN_PER_TURN = 3;
+
+/** Lifetime ceiling on helpers across the whole loop, enforced at launch time
+ *  in main.ts. A loop that wants a fourth round of three helpers has almost
+ *  certainly stopped converging, and every helper is a real model call. */
+export const LOOP_MAX_SPAWNED_TOTAL = 9;
+
+/** One helper a loop turn asked for (docs/LOOPS.md phase 2). The record is
+ *  the visibility story: a helper that ran while nobody watched must be
+ *  listed, with what it was asked and how it ended. */
+export interface LoopSpawnedAgent {
+  name: string;
+  task: string;
+  startedAt: string;
+  completedAt?: string;
+  status: "running" | "done" | "failed";
+  /** One-line digest of what the helper produced, replayed into the loop's
+   *  next wake prompt so the main line of work can build on it. */
+  summary?: string;
+  /** The helper's own conversation — helpers deliberately do NOT write into
+   *  the loop's conversation, so two concurrent runs never interleave one
+   *  transcript. */
+  conversationId?: string;
+}
+
+/** A spawn request as parsed out of the decision block, before launch. */
+export interface LoopSpawnRequest {
+  name: string;
+  task: string;
+}
+
 export interface LoopIterationRecord {
   index: number;
   at: string;
@@ -97,12 +131,20 @@ export interface LoopRecord {
   lastReason?: string;
   stoppedReason?: string;
   history: LoopIterationRecord[];
+  /** Helpers this loop has launched, newest last (docs/LOOPS.md phase 2).
+   *  Persisted so the panel can show what ran unattended, and so the total
+   *  cap survives restarts. */
+  spawnedAgents?: LoopSpawnedAgent[];
 }
 
 export interface LoopDecision {
   decision: "continue" | "stop";
   delaySeconds?: number;
   reason?: string;
+  /** Helpers the turn asked to run before its next wake (phase 2). Only ever
+   *  present on a "continue": spawning helpers and stopping in the same
+   *  breath is a contradiction, and the parser drops spawn on stop. */
+  spawn?: LoopSpawnRequest[];
 }
 
 /** The instruction block appended to every wake prompt. Written to make
@@ -127,6 +169,10 @@ export function loopDecisionPromptBlock(): string {
     "```",
     "",
     `Use "stop" instead of "continue" once the goal is met or once another turn cannot help. delaySeconds is clamped to ${LOOP_MIN_DELAY_SECONDS}-${LOOP_MAX_DELAY_SECONDS}.`,
+    // Phase 2 helpers. One line, kept SHORT and neutral (no build/make/create
+    // — see the routing-hazard note above; the wake prompt has a length bound
+    // in suite 01 so the goal stays the dominant signal), continue-only.
+    `"continue" may add "spawn": [{ "name": "docs", "task": "..." }] — max ${LOOP_MAX_SPAWN_PER_TURN} parallel helpers, only if the goal splits.`,
     "No block means the loop ends. Continuing is something you have to ask for."
   ].join("\n");
 }
@@ -148,11 +194,40 @@ export function extractLoopDecision(text: string): LoopDecision | null {
     const decision = record.decision;
     if (decision !== "continue" && decision !== "stop") return null;
     const reason = typeof record.reason === "string" && record.reason.trim() ? record.reason.trim() : undefined;
+    // Spawn is DROPPED on a stop rather than honoured: "run helpers and also
+    // stop" is a contradiction, and the resolution rule is the same one the
+    // whole parser follows — the conservative reading wins.
     if (decision === "stop") return { decision, reason };
-    return { decision, delaySeconds: clampLoopDelay(coerceSeconds(record.delaySeconds)), reason };
+    const spawn = parseSpawnRequests(record.spawn);
+    return { decision, delaySeconds: clampLoopDelay(coerceSeconds(record.delaySeconds)), reason, ...(spawn ? { spawn } : {}) };
   } catch {
     return null;
   }
+}
+
+/** Validates a decision block's "spawn" array (phase 2). Malformed entries
+ *  are dropped individually rather than poisoning the whole decision: the
+ *  continue/stop verdict is the load-bearing part of the block, and a typo'd
+ *  helper must not turn a working loop's continue into a silent stop. Caps at
+ *  LOOP_MAX_SPAWN_PER_TURN, dedupes by name, and returns undefined when
+ *  nothing valid survives so callers can spread it away cleanly. */
+export function parseSpawnRequests(value: unknown): LoopSpawnRequest[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const requests: LoopSpawnRequest[] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const record = entry as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name.replace(/\s+/g, " ").trim().slice(0, 40) : "";
+    const task = typeof record.task === "string" ? record.task.replace(/\s+/g, " ").trim().slice(0, 500) : "";
+    if (!name || !task) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    requests.push({ name, task });
+    if (requests.length >= LOOP_MAX_SPAWN_PER_TURN) break;
+  }
+  return requests.length ? requests : undefined;
 }
 
 /** Models quote numbers constantly, and "900" silently flooring to the 60s
@@ -401,6 +476,18 @@ export function composeWakePrompt(loop: LoopRecord): string {
     lines.push(")", "");
   } else {
     lines.push(`(Loop turn 1 of ${loop.maxIterations}.)`, "");
+  }
+
+  // Phase 2: what the helpers produced, so the main line of work builds on
+  // them instead of redoing them. Same neutral wording rule as everything
+  // else here — this is scaffolding, and scaffolding is a routing signal.
+  if (loop.spawnedAgents?.length) {
+    lines.push("(Helpers you already asked for:");
+    for (const agent of loop.spawnedAgents.slice(-6)) {
+      const state = agent.status === "running" ? "still going" : agent.status;
+      lines.push(`- ${agent.name} (${state})${agent.summary ? `: ${agent.summary}` : ""}`);
+    }
+    lines.push(")", "");
   }
 
   lines.push(loopDecisionPromptBlock());

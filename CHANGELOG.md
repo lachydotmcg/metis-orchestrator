@@ -27,6 +27,12 @@ engine referenced below.
   picks each stage's rung; the stage's normal chain stays the fallback.
 - **/loop in the "/" popover.** The slash popover now offers /loop
   alongside /orchestration, /export, /summarize and /handoff.
+- **Loop helpers (phase 2A).** A loop's "continue" decision can now ask
+  for up to 3 parallel helpers, each a normal tracked run in its own
+  conversation with the loop's frozen permissions and cancel scope,
+  counted against the loop's token budget. A finished helper wakes the
+  sleeping loop immediately; the timer becomes the fallback heartbeat.
+  Helpers show as status chips on the loop's panel row.
 
 ### Changed (2026-07-21)
 

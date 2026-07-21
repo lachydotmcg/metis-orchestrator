@@ -58,6 +58,26 @@ check("clampLoopDelay(NaN)", clampLoopDelay(NaN), LOOP_MIN_DELAY_SECONDS);
 const twoBlocks = "The format is:\n```metis-loop\n{\"decision\":\"continue\",\"delaySeconds\":60}\n```\nBut I'm done.\n```metis-loop\n{\"decision\":\"stop\",\"reason\":\"goal met\"}\n```";
 check("last block wins over example", extractLoopDecision(twoBlocks), { decision: "stop", reason: "goal met" });
 
+console.log("\nSPAWN REQUESTS (phase 2) — malformed entries drop, the decision survives");
+check("valid spawn parsed",
+  extractLoopDecision(block('{"decision":"continue","delaySeconds":300,"spawn":[{"name":"docs","task":"tidy the README"}]}')),
+  { decision: "continue", delaySeconds: 300, spawn: [{ name: "docs", task: "tidy the README" }] });
+check("spawn on stop is dropped",
+  extractLoopDecision(block('{"decision":"stop","reason":"done","spawn":[{"name":"docs","task":"x"}]}')),
+  { decision: "stop", reason: "done" });
+check("over the per-turn cap trims to 3",
+  extractLoopDecision(block('{"decision":"continue","spawn":[{"name":"a","task":"t"},{"name":"b","task":"t"},{"name":"c","task":"t"},{"name":"d","task":"t"}]}'))?.spawn?.length, 3);
+check("duplicate names deduped",
+  extractLoopDecision(block('{"decision":"continue","spawn":[{"name":"a","task":"t1"},{"name":"A","task":"t2"}]}'))?.spawn,
+  [{ name: "a", task: "t1" }]);
+{
+  const noisy = extractLoopDecision(block('{"decision":"continue","spawn":[{"name":"","task":"t"},{"task":"no name"},{"name":"ok","task":"real"},42,null]}'));
+  check("garbage entries drop, valid one survives", noisy?.spawn, [{ name: "ok", task: "real" }]);
+  check("decision itself unharmed by garbage spawn", noisy?.decision, "continue");
+}
+check("spawn not an array is ignored",
+  extractLoopDecision(block('{"decision":"continue","spawn":"docs"}'))?.spawn, undefined);
+
 console.log("\nTERMINAL GUARD");
 const base = { id: "x", goal: "g", origin: "app", permissionMode: "ask", status: "sleeping", iterations: 0,
   maxIterations: 3, createdAt: "2026-07-19T00:00:00Z", expiresAt: "2026-07-19T12:00:00Z", history: [] };

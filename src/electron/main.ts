@@ -88,6 +88,7 @@ import { QUICKASK_HTML } from "./quickask-page.js";
 import {
   LOOP_MAX_AGE_HOURS,
   LOOP_MAX_ITERATIONS_CEILING,
+  LOOP_MAX_SPAWNED_TOTAL,
   LOOP_MIN_DELAY_SECONDS,
   composeWakePrompt,
   decideLoopContinuation,
@@ -96,7 +97,9 @@ import {
   loopTerminalReason,
   summariseTurn,
   type LoopIterationRecord,
-  type LoopRecord
+  type LoopRecord,
+  type LoopSpawnRequest,
+  type LoopSpawnedAgent
 } from "./loops.js";
 import { LOOP_COMMAND_MAX_INTERVAL_SECONDS, LOOP_COMMAND_MIN_BUDGET_TOKENS } from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
@@ -10794,20 +10797,144 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   // then write from that snapshot, which left a window where a Stop or a Delete
   // landing between the two was overwritten by this turn's own final write, and
   // the loop re-armed as though the user had never clicked.
-  return mutateLoops<LoopRecord | undefined>((current) => {
+  const finalRecord = await mutateLoops<LoopRecord | undefined>((current) => {
     const stored = current.find((item) => item.id === id);
     // Deleted mid-turn: stay deleted rather than being resurrected by the turn
     // that was already in flight.
     if (!stored) return { next: current, result: undefined };
-    const finalRecord: LoopRecord =
+    const record: LoopRecord =
       stored.status === "stopped"
         ? // Keep the user's stop and its reason, but keep the work too: the
           // iteration really happened and its history is what stops a restart
           // from repeating it.
           { ...stored, conversationId, iterations: index, history: advanced.history, nextWakeAt: undefined }
         : settled;
-    return { next: current.map((item) => (item.id === id ? finalRecord : item)), result: finalRecord };
+    return { next: current.map((item) => (item.id === id ? record : item)), result: record };
   });
+
+  // Phase 2 (docs/LOOPS.md): helpers launch only AFTER the final write, and
+  // only when the loop genuinely continues — a Stop clicked mid-turn wins
+  // here exactly as it wins the record above, and a turn that settled as
+  // stopped/exhausted/failed must never leave workers running behind it.
+  if (finalRecord && finalRecord.status === "sleeping" && decision?.decision === "continue" && decision.spawn?.length) {
+    launchLoopWorkers(finalRecord, decision.spawn);
+  }
+  return finalRecord;
+}
+
+/** Launches a turn's helper requests, enforcing the lifetime cap. Fire and
+ *  forget by design: the loop is asleep while helpers work, and each helper's
+ *  completion is what wakes it (runLoopWorker below). */
+function launchLoopWorkers(loop: LoopRecord, requests: LoopSpawnRequest[]): void {
+  const already = loop.spawnedAgents?.length ?? 0;
+  const room = Math.max(0, LOOP_MAX_SPAWNED_TOTAL - already);
+  const toRun = requests.slice(0, room);
+  if (toRun.length < requests.length) {
+    void appendAudit("info", "loop.spawn", `Loop "${loopLabel(loop)}" asked for ${requests.length} helpers but the lifetime cap of ${LOOP_MAX_SPAWNED_TOTAL} allows ${toRun.length}.`, {
+      id: loop.id,
+      requested: requests.length,
+      launched: toRun.length
+    });
+  }
+  for (const request of toRun) {
+    void runLoopWorker(loop.id, request).catch(async (error) => {
+      await appendAudit("error", "loop.spawn.error", `Helper "${request.name}" of loop "${loopLabel(loop)}" failed to start.`, {
+        id: loop.id,
+        name: request.name,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+  }
+}
+
+/** Runs one helper as a normal tracked session run, attributed to the loop.
+ *
+ *  Deliberate deviation from LOOPS.md's phase-2 sketch, same style as the
+ *  decision-channel deviation recorded there: the doc said "wired to the
+ *  fan-out engine", but the fan-out engine is a BUILD-pipeline shape. A
+ *  helper task ("update the README", "check the tests") is routed
+ *  chat/edit/build by the same machinery every prompt goes through, which
+ *  buys permission gating, the ledger (and therefore the loop's token
+ *  budget covering helper spend), cancellation, and audit for free.
+ *
+ *  Governance, in order of what would go wrong without it: the helper
+ *  inherits the loop's FROZEN permission mode, never the current global; it
+ *  carries the loop's cancel scope so Stop aborts helpers mid-flight too; it
+ *  carries loopId so its spend lands in the loop's ledger attribution and
+ *  counts against --budget; it gets its OWN conversation so two concurrent
+ *  runs never interleave one transcript; and helpers cannot spawn helpers —
+ *  nothing parses a metis-loop block out of a helper's reply. */
+async function runLoopWorker(loopId: string, request: LoopSpawnRequest): Promise<void> {
+  const startedAt = new Date().toISOString();
+  const registered = await mutateLoops<LoopRecord | undefined>((current) => {
+    const loop = current.find((item) => item.id === loopId);
+    if (!loop) return { next: current, result: undefined };
+    // Only a live loop runs helpers — a stop that landed between launch and
+    // here wins.
+    if (loop.status !== "sleeping" && loop.status !== "running") return { next: current, result: undefined };
+    const entry: LoopSpawnedAgent = { name: request.name, task: request.task, startedAt, status: "running" };
+    const updated: LoopRecord = { ...loop, spawnedAgents: [...(loop.spawnedAgents ?? []), entry] };
+    return { next: current.map((item) => (item.id === loopId ? updated : item)), result: updated };
+  });
+  if (!registered) return;
+  await appendAudit("info", "loop.spawn", `Loop "${loopLabel(registered)}" started helper "${request.name}".`, {
+    id: loopId,
+    name: request.name,
+    task: request.task.slice(0, 200)
+  });
+
+  let summary: string | undefined;
+  let failed = false;
+  let workerConversationId: string | undefined;
+  try {
+    const run = await runSessionTracked({
+      prompt: request.task,
+      // Route on the task itself — it carries no scaffolding, but the rule
+      // stays explicit so nobody wraps this prompt later without reading it.
+      routingPrompt: request.task,
+      cancelScope: loopCancelScope(loopId),
+      loopId,
+      projectPath: registered.projectPath,
+      permissionMode: registered.permissionMode as PermissionMode,
+      rawPromptStorage: "local-only"
+    });
+    summary = summariseTurn(run.assistantText ?? "");
+    workerConversationId = run.conversationId;
+  } catch (error) {
+    failed = true;
+    summary = error instanceof Error ? error.message : String(error);
+  }
+
+  const completedAt = new Date().toISOString();
+  await mutateLoops((current) => {
+    const loop = current.find((item) => item.id === loopId);
+    if (!loop) return { next: current, result: undefined };
+    const agents = (loop.spawnedAgents ?? []).map((agent) =>
+      agent.name === request.name && agent.startedAt === startedAt
+        ? { ...agent, status: (failed ? "failed" : "done") as LoopSpawnedAgent["status"], completedAt, summary, conversationId: workerConversationId }
+        : agent
+    );
+    return { next: current.map((item) => (item.id === loopId ? { ...loop, spawnedAgents: agents } : item)), result: undefined };
+  });
+  await appendAudit(failed ? "error" : "info", failed ? "loop.spawn.error" : "loop.spawn.done", `Helper "${request.name}" of loop "${loopLabel(registered)}" ${failed ? "failed" : "finished"}.`, {
+    id: loopId,
+    name: request.name,
+    summary: summary?.slice(0, 200)
+  });
+
+  // The event wakeup (docs/LOOPS.md "waking on events, not just timers"): a
+  // finished helper wakes the sleeping loop NOW, and the 60s chain becomes
+  // the fallback heartbeat. fireLoopTick's own loopsTicking guard makes
+  // several helpers finishing together collapse into one tick.
+  const latest = (await readLoops()).find((item) => item.id === loopId);
+  if (latest?.status === "sleeping") {
+    void fireLoopTick(loopId).catch(async (error) => {
+      await appendAudit("error", "loop.error", `Helper-completion wake of loop "${loopLabel(latest)}" failed.`, {
+        id: loopId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    });
+  }
 }
 
 /** The scheduler chain, same shape and same 60s slice as the routine chain

@@ -16904,6 +16904,22 @@ function ActiveLoopsPanel(): JSX.Element | null {
                 {loop.projectPath ? <span className="loop-project">{loop.projectPath}</span> : null}
               </div>
               {loop.capabilityWarning ? <p className="loop-warning">{loop.capabilityWarning}</p> : null}
+              {loop.spawnedAgents?.length ? (
+                // Phase 2 helpers: what ran unattended must be listed, with
+                // the task on hover and how it ended at a glance.
+                <div className="loop-helpers" aria-label="Helpers this loop ran">
+                  {loop.spawnedAgents.map((agent) => (
+                    <span
+                      key={`${agent.name}-${agent.startedAt}`}
+                      className={`loop-helper loop-helper-${agent.status}`}
+                      title={agent.summary ? `${agent.task} — ${agent.summary}` : agent.task}
+                    >
+                      {agent.status === "running" ? <Loader2 size={10} className="spin" /> : agent.status === "failed" ? <X size={10} /> : <Check size={10} />}
+                      {agent.name}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               {loop.lastReason && isLive ? <p className="loop-reason">“{loop.lastReason}”</p> : null}
               {loop.stoppedReason && !isLive ? <p className="loop-reason loop-reason-final">{loop.stoppedReason}</p> : null}
               {/* What it ACTUALLY did, turn by turn. Collapsed by default so a

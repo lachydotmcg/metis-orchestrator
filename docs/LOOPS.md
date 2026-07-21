@@ -12,8 +12,8 @@ weeks without anyone noticing, because the parts were built for other reasons.
 | Primitive | What Fable uses | What Metis already has | Gap |
 |---|---|---|---|
 | A timer that fires a prompt later | ScheduleWakeup | `scheduleNextRoutineTick` / `fireRoutine` (main.ts ~9649), a self-rescheduling timer chain that already survives sleep and clock changes | The schedule is fixed by the user, not chosen by the model |
-| Parallel workers | the Agent tool | the fan-out engine, `runFanoutPipeline` + `shouldAttemptFanout` (main.ts ~6756), off by default behind `fanoutEnabled` | Fan-out is decided by heuristics at the start of a build, not requested by a model mid-run |
-| Workers talking back | task notifications | the agent bus, `SessionDirective` with kind steer/question/review_request/handoff | Nothing wakes a sleeping loop when a worker finishes |
+| Parallel workers | the Agent tool | ~~gap~~ CLOSED (phase 2A): a `spawn` array on the decision block runs helpers as loop-attributed session runs — see the phase 2A notes below for why not the fan-out engine | — |
+| Workers talking back | task notifications | ~~gap~~ half CLOSED (phase 2A): a finished helper wakes the sleeping loop directly; mid-flight bus chatter (steer/question/review_request) is still open | mid-flight reporting |
 | Durable memory across wakeups | the conversation transcript | `ConversationRecord` + the run history + knowledge banks | No record of "what loop am I in and what have I already tried" |
 | **The model deciding to continue** | **ScheduleWakeup called as the last act of a turn** | **nothing** | **This is the whole gap** |
 
@@ -45,7 +45,12 @@ Reusing the existing block would have bought the permission ceremony, the approv
 trail, and the server-side re-validation for free. What actually shipped is a dedicated
 ```metis-loop block (`extractLoopDecision`, loops.ts), which keeps the same SHAPE (fenced,
 validated, never throws, silence is safe) without giving the Manager two actions it cannot perform.
-`spawn_agent` was never built at all: that is phase 2.
+`spawn_agent` shipped in phase 2A as a `spawn` array ON the metis-loop block rather than a
+separate action kind — a "continue" may carry up to `LOOP_MAX_SPAWN_PER_TURN` (3)
+`{ name, task }` helpers (`parseSpawnRequests`, loops.ts). Spawn on a "stop" is dropped as the
+contradiction it is, malformed entries drop individually so a typo'd helper never turns a working
+continue into a silent stop, and helpers cannot spawn helpers — nothing parses a metis-loop block
+out of a helper's reply.
 
 ## The state record
 
@@ -79,7 +84,10 @@ export interface LoopRecord {
 Four things in the draft above this section did not survive contact with the build, and the doc used
 to show them as if they had:
 
-- **`spawnedAgents` does not exist.** That is phase 2 and nothing about it is built.
+- **`spawnedAgents` shipped with phase 2A.** `LoopSpawnedAgent[]` on the record: name, task,
+  start/end, running/done/failed, a one-line summary replayed into the next wake prompt, and the
+  helper's own conversation id (helpers never write into the loop's conversation, so two
+  concurrent runs cannot interleave one transcript).
 - **`budget` shipped later, as `budgetTokens`.** The draft's name did not survive but the idea did:
   `/loop --budget 200k` sets a token ceiling, the tick path sums the loop's ledger-attributed spend
   (input + output) before and after each turn, and `loopTerminalReason` settles the loop as
@@ -130,17 +138,22 @@ Waking up is just adding a turn to a conversation that already knows what happen
    a model forgot to say stop is the failure mode to design out first.
 5. Every outcome writes an audit event, so the whole life of a loop is reconstructable.
 
-## Waking on events, not just timers (PHASE 2, NOT BUILT)
-
-Nothing in this section exists yet. It is written in the present tense because it is the plan.
+## Waking on events, not just timers (SHIPPED IN PHASE 2A, simpler than planned)
 
 The bit that makes Fable's loops feel alive is that a finished background worker wakes it
-immediately, and the timer is only a fallback heartbeat. Metis can do the same with parts it has:
-when a fan-out agent completes, it already posts to the `SessionDirective` bus. Loops subscribe to
-that: a completion for an agent listed in `spawnedAgents` cancels the pending timer and ticks now.
+immediately, and the timer is only a fallback heartbeat. That now works — but not via the
+`SessionDirective` bus this section originally planned. A helper's completion path
+(`runLoopWorker`, main.ts) simply calls `fireLoopTick` directly when the loop is still sleeping:
+same process, same module, so a bus subscription would have been a message to yourself. The 60s
+chain stays as the fallback heartbeat, and `fireLoopTick`'s own in-flight guard collapses several
+helpers finishing together into one tick.
 
-That inverts the naive design from "poll every 60 seconds" to "sleep until something happens, with
-a long fallback." It is also cheaper, which matters when every tick is a real model call.
+Two deliberate deviations from the sketch, recorded the same way the decision-channel one is:
+helpers run as ordinary tracked session runs (`runSessionTracked`) rather than through the
+fan-out engine — the fan-out engine is a build-pipeline shape, while a helper task routes
+chat/edit/build like any prompt and inherits permission gating, ledger attribution (so the loop's
+`--budget` covers helper spend), cancellation and audit for free. And the "cancels the pending
+timer" half is unnecessary: the tick fires immediately and rewrites `nextWakeAt` itself.
 
 ## Governance, which is the part that decides whether this ships
 
@@ -247,10 +260,14 @@ from the CLI harness (CORE.3):
 happen and the loop terminate itself. Startable from the app with `/loop <goal>` in the composer.
 The capability warning ships too, see the governance list above.
 
-**Phase 2, workers. NOT BUILT.** `spawn_agent` wired to the existing fan-out engine, `spawnedAgents`
-tracking, and bus-completion wakeups so the loop sleeps until a worker finishes. None of this
-exists: there is no `spawn_agent`, no `spawnedAgents` field, and nothing subscribes a loop to the
-bus. The "waking on events, not just timers" section above is a plan, not a description.
+**Phase 2, workers. PHASE 2A SHIPPED.** A "continue" may carry `spawn` requests (3 per turn,
+`LOOP_MAX_SPAWNED_TOTAL = 9` per loop lifetime, enforced at launch); helpers run as
+loop-attributed session runs in their own conversations with the loop's frozen permission mode
+and cancel scope; `spawnedAgents` tracks them on the record and in the panel; and a finished
+helper wakes the sleeping loop immediately (see the waking-on-events section above for the two
+deliberate deviations from this paragraph's original sketch). Still open for a later pass:
+helpers reporting back mid-flight over the bus (steer/question/review_request), and a worker
+surface richer than the panel chips.
 
 **Phase 3, budget and polish. MOSTLY BUILT.** ~~Token ceilings drawn from the usage ledger~~:
 shipped as `/loop --budget` (see the limits list above). ~~Tray presence for sleeping loops~~:
@@ -292,8 +309,10 @@ has not shown that the decision layer works at all.
   `loopDecisionPromptBlock` is kept terse and free of words like build, make or create. Worth
   keeping in mind because it is a class of bug, not a single one: anything appended to a loop's
   prompt is a routing signal.
-- **Worker spawning and event wakeups** remain unbuilt, as above. ~~Token ceilings~~ shipped as
-  `/loop --budget` — see the limits list.
+- ~~**Worker spawning and event wakeups**~~ shipped as phase 2A (spawn on the decision block +
+  helper-completion wakeups). ~~Token ceilings~~ shipped as `/loop --budget` — see the limits
+  list. Neither has a LIVE run behind it yet — like everything else in this doc, the marker that
+  matters is a recorded run, and phase 2A's is still owed.
 
 ## Two decisions taken during phase 1 that changed the design above
 

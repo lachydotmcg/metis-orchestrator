@@ -16,9 +16,12 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
 
 ### After that
 
-- **Loops phase 2: parallel workers.** A loop that can spawn helpers onto disjoint parts of a job
-  and wake when one finishes, instead of a timer. The fan-out engine and the agent bus both already
-  exist, off by default; this is wiring them to the loop rather than building them.
+- ~~**Loops phase 2: parallel workers.**~~ Phase 2A shipped: a "continue" decision can carry up to
+  3 `spawn` helpers (9 per loop lifetime), each running as a loop-attributed session run — frozen
+  permission mode, the loop's cancel scope, its own conversation, and spend that counts against
+  `--budget` — and a finished helper wakes the sleeping loop immediately, with the 60s chain as the
+  fallback heartbeat. Not yet recorded in a live run; still open: mid-flight worker reporting over
+  the bus. See docs/LOOPS.md.
 - ~~**Per-node Depths.**~~ Shipped for the pipeline: each depths-enabled node's L1-L3 stack now
   projects onto its own GraphPipelineStage, and the build/edit/fan-out paths judge the run's depth
   once and let every stage lead its chain with its OWN rung (prepended, so the normal chain stays
