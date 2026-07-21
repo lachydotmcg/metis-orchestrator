@@ -104,6 +104,7 @@ import { runCliMode, type CliRuntime } from "./cli.js";
 // rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
 import { clampPermissionMode, isEditIntent, isPathInside, sameResolvedPath } from "../shared/intent-and-paths.js";
 import { lineDiffCounts } from "../shared/line-diff.js";
+import { pickDepthRung } from "../shared/depth-stack.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
 import { agentToolsPromptBlock, executeAgentTool, parseAgentToolCall } from "./agentTools.js";
@@ -5789,22 +5790,17 @@ function resolveGraphStageModel(provider: ProviderKey, rawModel: string): string
  *  model so the run always completes even if every configured route fails. */
 /** The model a stage's OWN depth stack picks for this run's depth, or null
  *  when the stage's normal chain should stand (roadmap "Per-node Depths").
- *  Mirrors depthRouteFor's semantics rung for rung: "router" means the local
- *  router model handles the level itself; an unpinned L1 defaults to the
- *  local model (the free tier the node UI promises); an unpinned L2/L3 leaves
- *  the chain untouched — for L3 the renderer already projects the node's
- *  primary as the default, so an absent deep rung only happens when nothing
- *  was mappable. Every value is re-validated here because graphPipeline is a
- *  plain JSON store key anyone could have written. */
+ *  The selection rule itself lives in shared/depth-stack.ts (pickDepthRung)
+ *  so the offline suites test the real thing; this adapter only maps the
+ *  outcome onto main.ts's machinery. */
 function stageDepthRef(stage: GraphPipelineStage, depth: 1 | 2 | 3): StageModelRef | null {
-  const depths = stage.depths;
-  if (!depths) return null;
-  const choice = depth === 3 ? depths.deep : depth === 2 ? depths.standard : depths.shallow;
-  if (choice === "router") return localStageRef();
-  if (choice && isKnownProvider(choice.provider) && typeof choice.model === "string" && choice.model.trim()) {
-    return { provider: choice.provider, model: resolveGraphStageModel(choice.provider, choice.model) };
+  const outcome = pickDepthRung(stage.depths, depth, isKnownProvider);
+  if (outcome.kind === "local") return localStageRef();
+  if (outcome.kind === "model") {
+    const provider = outcome.provider as ProviderKey;
+    return { provider, model: resolveGraphStageModel(provider, outcome.model) };
   }
-  return depth === 1 ? localStageRef() : null;
+  return null;
 }
 
 function graphAgenticStages(config: GraphPipelineConfig, prompt: string, override?: SessionModelOverride, depth?: RouteDepth | null): StageConfig[] | null {
