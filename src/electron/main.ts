@@ -9294,9 +9294,15 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   let routeDepth: RouteDepth | undefined;
   let depthRoute: StageModelRef | null = null;
   if (!input.modelOverride && !forceBuildPipeline && (await readStoreValue<boolean>("depthRoutingEnabled", false))) {
-    // The router model's own judgement wins when it gave one (Lachy: depth
-    // should be the router's call); the keyword classifier is the fallback.
-    routeDepth = modelJudgedDepth ?? classifyRouteDepth(prompt);
+    // A fast-lane-eligible turn is DETERMINISTICALLY trivial (short, plain
+    // general_chat, no build/edit intent — the same gate that already skips
+    // the snapshot walk for it), so it is depth 1 outright. Without this,
+    // "Say OK." fell to the keyword classifier's depth-2 default and a
+    // pinned L2 sent a two-word prompt to a paid model — caught live in the
+    // 2026-07-21 depth sweep. The router model's judgement wins for
+    // everything past the fast lane (Lachy: depth is the router's call);
+    // the keyword classifier remains the fallback.
+    routeDepth = isFastLaneEligible(prompt, effectiveDecision) ? 1 : modelJudgedDepth ?? classifyRouteDepth(prompt);
     depthRoute = await depthRouteFor(routeDepth);
     if (depthRoute) {
       emitTimeline(stream, timelineText(`Depth ${routeDepth} routing: ${providerInfo[depthRoute.provider].label} (${depthRoute.model}).`));

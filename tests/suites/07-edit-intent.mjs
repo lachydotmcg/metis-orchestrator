@@ -69,6 +69,21 @@ check("direct build lead beats advisory tail",
 check("imperative lead helper agrees", hasStrongImperativeBuildLead("Build me a landing page"), true);
 check("prose mention is not a lead", hasStrongImperativeBuildLead("I have been helping design a feature"), false);
 
+section("ANALYSIS QUESTIONS are advisory, direct edit orders are not");
+// From the 2026-07-21 depth sweep: an architecture-analysis question
+// classified as coding and ran the file-writing build pipeline (which wrote
+// nothing and said so — but the right surface was chat).
+check("'Analyse the trade-offs... recommend a design' IS guarded",
+  isBuildQuestionGuard("Analyse the architecture trade-offs of the file-based persistence under concurrent writes and recommend a more robust design."), true);
+check("'Evaluate whether the store should use SQLite' IS guarded",
+  isBuildQuestionGuard("Evaluate whether the store should use SQLite instead."), true);
+check("'Compare the two approaches' IS guarded", isBuildQuestionGuard("Compare the two persistence approaches for me."), true);
+check("'Fix the bug and explain what was wrong' is an ORDER",
+  isBuildQuestionGuard("Fix the bug and explain what was wrong"), false);
+check("'Update the header and describe the change' is an ORDER",
+  isBuildQuestionGuard("Update the header and describe the change"), false);
+check("'Improve this and analyse nothing' stays an order", isBuildQuestionGuard("Improve the error handling in this file"), false);
+
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

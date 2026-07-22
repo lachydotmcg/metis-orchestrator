@@ -63,12 +63,18 @@ export function isEditIntent(prompt: string): boolean {
 // Moved here from main.ts (2026-07-21) so the offline suites can pin the
 // question-guard behaviour — it had a live miss the day it moved.
 export const ADVISORY_INTENT_RE =
-  /\b(?:walk (?:me )?through|talk (?:me )?through|explain|describe|outline|how (?:would|do|should|can) i\b|how to\b|what(?:'s| is| are| should| would) the best\b|give me (?:a|an)\b[\s\S]{0,40}?\b(?:skeleton|example|outline|overview|rundown|starting point|sketch|idea)\b|help me (?:understand|think|plan|design)\b|should i\b)/i;
+  /\b(?:walk (?:me )?through|talk (?:me )?through|explain|describe|outline|analy[sz]e|assess|evaluate|compare|weigh (?:up )?the\b|recommend (?:a|an|the)\b|how (?:would|do|should|can) i\b|how to\b|what(?:'s| is| are| should| would) the best\b|give me (?:a|an)\b[\s\S]{0,40}?\b(?:skeleton|example|outline|overview|rundown|starting point|sketch|idea)\b|help me (?:understand|think|plan|design)\b|should i\b)/i;
 
-/** True when the prompt OPENS with an unambiguous, direct build order, which
- *  outranks advisory-sounding phrasing later in the same prompt. */
+/** True when the prompt OPENS with an unambiguous, direct build or edit
+ *  order, which outranks advisory-sounding phrasing later in the same prompt
+ *  ("Fix the bug and explain what was wrong" is an order, not a question).
+ *  The edit verbs joined the list in the 2026-07-21 depth sweep, the same
+ *  round that taught ADVISORY_INTENT_RE the analysis verbs — "Analyse the
+ *  architecture trade-offs... and recommend a design" was classifying as
+ *  coding and running the file-writing build pipeline, which wrote nothing
+ *  and reported it honestly, but the right surface was chat all along. */
 export function hasStrongImperativeBuildLead(prompt: string): boolean {
-  return /^\s*(?:build|make|create|design|generate|develop|scaffold|implement)\b(?:\s+(?:me|us))?\s+(?:a|an|the)\b/i.test(prompt);
+  return /^\s*(?:build|make|create|design|generate|develop|scaffold|implement|fix|repair|correct|update|improve|refactor)\b(?:\s+(?:me|us))?\s+(?:a|an|the|this|that|my|our)\b/i.test(prompt);
 }
 
 /** True for prompts that are QUESTIONS about the project rather than orders
