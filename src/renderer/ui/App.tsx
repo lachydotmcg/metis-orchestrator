@@ -193,6 +193,11 @@ type NodeKind = "router" | "agent" | "skill";
  *  pulse      - depends on a remote feed that is still mostly empty. */
 const V1_HIDDEN_NAV = new Set<NavKey>(["manager", "marketplace", "routines", "gallery", "graph", "todo", "pulse"]);
 
+/** The floating Manager widget (FAB + draggable chat shell). Cut per Lachy
+ *  2026-07-21 — the hidden Manager tab keeps the same chat, so this is a
+ *  surface removal, not a feature removal. Flip to true to bring it back. */
+const MANAGER_WIDGET_ENABLED = false;
+
 function isNavVisible(key: NavKey): boolean {
   return !V1_HIDDEN_NAV.has(key);
 }
@@ -906,18 +911,15 @@ function providerConnectionStatus(provider: ProviderId, states: Partial<Record<P
   return states[key] ?? "unknown";
 }
 
-const SKILL_LIBRARY = [
-  "UI Design",
-  "Frontend Patterns",
-  "Component Library",
-  "Planning",
-  "Agentic Tasks",
-  "Code Review",
-  "Testing",
-  "Documentation",
-  "Data Modeling",
-  "Security Audit"
-];
+/** Built-in palette skills. EMPTY on purpose (Lachy, 2026-07-21: "remove the
+ *  skills that don't actually exist"): the ten label-only entries that used
+ *  to live here ("UI Design", "Code Review", ...) carried no content, so
+ *  attaching one to a node did nothing — the pipeline projection skips
+ *  content-less skills. The palette now shows only what genuinely loads:
+ *  Marketplace-installed skills, the user's own custom skills, and gallery
+ *  moodboards. Kept as a list (not deleted) so a future REAL built-in has an
+ *  obvious home. */
+const SKILL_LIBRARY: string[] = [];
 
 const BENCHMARK_STEPS: Array<{ key: BenchmarkStep; label: string }> = [
   { key: "welcome", label: "Check" },
@@ -2222,7 +2224,11 @@ export function App(): JSX.Element {
         <GraphWorkspace activeNav={activeNav} gallerySkills={linkedGallerySkills} galleryVisuals={galleryVisuals} />
       ) : null}
       </div>
-      <ManagerWidget onNavigate={setActiveNav} />
+      {/* Manager WIDGET cut (Lachy, 2026-07-21: "remove the manager widget").
+          Same idiom as V1_HIDDEN_NAV: the surface unmounts, the code stays —
+          the hidden Manager TAB still hosts the same ManagerChat, so nothing
+          is orphaned and un-cutting is flipping this one constant. */}
+      {MANAGER_WIDGET_ENABLED ? <ManagerWidget onNavigate={setActiveNav} /> : null}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -4035,8 +4041,26 @@ function NewSessionWorkspace({
   const modelGroups = useMemo(() => {
     const query = routerFilter.trim().toLowerCase();
     const merged = [...MODEL_LIBRARY];
+    // Dedup key strips the BRAND label off the front of the name before
+    // comparing: the registry catalog ships full names ("Claude Fable 5")
+    // while MODEL_LIBRARY uses brand-scoped short ones ("Fable 5" under the
+    // Claude heading), and the old exact-string compare let both through —
+    // every Claude model listed twice (Lachy's screenshot, 2026-07-21). The
+    // library's short name wins because it's the one the picker's brand
+    // grouping was designed around.
+    const dedupKey = (ref: ModelRef): string => {
+      const label = PROVIDERS[ref.provider]?.label?.toLowerCase() ?? "";
+      let name = ref.model.toLowerCase().trim();
+      if (label && name.startsWith(label)) name = name.slice(label.length).trim();
+      return `${ref.provider}::${name.replace(/[^a-z0-9.]+/g, " ").trim()}`;
+    };
+    const seen = new Set(merged.map(dedupKey));
     remoteModelRefs.forEach((ref) => {
-      if (!merged.some((existing) => existing.provider === ref.provider && existing.model === ref.model)) merged.push(ref);
+      const key = dedupKey(ref);
+      if (!seen.has(key)) {
+        seen.add(key);
+        merged.push(ref);
+      }
     });
     const all = [...merged, ...customModels];
     const tiers: { tier: "cloud" | "local"; label: string; brands: { provider: ProviderId; models: ModelRef[] }[] }[] = [
@@ -8977,7 +9001,39 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
     setNodes((list) => list.map((node) => (node.id === id ? { ...node, ...patch } : node)));
   }, []);
 
+  // Undo (Ctrl+Z) for canvas mutations that LOSE information — delete, preset
+  // apply, load, reset. Lachy deleted his Front end node with no way back
+  // (2026-07-21); an X on a node the graph projection depends on deserves the
+  // same escape hatch every editor has. Snapshots the whole node list (the
+  // graph is small), capped at 20. Fine-grained undo of inspector edits is
+  // deliberately out of scope — those are visible and re-editable.
+  const undoStackRef = useRef<GraphNode[][]>([]);
+  const pushUndo = useCallback(() => {
+    undoStackRef.current = [...undoStackRef.current.slice(-19), nodesRef.current.map((node) => ({ ...node }))];
+  }, []);
+  const undoCanvas = useCallback(() => {
+    const previous = undoStackRef.current.pop();
+    if (previous) {
+      setNodes(previous);
+      setSelected(null);
+    }
+  }, []);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "z") {
+        // Never hijack text editing — a rename field's own undo wins.
+        const target = event.target as HTMLElement | null;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+        event.preventDefault();
+        undoCanvas();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undoCanvas]);
+
   function removeNode(id: string): void {
+    pushUndo();
     setNodes((list) =>
       list.filter((node) => node.id !== id).map((node) => (node.kind === "agent" && node.skills ? { ...node, skills: node.skills.filter((s) => s !== id) } : node))
     );
@@ -8991,6 +9047,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
   function applyPreset(key: PresetKey): void {
     const preset = PRESETS.find((p) => p.key === key);
     if (!preset) return;
+    pushUndo();
     setNodes((list) =>
       list.map((node) => {
         if (node.kind === "router") return { ...node, provider: preset.router.provider, model: preset.router.model };
@@ -9043,12 +9100,14 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
       if (!raw) return;
       const parsed = JSON.parse(raw) as { nodes?: GraphNode[]; stages?: PresetStage[] };
       if (parsed.nodes?.length) {
+        pushUndo();
         setNodes(parsed.nodes);
         setSelected(null);
         fitTo(parsed.nodes);
         return;
       }
       if (parsed.stages?.length) {
+        pushUndo();
         applyPresetStages(parsed.stages);
       }
     } catch {
@@ -9173,6 +9232,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
   }
 
   function resetGraph(): void {
+    pushUndo();
     setNodes(SEED_NODES);
     setSelected(null);
     fitTo(SEED_NODES);
@@ -17179,6 +17239,18 @@ function NodeInspector({
     } else {
       models[level] = value;
     }
+    // L3 IS the node (Lachy, repeated): with depths on there is no separate
+    // primary selector, so an explicit L3 pick becomes the node's own
+    // provider/model too — the canvas icon, the pipeline primary and the L3
+    // rung stay one thing. Picking a real model clears the stored l3 override
+    // (the B11.6 "L3 defaults to the primary" rule then shows it as base);
+    // "router" and "default" leave the primary alone.
+    if (level === "l3" && value && value !== "router") {
+      delete models.l3;
+      onUpdate(node.id, { depthModels: models, provider: value.provider, model: value.model });
+      setDepthPicking(null);
+      return;
+    }
     onUpdate(node.id, { depthModels: models });
     setDepthPicking(null);
   }
@@ -17208,23 +17280,30 @@ function NodeInspector({
 
         {node.kind !== "skill" ? (
           <>
-            <label className="field">
-              <span>Primary model</span>
-              <select value={node.provider ? `${node.provider}|${node.model}` : ""} onChange={setPrimary}>
-                {!node.provider ? <option value="">Unassigned</option> : null}
-                {node.provider && !MODEL_LIBRARY.some((ref) => ref.provider === node.provider && ref.model === node.model) ? (
-                  <option value={`${node.provider}|${node.model}`}>
-                    {PROVIDERS[node.provider].label} · {node.model}
-                  </option>
-                ) : null}
-                {MODEL_LIBRARY.map((ref) => (
-                  <option key={`${ref.provider}|${ref.model}`} value={`${ref.provider}|${ref.model}`}>
-                    {PROVIDERS[ref.provider].label} · {ref.model}
-                    {PROVIDERS[ref.provider].tier === "local" ? " (local)" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+            {/* With depths ON there is no separate primary selector (Lachy,
+                repeated request): the L3 row below IS the node's primary —
+                picking an L3 model rewrites node.provider/model, so the
+                canvas icon and pipeline follow it. The selector returns the
+                moment depths are switched off. */}
+            {!node.depthsEnabled ? (
+              <label className="field">
+                <span>Primary model</span>
+                <select value={node.provider ? `${node.provider}|${node.model}` : ""} onChange={setPrimary}>
+                  {!node.provider ? <option value="">Unassigned</option> : null}
+                  {node.provider && !MODEL_LIBRARY.some((ref) => ref.provider === node.provider && ref.model === node.model) ? (
+                    <option value={`${node.provider}|${node.model}`}>
+                      {PROVIDERS[node.provider].label} · {node.model}
+                    </option>
+                  ) : null}
+                  {MODEL_LIBRARY.map((ref) => (
+                    <option key={`${ref.provider}|${ref.model}`} value={`${ref.provider}|${ref.model}`}>
+                      {PROVIDERS[ref.provider].label} · {ref.model}
+                      {PROVIDERS[ref.provider].tier === "local" ? " (local)" : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
 
             <div className="field">
               <span>Depths</span>
