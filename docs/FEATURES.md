@@ -18,7 +18,7 @@ Known gaps and rough edges across the whole app live in [`LIMITATIONS.md`](LIMIT
 # Ships in v1
 
 <details>
-<summary><b>Chat and the Auto Router</b> · <code>SHIPPED</code> · Type a prompt, Metis picks a model that is actually installed.</summary>
+<summary><b>Chat and the Auto Router</b> · <code>VERIFIED</code> · Type a prompt, Metis picks a model that is actually installed.</summary>
 
 <br />
 

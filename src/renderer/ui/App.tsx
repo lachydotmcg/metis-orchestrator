@@ -246,7 +246,17 @@ type PromptTemplate = { id: string; name: string; text: string };
 // commands added alongside it. Unlike "template", these three never carry
 // deletable user data, they're fixed rows the popover always offers (subject
 // to their own bridge/availability checks at render time).
-type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "handoff" } | { kind: "loop" } | { kind: "newTemplate" } | { kind: "template"; template: PromptTemplate };
+type TemplateRow = { kind: "builtin" } | { kind: "export" } | { kind: "summarize" } | { kind: "handoff" } | { kind: "loop" } | { kind: "loopStarter"; starter: (typeof LOOP_STARTERS)[number] } | { kind: "newTemplate" } | { kind: "template"; template: PromptTemplate };
+/** One-click /loop starters (docs/LOOPS.md phase 3). Selecting one INSERTS the
+ *  full command for review — it never starts the loop itself. Goals are worded
+ *  deliberately: read-mostly, no build/make/create verbs (see loops.ts's
+ *  routing-hazard comments), and every one carries explicit --turns so the
+ *  default cap is visible in the composer before send. */
+const LOOP_STARTERS = [
+  { id: "loop-docs", name: "Tidy the docs", insert: "/loop --turns 6 Review the project's README and docs for stale or wrong claims, correcting one file per turn", description: "One doc file per turn, six turns max" },
+  { id: "loop-tests", name: "Watch the tests", insert: "/loop --every 15m --turns 8 Check whether the project's tests pass and summarise any failure briefly", description: "Checks every 15m, reports failures" },
+  { id: "loop-comments", name: "Comment sweep", insert: "/loop --turns 5 Read the project's source files and add a brief clarifying comment to one confusing function per turn", description: "One function per turn, five turns max" }
+] as const;
 // Canned prompt /summarize submits verbatim through the normal onSubmit path
 // (DRILL_PLAN I9.9) — no new backend, it just reuses the same pipeline a
 // hand-typed message would use, so the reply lands as an ordinary assistant turn.
@@ -5520,6 +5530,7 @@ function SessionComposer({
     ...(summarizeRowMatches ? [{ kind: "summarize" as const }] : []),
     ...(handoffRowMatches ? [{ kind: "handoff" as const }] : []),
     ...(loopRowMatches ? [{ kind: "loop" as const }] : []),
+    ...LOOP_STARTERS.filter((starter) => !templateFilter || "loop".includes(templateFilter) || starter.name.toLowerCase().includes(templateFilter)).map((starter) => ({ kind: "loopStarter" as const, starter })),
     ...filteredTemplates.map((template) => ({ kind: "template" as const, template })),
     ...(newTemplateRowMatches ? [{ kind: "newTemplate" as const }] : [])
   ];
@@ -5570,6 +5581,10 @@ function SessionComposer({
     }
     if (row.kind === "loop") {
       setPrompt("/loop ");
+      return;
+    }
+    if (row.kind === "loopStarter") {
+      setPrompt(row.starter.insert);
       return;
     }
     if (row.kind === "newTemplate") {
@@ -5946,6 +5961,25 @@ function SessionComposer({
                           <span>
                             <strong>/loop</strong>
                             <small>Starts a background goal it works on across turns · flags --turns, --every, --budget</small>
+                          </span>
+                        </button>
+                      );
+                    }
+                    if (row.kind === "loopStarter") {
+                      return (
+                        <button
+                          key={`starter-${row.starter.id}`}
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          className={`router-option ${active ? "active" : ""}`}
+                          onMouseDown={(event) => event.preventDefault()}
+                          onMouseEnter={() => setTemplateActiveIndex(index)}
+                          onClick={() => selectTemplateRow(row)}
+                        >
+                          <span>
+                            <strong>{row.starter.name}</strong>
+                            <small>{row.starter.description} · inserts a /loop command to review</small>
                           </span>
                         </button>
                       );

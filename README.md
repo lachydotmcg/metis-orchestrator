@@ -59,10 +59,10 @@ v1 navigation is exactly four items: New session, Orchestration, Benchmark, Sett
 
 | | |
 | --- | --- |
-| **Chat and the Auto Router** `SHIPPED` | Type a prompt, Metis picks a model you actually have installed. |
+| **Chat and the Auto Router** `VERIFIED` | Type a prompt, Metis picks a model you actually have installed. Proven in a packaged build 2026-07-21 (see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)). |
 | **The orchestration build pipeline** `VERIFIED` | Plan, then front end, then make it functional, writing real files. |
 | **The snapshot safety net** `VERIFIED` | Every generated write is backed up first, or it does not happen. |
-| **Metis Loops** `VERIFIED` | Hand it a goal and it works across several turns, deciding each turn whether to continue. |
+| **Metis Loops** `VERIFIED` | Hand it a goal and it works across several turns, deciding each turn whether to continue. `--budget 200k` caps its spend; a continue can spawn up to 3 parallel helpers whose completion wakes it. |
 | **The CLI harness** `VERIFIED` | Drive the real pipeline headlessly and assert on the result. |
 | **Permissions, five modes** `SHIPPED` | You pick how much Metis may do on its own, per run. |
 | **Providers and fallback chains** `SHIPPED` | Your keys, your models, and a route that survives one going down. |

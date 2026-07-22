@@ -272,8 +272,10 @@ surface richer than the panel chips.
 **Phase 3, budget and polish. MOSTLY BUILT.** ~~Token ceilings drawn from the usage ledger~~:
 shipped as `/loop --budget` (see the limits list above). ~~Tray presence for sleeping loops~~:
 shipped — live loops are a tray section with status, turn count, budget and a Stop item, rebuilt
-on every loop write via the mutateLoops hook. Still open: loop templates the user can start with
-one click. ~~Wall-clock ceilings~~: filed here originally, actually shipped in phase 1 as
+on every loop write via the mutateLoops hook. ~~Loop templates~~: shipped as starter rows in the
+"/" popover (`LOOP_STARTERS`, App.tsx) — one click INSERTS a complete, capped `/loop` command for
+review rather than starting the loop itself, because the human pressing Enter is part of the
+governance story for the app's most autonomous feature. ~~Wall-clock ceilings~~: filed here originally, actually shipped in phase 1 as
 `LOOP_MAX_AGE_HOURS`, because an iteration cap on its own does not bound a loop whose every turn
 is slow.
 
