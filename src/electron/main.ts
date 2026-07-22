@@ -9305,7 +9305,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     routeDepth = isFastLaneEligible(prompt, effectiveDecision) ? 1 : modelJudgedDepth ?? classifyRouteDepth(prompt);
     depthRoute = await depthRouteFor(routeDepth);
     if (depthRoute) {
-      emitTimeline(stream, timelineText(`Depth ${routeDepth} routing: ${providerInfo[depthRoute.provider].label} (${depthRoute.model}).`));
+      // User-facing level numbering is REVERSED from the internal RouteDepth
+      // scale (Lachy, 2026-07-21): internally 3 = deepest, but the node UI
+      // counts L1 as the hardest tier so future L4/L5 can extend the cheap
+      // end. 4 - depth maps between them; run.depth keeps the internal value.
+      emitTimeline(stream, timelineText(`Level L${4 - routeDepth} routing: ${providerInfo[depthRoute.provider].label} (${depthRoute.model}).`));
     }
   }
   const route = effectiveDecision.selected_route;

@@ -371,8 +371,18 @@ type GraphNode = {
   depthsEnabled?: boolean;
   /** Per-level choice: a pinned model, or the literal "router" meaning the
    *  router model handles that level itself (no re-route at all - Lachy's
-   *  "just the option of the router, not routing"). Unset = level default. */
+   *  "just the option of the router, not routing"). Unset = level default.
+   *
+   *  LEVEL ORDER REVERSED 2026-07-21 (Lachy): L1 is now the MOST difficult
+   *  tier and higher numbers get easier, so future L4/L5 can extend the
+   *  cheap end for finer sensitivity. l1 = deep, l2 = standard, l3 =
+   *  shallow. Stacks saved before the flip are migrated once on load (see
+   *  depthLevelsFlipped in loadNodes). */
   depthModels?: { l1?: ModelRef | "router"; l2?: ModelRef | "router"; l3?: ModelRef | "router" };
+  /** One-time migration marker for the 2026-07-21 level reversal: absent on
+   *  pre-flip data (l1 meant easiest), set the moment a stack is migrated or
+   *  newly written. */
+  depthLevelsFlipped?: boolean;
 };
 
 type DragPayload =
@@ -8346,12 +8356,24 @@ function migrateNodeGateway(node: GraphNode): GraphNode {
   return node;
 }
 
+/** One-time migration for the 2026-07-21 level reversal: stacks saved when
+ *  l1 meant EASIEST get their l1/l3 swapped so the stored picks keep meaning
+ *  what the user configured. The marker makes it run exactly once. */
+function migrateNodeDepthLevels(node: GraphNode): GraphNode {
+  if (!node.depthModels || node.depthLevelsFlipped) return node;
+  return {
+    ...node,
+    depthModels: { ...node.depthModels, l1: node.depthModels.l3, l3: node.depthModels.l1 },
+    depthLevelsFlipped: true
+  };
+}
+
 function loadNodes(): GraphNode[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as { nodes?: GraphNode[] };
-      if (parsed.nodes?.length) return parsed.nodes.map(migrateNodeGateway);
+      if (parsed.nodes?.length) return parsed.nodes.map(migrateNodeGateway).map(migrateNodeDepthLevels);
     }
   } catch {
     /* ignore malformed cache */
@@ -8430,9 +8452,11 @@ function projectNodeDepthStack(node: GraphNode): GraphPipelineStage["depths"] {
     // cast only ever narrows a string it produced itself.
     return mapped === null ? undefined : (mapped as NonNullable<GraphPipelineStage["depths"]>["deep"]);
   };
-  const shallow = rung(models.l1);
+  // Level order reversed 2026-07-21 (Lachy): L1 is the deep/hardest tier and
+  // defaults to the node's own primary; L3 is the easy tier.
+  const deep = rung(models.l1, primary);
   const standard = rung(models.l2);
-  const deep = rung(models.l3, primary);
+  const shallow = rung(models.l3);
   if (!shallow && !standard && !deep) return undefined;
   return {
     ...(shallow ? { shallow } : {}),
@@ -8486,12 +8510,14 @@ function resolveNodeDepths(node: GraphNode): DepthRung[] {
     return { level, label: fallback, implied: true };
   };
 
+  // Level order reversed 2026-07-21 (Lachy): L1 = hardest work, and it
+  // inherits the node's own primary model when unset — the node IS its
+  // strongest rung. Higher numbers get easier so future L4/L5 can extend
+  // the cheap end.
   return [
-    describe("L1", models.l1, "your local model"),
+    describe("L1", models.l1, "this node's own model", primary),
     describe("L2", models.l2, "whatever the router picks"),
-    // L3 inherits the node's own primary model when unset, matching
-    // projectDepthRoutes: "whatever you drag onto the node is your L3".
-    describe("L3", models.l3, "strongest configured cloud", primary)
+    describe("L3", models.l3, "your local model")
   ];
 }
 
@@ -17239,19 +17265,20 @@ function NodeInspector({
     } else {
       models[level] = value;
     }
-    // L3 IS the node (Lachy, repeated): with depths on there is no separate
-    // primary selector, so an explicit L3 pick becomes the node's own
-    // provider/model too — the canvas icon, the pipeline primary and the L3
-    // rung stay one thing. Picking a real model clears the stored l3 override
-    // (the B11.6 "L3 defaults to the primary" rule then shows it as base);
-    // "router" and "default" leave the primary alone.
-    if (level === "l3" && value && value !== "router") {
-      delete models.l3;
-      onUpdate(node.id, { depthModels: models, provider: value.provider, model: value.model });
+    // L1 IS the node (Lachy, level order reversed 2026-07-21): with depths on
+    // there is no separate primary selector, so an explicit L1 pick becomes
+    // the node's own provider/model too — the canvas icon, the pipeline
+    // primary and the deep rung stay one thing. Picking a real model clears
+    // the stored l1 override (the row then shows it as "this node");
+    // "router" leaves the primary alone. Every write stamps the migration
+    // marker so loadNodes never re-flips a post-reversal stack.
+    if (level === "l1" && value && value !== "router") {
+      delete models.l1;
+      onUpdate(node.id, { depthModels: models, depthLevelsFlipped: true, provider: value.provider, model: value.model });
       setDepthPicking(null);
       return;
     }
-    onUpdate(node.id, { depthModels: models });
+    onUpdate(node.id, { depthModels: models, depthLevelsFlipped: true });
     setDepthPicking(null);
   }
 
@@ -17312,7 +17339,7 @@ function NodeInspector({
                 Enable depth routing
               </label>
               <small className="depths-hint">
-                The router judges how heavy each turn is and sends it to the matching level: trivial work stays cheap, deep work goes straight to your strongest model.
+                The router judges how heavy each turn is and sends it to the matching level: L1 is your strongest model for the deepest work, higher numbers get cheaper.
               </small>
               {node.depthsEnabled ? (
                 depthPicking ? (
@@ -17321,9 +17348,12 @@ function NodeInspector({
                       <button type="button" className="inspector-back" onClick={() => setDepthPicking(null)}>
                         <ChevronLeft size={14} /> Levels
                       </button>
-                      <strong>{depthPicking.toUpperCase()} model</strong>
+                      <strong>{depthPicking === "l1" ? "L1" : depthPicking === "l2" ? "L2" : "L3"} model</strong>
                     </div>
                     <div className="depth-mini-list">
+                      {/* The "Default" row is gone (Lachy, 2026-07-21): a level
+                          is either the Router or a real model, and picking L1's
+                          model rewrites the node itself. */}
                       <button type="button" className="depth-mini-row" onClick={() => setDepthModel(depthPicking, "router")}>
                         <span className="depth-level-tile">
                           <Waypoints size={18} />
@@ -17331,13 +17361,6 @@ function NodeInspector({
                         <span className="depth-mini-text">
                           <strong>Router</strong>
                           <small>The router handles this level itself, no re-route</small>
-                        </span>
-                      </button>
-                      <button type="button" className="depth-mini-row" onClick={() => setDepthModel(depthPicking, null)}>
-                        <span className="depth-level-tile empty" />
-                        <span className="depth-mini-text">
-                          <strong>Default</strong>
-                          <small>{depthPicking === "l3" ? "This node's own model (your base)" : "Use this level's built-in default"}</small>
                         </span>
                       </button>
                       {MODEL_LIBRARY.map((ref) => (
@@ -17358,16 +17381,17 @@ function NodeInspector({
                   </div>
                 ) : (
                   <div className="depth-stack">
+                    {/* Reversed order (Lachy, 2026-07-21): L1 = hardest at the
+                        top, and it IS the node — its row shows the node's own
+                        model as "this node", never a fallback string, so a
+                        fresh L1 pick can't read like it failed to save. */}
                     {([
-                      { level: "l3" as const, badge: "L3", fallback: "Strongest cloud (default)" },
+                      { level: "l1" as const, badge: "L1", fallback: "This node's own model" },
                       { level: "l2" as const, badge: "L2", fallback: "Auto (policy route)" },
-                      { level: "l1" as const, badge: "L1", fallback: "Local model (default)" }
+                      { level: "l3" as const, badge: "L3", fallback: "Local model (default)" }
                     ]).map(({ level, badge, fallback }) => {
                       const chosen = node.depthModels?.[level];
-                      // L3 defaults to the node's OWN model (B11.6, Lachy:
-                      // whatever you drag and drop onto the node is your L3
-                      // by default) - an explicit pick still wins.
-                      const baseDefault = level === "l3" && !chosen && node.provider && node.model ? { provider: node.provider, model: node.model } : null;
+                      const baseDefault = level === "l1" && !chosen && node.provider && node.model ? { provider: node.provider, model: node.model } : null;
                       const shown = chosen ?? baseDefault ?? null;
                       return (
                         <button type="button" className="depth-level-row" key={level} onClick={() => setDepthPicking(level)} aria-label={`Choose ${badge} model`}>
@@ -17375,8 +17399,8 @@ function NodeInspector({
                           <span className={shown ? "depth-level-tile" : "depth-level-tile empty"}>
                             {shown === "router" ? <Waypoints size={18} /> : shown ? <img alt="" src={PROVIDERS[shown.provider].logo} /> : null}
                           </span>
-                          <span className={chosen ? "depth-level-name" : "depth-level-name muted"}>
-                            {shown === "router" ? "Router" : baseDefault ? `${baseDefault.model} · base` : shown ? shown.model : fallback}
+                          <span className={chosen || baseDefault ? "depth-level-name" : "depth-level-name muted"}>
+                            {shown === "router" ? "Router" : baseDefault ? `${baseDefault.model} · this node` : shown ? shown.model : fallback}
                           </span>
                         </button>
                       );
