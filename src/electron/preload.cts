@@ -228,6 +228,7 @@ contextBridge.exposeInMainWorld("metisLoops", {
     ipcRenderer.invoke("metis-loops:create", input) as Promise<LoopRecord>,
   usage: (id: string) =>
     ipcRenderer.invoke("metis-loops:usage", id) as Promise<{ inputTokens: number; outputTokens: number; turns: number; estimated: boolean }>,
+  draftChain: (goal: string) => ipcRenderer.invoke("metis-loops:draft-chain", goal) as Promise<{ chain?: string; error?: string }>,
   stop: (id: string, reason?: string) => ipcRenderer.invoke("metis-loops:stop", id, reason) as Promise<LoopRecord | undefined>,
   delete: (id: string) => ipcRenderer.invoke("metis-loops:delete", id) as Promise<LoopRecord[]>
 });

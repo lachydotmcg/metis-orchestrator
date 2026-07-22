@@ -94,6 +94,20 @@ check("group at the helper cap ok", parseLoopCommand('/loop --steps "a & b & c -
 check("empty group member refused", Boolean(parseLoopCommand('/loop --steps "a & -> b"').error), true);
 check("group members count toward the total cap", Boolean(parseStepChain("a & b & c -> d & e & f -> g -> h -> i").error), true);
 check("parentheses still refused with a coming-later message", /not runnable yet/.test(parseLoopCommand('/loop --steps "(a -> b) & c -> d"').error ?? ""), true);
+
+console.log("\n--FLOWCHART (AI-drafted chains)");
+check("flowchart flag parses with its goal", parseLoopCommand("/loop --flowchart tidy the docs").parts,
+  { goal: "tidy the docs", flowchart: true });
+check("flowchart without a goal refused", Boolean(parseLoopCommand("/loop --flowchart").error), true);
+check("flowchart plus steps refused", Boolean(parseLoopCommand('/loop --flowchart --steps "a -> b" go').error), true);
+check("flowchart hint present", describeLoopCommand(parseLoopCommand("/loop --flowchart go")).some((s) => s.label === "AI-drafted chain"), true);
+{
+  const { cleanDraftedChain } = m;
+  check("drafted chain: last line wins", cleanDraftedChain("Sure! Here is a plan:\nread -> plan -> implement"), "read -> plan -> implement");
+  check("drafted chain: think block dropped", cleanDraftedChain("<think>hmm</think>\na -> b"), "a -> b");
+  check("drafted chain: quotes stripped", cleanDraftedChain('"a -> b"'), "a -> b");
+  check("drafted chain: empty reply", cleanDraftedChain("  \n "), "");
+}
 check("empty step refused", Boolean(parseLoopCommand('/loop --steps "a -> -> b"').error), true);
 check("single step refused", Boolean(parseLoopCommand('/loop --steps "just one"').error), true);
 check("nine steps over the cap", Boolean(parseStepChain("a->b->c->d->e->f->g->h->i").error), true);

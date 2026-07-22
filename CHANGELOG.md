@@ -35,7 +35,10 @@ engine referenced below.
   The panel shows step N of M with the chain on hover; groups cap at 3,
   the chain at 8 steps because it replays every turn. Parenthesised
   multi-step branches are still refused with a coming-later message.
-  Three one-click loop starters also join the "/" popover.
+  Three one-click loop starters also join the "/" popover, and
+  `/loop --flowchart <goal>` asks a model to draft the chain — the
+  proposal lands back in the composer as an ordinary `--steps` command
+  to review and edit before anything runs.
 - **Loop helpers (phase 2A).** A loop's "continue" decision can now ask
   for up to 3 parallel helpers, each a normal tracked run in its own
   conversation with the loop's frozen permissions and cancel scope,

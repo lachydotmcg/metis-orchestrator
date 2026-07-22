@@ -5486,6 +5486,9 @@ function SessionComposer({
   // cannot host this: it closes the moment a space is typed, which is exactly
   // when the arguments start.
   const [attachmentNotice, setAttachmentNotice] = useState<string | null>(null);
+  /** True while "--flowchart" is waiting on the drafting model. Shown in the
+   *  loop hint strip; the inserted chain replaces the prompt when it lands. */
+  const [chainDrafting, setChainDrafting] = useState(false);
   const loopCommand = useMemo(() => parseLoopCommand(prompt), [prompt]);
   const loopHint = useMemo(() => describeLoopCommand(loopCommand), [loopCommand]);
   // Clears the moment they change the prompt or the attachments, so a refusal
@@ -5690,7 +5693,12 @@ function SessionComposer({
     // leaves what you typed in the box so you can fix the flag rather than
     // retype the goal. The hint strip is already showing why it will not run.
     if (loopCommand.isLoopCommand) {
-      if (loopCommand.error || !loopCommand.parts?.goal) return;
+      if (loopCommand.error) return;
+      const loopParts = loopCommand.parts;
+      // A steps-only chain needs no goal text — the chain IS the goal
+      // (createLoop labels the record with it). Only a command with neither
+      // goal nor chain has nothing to run.
+      if (!loopParts || (!loopParts.goal && !loopParts.steps)) return;
       // Attachments are NOT silently discarded. A loop has no path to carry
       // images today (createLoop takes no attachments), so quietly dropping a
       // file someone deliberately attached would lose their work with no sign
@@ -5701,8 +5709,33 @@ function SessionComposer({
         );
         return;
       }
+      // --flowchart (docs/FLOWCHART_LOOPS_DESIGN.md): a model drafts the
+      // chain, and the SAME STRING you would have typed lands back in the
+      // composer for review. Nothing runs until you press enter on it.
+      if (loopParts.flowchart) {
+        if (!window.metisLoops?.draftChain) {
+          setAttachmentNotice("Drafting a chain needs the desktop app.");
+          return;
+        }
+        setChainDrafting(true);
+        void window.metisLoops
+          .draftChain(loopParts.goal)
+          .then((result) => {
+            setChainDrafting(false);
+            if (result.chain) {
+              setPrompt(`/loop --steps "${result.chain}" ${loopParts.goal}`);
+            } else {
+              setAttachmentNotice(result.error ?? "Could not draft a chain.");
+            }
+          })
+          .catch(() => {
+            setChainDrafting(false);
+            setAttachmentNotice("Could not draft a chain.");
+          });
+        return;
+      }
       setPrompt("");
-      void onStartLoop(loopCommand.parts);
+      void onStartLoop(loopParts);
       return;
     }
 
@@ -5747,7 +5780,11 @@ function SessionComposer({
       ) : null}
       {loopCommand.isLoopCommand ? (
         <div className="composer-loop-hint" role="status">
-          {attachmentNotice ? (
+          {chainDrafting ? (
+            <span className="composer-loop-lede">
+              <Loader2 size={11} className="spin" /> Asking a model to draft the chain — it lands here for review
+            </span>
+          ) : attachmentNotice ? (
             <span className="composer-loop-error">{attachmentNotice}</span>
           ) : loopCommand.error ? (
             <span className="composer-loop-error">{loopCommand.error}</span>

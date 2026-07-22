@@ -13,7 +13,10 @@ per-turn helper cap), the flattened chain at 8 because it replays every turn, an
 helper lifetime allowance cannot fit settles the loop as exhausted rather than parking it forever
 on members that never launched. Parentheses (a branch that is itself a chain) are still refused
 with a coming-later message — that needs per-branch program counters. `--flowchart <goal>`
-(AI-authored chains) is not built. No recorded live run yet.
+shipped too: a model drafts a chain (validated by the SAME parser a typed one goes through) and
+the composer receives `/loop --steps "<chain>" <goal>` for review — one syntax, the generated
+path is just a first draft of the typed one, exactly as the section below argues. No recorded
+live run yet.
 
 The rest of this document is the original design note, kept as written.
 

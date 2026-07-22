@@ -69,10 +69,30 @@ export interface LoopCommandParts {
    *  needs per-branch program counters that do not exist yet. The loop back
    *  to the start is implicit. */
   steps?: LoopStepPosition[];
+  /** "--flowchart" (docs/FLOWCHART_LOOPS_DESIGN.md): ask a model to PROPOSE
+   *  a step chain for the goal. The proposal comes back as the same string
+   *  the user would have typed — inserted into the composer for review and
+   *  editing, never run directly. Mutually exclusive with --steps. */
+  flowchart?: boolean;
 }
 
 /** One position in a step chain: a single step, or a parallel group. */
 export type LoopStepPosition = string | string[];
+
+/** Extracts the chain line out of a model's chain-drafting reply: think
+ *  blocks dropped, the LAST non-empty line taken (models preamble before
+ *  their answer), surrounding quotes stripped. Validation happens in
+ *  parseStepChain afterwards — this only isolates the candidate line. */
+export function cleanDraftedChain(raw: string): string {
+  const lines = raw
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/i, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const line = lines.length ? lines[lines.length - 1] : "";
+  return line.replace(/^["'`]+|["'`]+$/g, "").trim();
+}
 
 /** Step-count ceiling for "--steps", counted over every step INCLUDING group
  *  members. The chain is replayed into every wake prompt, so a long cycle
@@ -256,7 +276,12 @@ export function parseLoopCommand(text: string): LoopCommandParse {
       continue;
     }
 
-    if (lower === "--steps" || lower === "--flowchart") {
+    if (lower === "--flowchart") {
+      parts.flowchart = true;
+      continue;
+    }
+
+    if (lower === "--steps") {
       const first = tokens[index + 1];
       if (first === undefined) return { isLoopCommand: true, error: '--steps needs a chain, like --steps "read -> plan -> implement".' };
       // The tokenizer split on whitespace, so a quoted chain arrives in
@@ -292,6 +317,12 @@ export function parseLoopCommand(text: string): LoopCommandParse {
   }
 
   parts.goal = goalWords.join(" ").trim();
+  if (parts.flowchart && parts.steps) {
+    return { isLoopCommand: true, error: "--flowchart asks a model to draft the chain; --steps supplies one. Pick one." };
+  }
+  if (parts.flowchart && !parts.goal) {
+    return { isLoopCommand: true, error: "--flowchart needs a goal to draft a chain for, like /loop --flowchart tidy the docs." };
+  }
   return { isLoopCommand: true, parts };
 }
 
@@ -327,6 +358,14 @@ export function describeLoopCommand(parse: LoopCommandParse): LoopCommandHintSeg
     segments.push({
       label: `${countChainSteps(parts.steps)}-step cycle`,
       meaning: truncate(formatStepChain(parts.steps), 60),
+      typed: true
+    });
+  }
+
+  if (parts.flowchart) {
+    segments.push({
+      label: "AI-drafted chain",
+      meaning: "a model proposes the steps; you review before anything runs",
       typed: true
     });
   }

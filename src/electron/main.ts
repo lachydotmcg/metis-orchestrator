@@ -107,8 +107,10 @@ import {
   LOOP_COMMAND_MAX_INTERVAL_SECONDS,
   LOOP_COMMAND_MAX_STEPS,
   LOOP_COMMAND_MIN_BUDGET_TOKENS,
+  cleanDraftedChain,
   countChainSteps,
   formatStepChain,
+  parseStepChain,
   type LoopStepPosition
 } from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
@@ -10883,6 +10885,43 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   return finalRecord;
 }
 
+/** "--flowchart" (docs/FLOWCHART_LOOPS_DESIGN.md): asks a model to PROPOSE a
+ *  step chain for a goal. The reply is validated by the SAME parser a typed
+ *  chain goes through, and what comes back is the same string the user would
+ *  have typed — the renderer inserts it into the composer for review, and
+ *  nothing runs until the user presses enter on it. Local-first: the drafting
+ *  call goes through followupInvokerFor's default local ref, same as
+ *  follow-ups and titles, because a plan draft is not worth cloud spend. */
+async function draftLoopStepChain(goal: string): Promise<{ chain?: string; error?: string }> {
+  const trimmed = typeof goal === "string" ? goal.trim() : "";
+  if (!trimmed) return { error: "A chain needs a goal to be drafted for." };
+  try {
+    const prompt = [
+      "Propose a short ordered plan for the goal below, as ONE line of steps.",
+      "",
+      "Rules:",
+      '- 2 to 6 steps separated by " -> ".',
+      '- A step may pair two parallel tasks with " & ".',
+      "- Each step under 60 characters, imperative, concrete.",
+      "- No parentheses, no numbering, no commentary. Reply with the single line only.",
+      "",
+      `GOAL: ${trimmed.slice(0, 500)}`
+    ].join("\n");
+    const result = await followupInvokerFor()(prompt);
+    if (!result || result.source === "placeholder") {
+      return { error: "No model was reachable to draft a chain. Ollama running, or a provider key configured?" };
+    }
+    const line = cleanDraftedChain(result.output);
+    const parsed = parseStepChain(line);
+    if (parsed.error || !parsed.steps) {
+      return { error: `The model's draft did not survive validation (${parsed.error ?? "empty reply"}). Try again, or type the chain with --steps.` };
+    }
+    return { chain: formatStepChain(parsed.steps) };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** One tick of a loop parked on (or arriving at) a parallel step group.
  *
  *  Three shapes, decided by `currentGroup`:
@@ -13633,6 +13672,7 @@ app.whenReady().then(async () => {
       createLoop({ ...input, origin: "app" })
   );
   ipcMain.handle("metis-loops:usage", (_event, id: string) => loopUsageTotals(id));
+  ipcMain.handle("metis-loops:draft-chain", (_event, goal: string) => draftLoopStepChain(goal));
   ipcMain.handle("metis-loops:stop", (_event, id: string, reason?: string) => stopLoop(id, reason));
   ipcMain.handle("metis-loops:delete", (_event, id: string) => deleteLoop(id));
   // DRILL_PLAN B12.2/B12.7 — usage metering + limits. summary is read-only
