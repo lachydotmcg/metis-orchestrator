@@ -12,7 +12,7 @@
 
 import { fromBuild, section, check, summary } from "../harness.mjs";
 
-const { isEditIntent } = await fromBuild("shared/intent-and-paths.js");
+const { isEditIntent, isBuildQuestionGuard, hasStrongImperativeBuildLead } = await fromBuild("shared/intent-and-paths.js");
 
 section("Refactoring vocabulary must route as an EDIT");
 for (const prompt of [
@@ -49,6 +49,25 @@ for (const prompt of [
 section("A bare noun is not an instruction");
 check("the button", isEditIntent("the button"), false);
 check("the header styling", isEditIntent("the header styling"), false);
+
+section("QUESTION GUARD — statements opening with 'when'/'where' are not questions");
+// The live miss this pins (devbox run B, 2026-07-21): a bug report opening
+// with a temporal clause and ending in a direct edit order was read as a
+// question and routed to chat — the user got a plan instead of changed files.
+check("'When something goes wrong... Improve that.' is NOT a question",
+  isBuildQuestionGuard("When something goes wrong in this app the user gets no feedback at all - failed requests just vanish. It feels unfinished. Improve that."), false);
+check("'When I click the button nothing happens - fix it' is NOT a question",
+  isBuildQuestionGuard("When I click the button nothing happens - fix it"), false);
+check("'When did I create this file' IS a question", isBuildQuestionGuard("When did I create this file"), true);
+check("'Where is the config loaded' IS a question", isBuildQuestionGuard("Where is the config loaded"), true);
+check("'What was the name of the site I asked you to create' IS a question",
+  isBuildQuestionGuard("What was the name of the site I asked you to create"), true);
+check("'How many functions does app.js define?' IS a question", isBuildQuestionGuard("How many functions does app.js define?"), true);
+check("advisory 'Walk me through the architecture' IS guarded", isBuildQuestionGuard("Walk me through the architecture of this project"), true);
+check("direct build lead beats advisory tail",
+  isBuildQuestionGuard("Build me a landing page and walk me through what you did"), false);
+check("imperative lead helper agrees", hasStrongImperativeBuildLead("Build me a landing page"), true);
+check("prose mention is not a lead", hasStrongImperativeBuildLead("I have been helping design a feature"), false);
 
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);

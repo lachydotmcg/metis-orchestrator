@@ -56,6 +56,43 @@ export function isEditIntent(prompt: string): boolean {
   return EDIT_INTENT_PATTERN.test(prompt);
 }
 
+// Advisory/explanatory asks — "walk me through...", "explain...", "give me a
+// skeleton..." — want an ANSWER in chat, not a file-writing build run. These
+// prompts often mention a build verb or artifact noun somewhere in the prose,
+// which is exactly what makes them slip past the plain build/edit heuristics.
+// Moved here from main.ts (2026-07-21) so the offline suites can pin the
+// question-guard behaviour — it had a live miss the day it moved.
+export const ADVISORY_INTENT_RE =
+  /\b(?:walk (?:me )?through|talk (?:me )?through|explain|describe|outline|how (?:would|do|should|can) i\b|how to\b|what(?:'s| is| are| should| would) the best\b|give me (?:a|an)\b[\s\S]{0,40}?\b(?:skeleton|example|outline|overview|rundown|starting point|sketch|idea)\b|help me (?:understand|think|plan|design)\b|should i\b)/i;
+
+/** True when the prompt OPENS with an unambiguous, direct build order, which
+ *  outranks advisory-sounding phrasing later in the same prompt. */
+export function hasStrongImperativeBuildLead(prompt: string): boolean {
+  return /^\s*(?:build|make|create|design|generate|develop|scaffold|implement)\b(?:\s+(?:me|us))?\s+(?:a|an|the)\b/i.test(prompt);
+}
+
+/** True for prompts that are QUESTIONS about the project rather than orders
+ *  to change it — the guard that keeps "what's the status of my site?" from
+ *  triggering a build.
+ *
+ *  "when" and "where" are deliberately NOT in the plain opener list: they
+ *  open subordinate clauses in ordinary statements — live devbox run B
+ *  (2026-07-21) began "When something goes wrong in this app..." and ended
+ *  "Improve that.", a direct edit order, and the old opener rule routed it
+ *  to chat where the user got a plan instead of changed files. Interrogative
+ *  "when/where" is followed by an auxiliary ("When did I...", "Where is
+ *  the..."), and only that form is guarded. */
+export function isBuildQuestionGuard(prompt: string): boolean {
+  const trimmed = prompt.trim();
+  if (/^\s*(what|which|who|whose|why|how|did|was|were|is|are|does|do)\b/i.test(trimmed)) return true;
+  if (/^\s*(when|where)\s+(did|does|do|is|are|was|were|will|would|can|could|should|has|have|had|am)\b/i.test(trimmed)) return true;
+  if (/\?\s*$/.test(trimmed) && /\b(asked|created|built|made|generated|wrote)\b/i.test(trimmed)) return true;
+  // Advisory ask wins UNLESS the prompt itself opens with a direct
+  // imperative build order — then the direct order is the primary ask.
+  if (ADVISORY_INTENT_RE.test(trimmed) && !hasStrongImperativeBuildLead(trimmed)) return true;
+  return false;
+}
+
 export function sameResolvedPath(a: string, b: string): boolean {
   return resolve(a).toLowerCase() === resolve(b).toLowerCase();
 }

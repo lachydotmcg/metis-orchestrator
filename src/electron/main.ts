@@ -116,7 +116,7 @@ import {
 import { runCliMode, type CliRuntime } from "./cli.js";
 // Lifted out of this file so the test suite can exercise the REAL predicates
 // rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
-import { clampPermissionMode, isEditIntent, isPathInside, sameResolvedPath } from "../shared/intent-and-paths.js";
+import { clampPermissionMode, isBuildQuestionGuard, isEditIntent, isPathInside, sameResolvedPath } from "../shared/intent-and-paths.js";
 import { lineDiffCounts } from "../shared/line-diff.js";
 import { pickDepthRung } from "../shared/depth-stack.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
@@ -3574,42 +3574,12 @@ function isBuildOptOut(prompt: string): boolean {
   return /\b(without (generating|creating|building|writing|changing) (anything|any files?|code)|don'?t (build|create|generate|write|touch)|just (tell|show|explain|answer)|no code|status of)\b/i.test(prompt);
 }
 
-// Advisory/explanatory asks — "walk me through...", "explain...", "give me a
-// skeleton..." — want an ANSWER in chat, not a file-writing build run. These
-// prompts often mention a build verb or artifact noun somewhere in the prose
-// (e.g. "...helping me design a feature...local-first Electron app...") which
-// is exactly what makes them slip past the plain build/edit heuristics: those
-// heuristics (hasImperativeBuildIntent, isEditIntent) match a verb or noun
-// ANYWHERE in the text, not the actual intent of the sentence. Anchored with
-// \b so short substrings inside unrelated words don't trip it.
-const ADVISORY_INTENT_RE =
-  /\b(?:walk (?:me )?through|talk (?:me )?through|explain|describe|outline|how (?:would|do|should|can) i\b|how to\b|what(?:'s| is| are| should| would) the best\b|give me (?:a|an)\b[\s\S]{0,40}?\b(?:skeleton|example|outline|overview|rundown|starting point|sketch|idea)\b|help me (?:understand|think|plan|design)\b|should i\b)/i;
-
-// A prompt that OPENS with an imperative build verb aimed at the assistant
-// ("build me a landing page", "create the app", "make me a website") is an
-// unambiguous, direct build/edit order even if it also contains
-// advisory-sounding phrasing later on ("...walk me through what you did").
-// This is deliberately narrower than hasImperativeBuildIntent, which matches
-// a build verb and an artifact noun anywhere in the prompt (so it already
-// fires, incorrectly, on prose like "...helping me design a feature...
-// Electron app..." even though nothing there is a direct order) — here we
-// only look at how the prompt actually opens, which is a much stronger and
-// less ambiguous signal that "build/change my project" is the primary ask.
-function hasStrongImperativeBuildLead(prompt: string): boolean {
-  return /^\s*(?:build|make|create|design|generate|develop|scaffold|implement)\b(?:\s+(?:me|us))?\s+(?:a|an|the)\b/i.test(prompt);
-}
-
-function isBuildQuestionGuard(prompt: string): boolean {
-  const trimmed = prompt.trim();
-  if (/^\s*(what|which|who|whose|when|where|why|how|did|was|were|is|are|does|do)\b/i.test(trimmed)) return true;
-  if (/\?\s*$/.test(trimmed) && /\b(asked|created|built|made|generated|wrote)\b/i.test(trimmed)) return true;
-  // Advisory ask ("walk me through...", "give me a skeleton...") wins UNLESS
-  // the prompt itself opens with a direct imperative build order — in which
-  // case the direct order is the primary ask and normal build/edit routing
-  // applies.
-  if (ADVISORY_INTENT_RE.test(trimmed) && !hasStrongImperativeBuildLead(trimmed)) return true;
-  return false;
-}
+// ADVISORY_INTENT_RE, hasStrongImperativeBuildLead and isBuildQuestionGuard
+// moved to shared/intent-and-paths.ts (2026-07-21) so the offline suites can
+// pin them. The move was forced by a live miss: devbox run B opened "When
+// something goes wrong in this app..." and ended with a direct edit order,
+// and the old opener rule here read leading "when" as a question — a routing
+// guard nobody can test is a routing guard that drifts. Imported at the top.
 
 function shouldCreateFrontendProject(prompt: string, decision: RouteDecision): boolean {
   if (isBuildOptOut(prompt)) return false;
@@ -8909,7 +8879,22 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   if (!forceBuildPipeline && !input.modelOverride && (await readStoreValue<boolean>("modelDrivenRoutingEnabled", false))) {
     const modelRouteDecision = await classifyRouteWithModel(classifyPrompt, editableProject);
     if (modelRouteDecision) {
-      modelBuildPipelineDecision = modelRouteDecision.mode !== "chat" && !isBuildOptOut(classifyPrompt);
+      if (modelRouteDecision.mode !== "chat") {
+        modelBuildPipelineDecision = !isBuildOptOut(classifyPrompt);
+      } else if (isEditIntent(classifyPrompt) && editableProject) {
+        // The classifier may WIDEN routing (send build-ish prompts the regex
+        // missed to the pipeline) but never SUPPRESS a deterministic edit:
+        // live devbox run B (2026-07-21) asked to "improve" error feedback on
+        // a project full of source files, the classifier judged it chat, and
+        // the user got a plan instead of changed files — the exact
+        // hallucination-adjacent failure the edit gate exists to prevent.
+        // Leaving the decision null falls through to shouldRunBuildPipeline,
+        // whose advisory guards (PF2) still apply in full.
+        modelBuildPipelineDecision = null;
+        emitTimeline(stream, timelineText("Router model said chat, but this reads as an edit to the selected project — checking the edit gate."));
+      } else {
+        modelBuildPipelineDecision = false;
+      }
       modelJudgedDepth = modelRouteDecision.depth ?? null;
       emitTimeline(stream, timelineText(`Router model chose: ${modelRouteDecision.mode}${modelRouteDecision.depth ? `, depth ${modelRouteDecision.depth}` : ""}.`));
     }
