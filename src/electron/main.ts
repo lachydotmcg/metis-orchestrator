@@ -5948,6 +5948,172 @@ function wantsProjectPreview(prompt: string): boolean {
   return !/\b(build|creat|mak\w|generat|design|develop|cod\w|implement|scaffold)\w*\b/i.test(prompt);
 }
 
+// --- Image generation (Lachy, 2026-07-21: "a default route for image
+// generation... web search the latest models and add them in").
+//
+// Researched July 2026: GPT Image 2 is the arena leader (OpenAI
+// /v1/images/generations, token-priced, ≈$0.03–0.06/image); Gemini 3.1 Flash
+// Image "Nano Banana 2" (≈$0.045–0.15/image) and Gemini 3 Pro Image "Nano
+// Banana Pro" (≈$0.04–0.24/image) generate via generateContent with inlineData
+// base64 replies. FLUX.2 (Black Forest Labs, api.bfl.ai, x-key header) is the
+// strong fourth but needs a NEW provider entry + secret slot — recorded as the
+// follow-up rather than half-wired. The default route is Gemini Flash Image:
+// cheapest of the set and rides an already-configured key.
+interface ImageRouteRef {
+  provider: "openai" | "gemini";
+  model: string;
+  label: string;
+}
+
+const IMAGE_MODEL_CATALOG: ImageRouteRef[] = [
+  { provider: "gemini", model: "gemini-3.1-flash-image", label: "Nano Banana 2 (Gemini 3.1 Flash Image)" },
+  { provider: "gemini", model: "gemini-3-pro-image-preview", label: "Nano Banana Pro (Gemini 3 Pro Image)" },
+  { provider: "openai", model: "gpt-image-2", label: "GPT Image 2" }
+];
+
+/** Store key "imageRoute" holds a {provider, model} pair; anything not in the
+ *  catalog falls back to the default so a stale store can never route an
+ *  image call at a chat model. */
+async function readImageRoute(): Promise<ImageRouteRef> {
+  const stored = await readStoreValue<Partial<ImageRouteRef> | null>("imageRoute", null);
+  const match = stored ? IMAGE_MODEL_CATALOG.find((entry) => entry.provider === stored.provider && entry.model === stored.model) : undefined;
+  return match ?? IMAGE_MODEL_CATALOG[0];
+}
+
+/** True for prompts that ask for a PICTURE, not code that draws one — the
+ *  code-noun guard keeps "create an icon component" and "make the logo CSS"
+ *  in the normal pipelines. */
+function isImageGenIntent(prompt: string): boolean {
+  if (/\b(component|stylesheet|css|html|jsx|tsx|svg (code|markup|file)|favicon)\b/i.test(prompt)) return false;
+  return (
+    /\b(generate|create|make|draw|design|render|produce|paint)\b[\s\S]{0,60}?\b(image|picture|photo|photograph|logo|illustration|icon|artwork|wallpaper|banner|poster|sprite|texture|portrait|painting)\b/i.test(prompt) ||
+    /\ban? (image|picture|illustration|photo) of\b/i.test(prompt)
+  );
+}
+
+async function invokeImageGeneration(route: ImageRouteRef, prompt: string): Promise<{ base64: string; mimeType: string }> {
+  const secret = await readProviderSecret(route.provider);
+  if (!secret) {
+    throw new Error(`The image route (${route.label}) needs a ${providerInfo[route.provider].label} API key — add one in Settings > Providers.`);
+  }
+  if (route.provider === "openai") {
+    const response = await fetchJson<{ data?: Array<{ b64_json?: string }> }>("https://api.openai.com/v1/images/generations", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
+      body: JSON.stringify({ model: route.model, prompt, n: 1, size: "1024x1024" })
+    });
+    const b64 = response.data?.[0]?.b64_json;
+    if (!b64) throw new Error("OpenAI returned no image data.");
+    return { base64: b64, mimeType: "image/png" };
+  }
+  const response = await fetchJson<{
+    candidates?: Array<{ content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> } }>;
+  }>(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(route.model)}:generateContent?key=${encodeURIComponent(secret)}`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }] }] })
+  });
+  const part = response.candidates?.flatMap((candidate) => candidate.content?.parts ?? []).find((entry) => entry.inlineData?.data);
+  if (!part?.inlineData?.data) throw new Error("Gemini returned no image data.");
+  return { base64: part.inlineData.data, mimeType: part.inlineData.mimeType || "image/png" };
+}
+
+/** "Generate an image of X" is neither a chat turn nor a build — it is one
+ *  provider call and one NEW file write. Images are always written as new
+ *  timestamped files (never overwriting), which is why this path does not
+ *  need the CORE.5 snapshot machinery. */
+async function runImageGenerationRequest(args: {
+  input: SessionRunInput;
+  prompt: string;
+  conversationId: string;
+  createdAt: string;
+  promptHash: string;
+  decision: PolicyDecisionResult;
+  stream?: SessionStreamController;
+}): Promise<SessionRun> {
+  const { input, prompt, conversationId, createdAt, promptHash, decision, stream } = args;
+  const route = await readImageRoute();
+  emitTimeline(stream, timelineText(`Generating an image with ${route.label}.`));
+  emitTimeline(stream, { id: randomUUID(), kind: "route", label: route.label, pipelineName: "Image Generation" });
+
+  const workspace = await resolveActiveProjectWorkspace(input.projectPath, input.conversationId);
+  const operations: AgentOperation[] = [];
+  const warnings: string[] = [];
+  let assistantText: string;
+  let servedBy = route;
+  try {
+    // The image route is a CHAIN, like every other route in Metis: the
+    // configured model leads, the rest of the catalog stands behind it. The
+    // first live run proved why — a free-tier Gemini key 429s with limit 0
+    // on image models, and dying on the first rung when another configured
+    // provider could serve is the one failure mode this app exists to avoid.
+    const chain = [route, ...IMAGE_MODEL_CATALOG.filter((entry) => entry.provider !== route.provider || entry.model !== route.model)];
+    let image: { base64: string; mimeType: string } | null = null;
+    const chainErrors: string[] = [];
+    for (const candidate of chain) {
+      try {
+        image = await invokeImageGeneration(candidate, prompt);
+        servedBy = candidate;
+        break;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        chainErrors.push(`${candidate.label}: ${message.slice(0, 200)}`);
+        emitTimeline(stream, timelineText(`${candidate.label} could not serve this (${message.slice(0, 120)}). Trying the next image model.`));
+      }
+    }
+    if (!image) throw new Error(chainErrors.join(" · "));
+    const ext = image.mimeType.includes("jpeg") ? "jpg" : image.mimeType.includes("webp") ? "webp" : "png";
+    const dir = workspace ? join(workspace.path, "images") : join(app.getPath("userData"), "metis-store", "generated-projects", "images");
+    await mkdir(dir, { recursive: true });
+    const fileName = `metis-image-${Date.now()}.${ext}`;
+    const target = join(dir, fileName);
+    const bytes = Buffer.from(image.base64, "base64");
+    await writeFile(target, bytes);
+    const op: AgentOperation = {
+      id: randomUUID(),
+      kind: "file_create",
+      label: `Generated ${fileName}`,
+      target,
+      status: "complete",
+      permission: "filesystem.write",
+      detail: `${Math.round(bytes.length / 1024)} KB · ${servedBy.label}`
+    };
+    operations.push(op);
+    emitStream(stream, { kind: "operation", operation: op });
+    emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Image written", operationIds: [op.id] });
+    assistantText = `I generated the image with ${servedBy.label} and saved it to ${target}.`;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    assistantText = `No image model could serve this. ${message}`;
+    warnings.push(message);
+  }
+
+  const run: SessionRun = {
+    id: randomUUID(),
+    conversationId,
+    createdAt,
+    completedAt: new Date().toISOString(),
+    promptSha256: promptHash,
+    promptPreview: prompt.slice(0, 180),
+    rawPromptStored: false,
+    projectPath: workspace?.path ?? input.projectPath,
+    pipelineName: "Image Generation",
+    routeLabel: servedBy.label,
+    decision,
+    operations,
+    steps: [
+      { id: "route", label: "Route to the image model", detail: `Selected ${route.label} from the image route setting.`, status: "complete" },
+      { id: "provider", label: "Generate the image", detail: `${route.provider} / ${route.model}`, status: warnings.length ? "error" : "complete" }
+    ],
+    assistantText,
+    warnings
+  };
+  await appendRunToConversation(run, prompt);
+  await writeSessionRun(run, input);
+  emitStream(stream, { kind: "complete", run });
+  return run;
+}
+
 /** Serves the selected project folder on the shared static preview server and
  *  returns a lightweight run whose outputUrl opens the preview rail. */
 async function runPreviewRequest(args: {
@@ -8851,6 +9017,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // An explicit /orchestration command always wins over the preview pre-gate.
   if (!forceBuildPipeline && wantsProjectPreview(classifyPrompt)) {
     return runPreviewRequest({ input, prompt, conversationId, createdAt, promptHash, decision: effectiveDecisionResult, stream });
+  }
+
+  // "Generate an image of X" routes to the image model, not a chat model
+  // describing an image it cannot make or a build pipeline writing SVG. An
+  // explicit /orchestration still wins, same as the preview pre-gate above.
+  if (!forceBuildPipeline && isImageGenIntent(classifyPrompt)) {
+    return runImageGenerationRequest({ input, prompt, conversationId, createdAt, promptHash, decision: effectiveDecisionResult, stream });
   }
 
   // Hoisted so shouldRunBuildPipeline's edit-intent rule can consult folder

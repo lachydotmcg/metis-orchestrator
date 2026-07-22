@@ -8505,7 +8505,10 @@ function resolveNodeDepths(node: GraphNode): DepthRung[] {
       if (depthStageRefFor(chosen) === null) {
         return { level, label: `${chosen.model} cannot be routed here, level default applies`, implied: true, unroutable: true };
       }
-      return { level, label: chosen.model, provider: chosen.provider, implied: !pick };
+      // L1 inheriting the node's own primary is NOT an implied fallback — it
+      // IS the node (Lachy: "greyed out usually isn't a good thing"). Only a
+      // rung with no model at all renders dim.
+      return { level, label: chosen.model, provider: chosen.provider, implied: false };
     }
     return { level, label: fallback, implied: true };
   };
