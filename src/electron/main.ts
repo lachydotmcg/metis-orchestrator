@@ -102,7 +102,15 @@ import {
   type LoopSpawnRequest,
   type LoopSpawnedAgent
 } from "./loops.js";
-import { LOOP_COMMAND_MAX_INTERVAL_SECONDS, LOOP_COMMAND_MAX_STEPS, LOOP_COMMAND_MIN_BUDGET_TOKENS } from "../shared/loop-command.js";
+import {
+  LOOP_COMMAND_MAX_GROUP,
+  LOOP_COMMAND_MAX_INTERVAL_SECONDS,
+  LOOP_COMMAND_MAX_STEPS,
+  LOOP_COMMAND_MIN_BUDGET_TOKENS,
+  countChainSteps,
+  formatStepChain,
+  type LoopStepPosition
+} from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 // Lifted out of this file so the test suite can exercise the REAL predicates
 // rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
@@ -10379,22 +10387,38 @@ async function createLoop(input: {
   origin?: LoopRecord["origin"];
   fixedIntervalSeconds?: number;
   budgetTokens?: number;
-  steps?: string[];
+  steps?: LoopStepPosition[];
 }): Promise<LoopRecord> {
   // Flowchart steps (docs/FLOWCHART_LOOPS_DESIGN.md), re-validated here
-  // because this is reachable over IPC: strings only, trimmed, capped, and a
-  // chain of fewer than two real steps is no chain at all.
-  const steps = Array.isArray(input.steps)
-    ? input.steps
+  // because this is reachable over IPC: each position is a trimmed string or
+  // a capped group of them, empty positions drop, the flattened chain stays
+  // under the replay-cost cap, and fewer than two positions is no chain.
+  const normalisePosition = (position: unknown): LoopStepPosition | null => {
+    if (typeof position === "string") {
+      const text = position.replace(/\s+/g, " ").trim();
+      return text || null;
+    }
+    if (Array.isArray(position)) {
+      const members = position
         .filter((step): step is string => typeof step === "string")
         .map((step) => step.replace(/\s+/g, " ").trim())
         .filter(Boolean)
-        .slice(0, LOOP_COMMAND_MAX_STEPS)
+        .slice(0, LOOP_COMMAND_MAX_GROUP);
+      if (!members.length) return null;
+      return members.length === 1 ? members[0] : members;
+    }
+    return null;
+  };
+  let validSteps: LoopStepPosition[] | undefined = Array.isArray(input.steps)
+    ? input.steps.map(normalisePosition).filter((position): position is LoopStepPosition => position !== null)
     : undefined;
-  const validSteps = steps && steps.length >= 2 ? steps : undefined;
+  if (validSteps) {
+    while (validSteps.length > 0 && countChainSteps(validSteps) > LOOP_COMMAND_MAX_STEPS) validSteps = validSteps.slice(0, -1);
+    if (validSteps.length < 2) validSteps = undefined;
+  }
   // A steps-only command has no separate goal text; the chain IS the goal,
   // and doubles as the record's label in the panel and audit log.
-  const goal = (typeof input.goal === "string" ? input.goal.trim() : "") || (validSteps ? validSteps.join(" -> ") : "");
+  const goal = (typeof input.goal === "string" ? input.goal.trim() : "") || (validSteps ? formatStepChain(validSteps) : "");
   if (!goal) throw new Error("A loop needs a goal.");
 
   // The ceiling is the only thing standing between a caller-supplied number
@@ -10602,6 +10626,16 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     return settled;
   }
 
+  // Flowchart "&" groups (docs/FLOWCHART_LOOPS_DESIGN.md): a group position
+  // launches its members as phase 2A helpers instead of running a work turn,
+  // then parks until every member finishes. Handled after the terminal and
+  // budget checks above, so a group launch is still bounded by everything
+  // that bounds a normal turn.
+  const positionNow = currentLoopStep(loaded);
+  if (positionNow?.kind === "group") {
+    return runLoopGroupTick(id, loaded, positionNow.members, positionNow.index);
+  }
+
   // Marked running and persisted BEFORE the call, so the UI can show a loop
   // that is genuinely working, and so a next launch can tell a mid-iteration
   // crash apart from a loop that was merely asleep (startLoopScheduler).
@@ -10633,8 +10667,10 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       // scaffolding Metis wrote to itself and must not be judged on.
       // For a flowchart loop the CURRENT STEP is this turn's goal — a "read
       // the project" step must route as reading even when a later step in the
-      // same chain says "implement".
-      routingPrompt: currentLoopStep(loaded)?.text ?? loaded.goal,
+      // same chain says "implement". A group position never reaches this
+      // call (runLoopGroupTick returns before the work turn), so the
+      // single-kind guard is belt and braces.
+      routingPrompt: positionNow?.kind === "single" ? positionNow.text : loaded.goal,
       // Its OWN cancel scope. A loop runs in whatever folder it was started from,
       // which is usually the folder the user is actively chatting in, and the
       // composer Stop cancels by project path. Without this, stopping a chat
@@ -10845,6 +10881,98 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     launchLoopWorkers(finalRecord, decision.spawn);
   }
   return finalRecord;
+}
+
+/** One tick of a loop parked on (or arriving at) a parallel step group.
+ *
+ *  Three shapes, decided by `currentGroup`:
+ *  - FRESH ARRIVAL: launch one helper per member, consume an iteration,
+ *    record it in history, park on the group. Refuses (settling exhausted)
+ *    when the helper lifetime cap cannot fit the whole group — a partial
+ *    launch would park the loop waiting for members that never started.
+ *  - WAKE, MEMBERS STILL RUNNING: keep sleeping. A pure wait check costs no
+ *    model call, so it does NOT consume an iteration; helper completions are
+ *    the wake signal and the 60s chain is the heartbeat.
+ *  - WAKE, ALL FINISHED: clear the group, advance the program counter, and
+ *    arm an immediate re-tick so the next step starts now rather than on the
+ *    next slice. Failed members do not fail the loop — their status replays
+ *    into the next wake prompt via the helper digest, where the model can
+ *    react to it. */
+async function runLoopGroupTick(id: string, loaded: LoopRecord, members: string[], positionIndex: number): Promise<LoopRecord | undefined> {
+  const now = new Date();
+
+  if (!loaded.currentGroup) {
+    const room = LOOP_MAX_SPAWNED_TOTAL - (loaded.spawnedAgents?.length ?? 0);
+    if (room < members.length) {
+      const settled: LoopRecord = {
+        ...loaded,
+        status: "exhausted",
+        stoppedReason: `the loop reached its ${LOOP_MAX_SPAWNED_TOTAL}-helper allowance before step group ${positionIndex + 1} could start`,
+        nextWakeAt: undefined
+      };
+      await persistLoop(settled);
+      await appendAudit("info", "loop.exhausted", `Loop "${loopLabel(loaded)}" ran out of helper allowance at a parallel group.`, {
+        id,
+        group: members,
+        spawned: loaded.spawnedAgents?.length ?? 0
+      });
+      return settled;
+    }
+    const startedAt = now.toISOString();
+    const index = loaded.iterations + 1;
+    const entry: LoopIterationRecord = {
+      index,
+      at: startedAt,
+      summary: `started parallel steps: ${members.join(" & ")}`,
+      decision: "continue"
+    };
+    const settled: LoopRecord = {
+      ...loaded,
+      iterations: index,
+      history: [...loaded.history, entry],
+      currentGroup: { startedAt, names: members.map((member) => member.slice(0, 40)) },
+      status: "sleeping",
+      nextWakeAt: new Date(now.getTime() + LOOP_MIN_DELAY_SECONDS * 1000).toISOString()
+    };
+    await persistLoop(settled);
+    await appendAudit("info", "loop.tick", `Loop "${loopLabel(loaded)}" launched parallel step group ${positionIndex + 1} (${members.join(" & ")}).`, {
+      id,
+      iteration: index,
+      members
+    });
+    launchLoopWorkers(settled, members.map((member) => ({ name: member.slice(0, 40), task: member })));
+    return settled;
+  }
+
+  const group = loaded.currentGroup;
+  const agents = (loaded.spawnedAgents ?? []).filter((agent) => agent.startedAt >= group.startedAt && group.names.includes(agent.name));
+  const allDone = agents.length >= group.names.length && agents.every((agent) => agent.status !== "running");
+  if (!allDone) {
+    const settled: LoopRecord = { ...loaded, status: "sleeping", nextWakeAt: new Date(now.getTime() + LOOP_MIN_DELAY_SECONDS * 1000).toISOString() };
+    await persistLoop(settled);
+    return settled;
+  }
+
+  const settled: LoopRecord = {
+    ...loaded,
+    currentGroup: undefined,
+    stepIndex: loaded.steps?.length ? (positionIndex + 1) % loaded.steps.length : loaded.stepIndex,
+    status: "sleeping",
+    nextWakeAt: now.toISOString()
+  };
+  await persistLoop(settled);
+  await appendAudit("info", "loop.tick", `Loop "${loopLabel(loaded)}" finished its parallel group (${agents.map((agent) => `${agent.name} ${agent.status}`).join(", ")}); moving on.`, {
+    id,
+    group: group.names
+  });
+  // This call is still inside fireLoopTick's in-flight guard, so an immediate
+  // recursive tick would bounce off it. A zero-ish timeout lands after the
+  // guard releases; the 60s chain remains the fallback if this process dies
+  // in between.
+  setTimeout(() => {
+    void fireLoopTick(id).catch(() => undefined);
+  }, 250);
+  return settled;
 }
 
 /** Launches a turn's helper requests, enforcing the lifetime cap. Fire and
@@ -13498,7 +13626,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-loops:list", () => listLoops());
   ipcMain.handle(
     "metis-loops:create",
-    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: string[] }) =>
+    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: (string | string[])[] }) =>
       // origin is forced here, never taken from the caller: a renderer must not
       // be able to mint a "cli" loop and inherit the never-resume-on-launch
       // handling that belongs to a process that has since exited.

@@ -24,6 +24,8 @@
  * Manager two actions it cannot perform.
  */
 
+import { formatStepChain, type LoopStepPosition } from "../shared/loop-command.js";
+
 /** Hard ceiling on iterations, even if a caller asks for more. A loop that
  *  needs 50 turns is a loop that has misunderstood its goal. */
 export const LOOP_MAX_ITERATIONS_CEILING = 25;
@@ -135,22 +137,40 @@ export interface LoopRecord {
    *  Persisted so the panel can show what ran unattended, and so the total
    *  cap survives restarts. */
   spawnedAgents?: LoopSpawnedAgent[];
-  /** Flowchart loop (docs/FLOWCHART_LOOPS_DESIGN.md): the ordered step chain
-   *  from "--steps", sequential in this version. Absent on a plain goal loop. */
-  steps?: string[];
+  /** Flowchart loop (docs/FLOWCHART_LOOPS_DESIGN.md): the ordered chain from
+   *  "--steps". A position is one step (string) or a parallel GROUP
+   *  (string[]) whose members run side by side as phase 2A helpers before
+   *  the chain moves on. Absent on a plain goal loop. */
+  steps?: LoopStepPosition[];
   /** Program counter into `steps`, 0-based, advanced on every continue and
    *  wrapping implicitly — a loop that reaches the end of its chain starts
    *  again, because it is a loop. Meaningless when `steps` is absent. */
   stepIndex?: number;
+  /** The parallel group currently in flight, when the chain is parked on a
+   *  group position: which helper names were launched and when. Cleared the
+   *  moment every member has finished and the counter advances. Its
+   *  presence is what tells a wake apart from a fresh arrival at the group. */
+  currentGroup?: { startedAt: string; names: string[] };
 }
 
-/** The step a flowchart loop is currently on, or null for a plain goal loop.
+/** What a flowchart loop should do THIS turn, or null for a plain goal loop.
  *  The modulo is the implicit loop-back: no stored stepIndex can point past
  *  the chain, even one written by an older or foreign build. */
-export function currentLoopStep(loop: LoopRecord): { index: number; text: string; total: number } | null {
+export type CurrentLoopStep =
+  | { kind: "single"; index: number; text: string; total: number }
+  | { kind: "group"; index: number; members: string[]; total: number };
+
+export function currentLoopStep(loop: LoopRecord): CurrentLoopStep | null {
   if (!loop.steps?.length) return null;
   const index = ((loop.stepIndex ?? 0) % loop.steps.length + loop.steps.length) % loop.steps.length;
-  return { index, text: loop.steps[index], total: loop.steps.length };
+  const position = loop.steps[index];
+  if (Array.isArray(position)) {
+    // A malformed single-member "group" (older data, foreign writer) behaves
+    // as the single step it really is rather than paying helper machinery.
+    if (position.length === 1) return { kind: "single", index, text: position[0], total: loop.steps.length };
+    return { kind: "group", index, members: position, total: loop.steps.length };
+  }
+  return { kind: "single", index, text: position, total: loop.steps.length };
 }
 
 export interface LoopDecision {
@@ -488,9 +508,12 @@ export function composeWakePrompt(loop: LoopRecord): string {
   // the class of scaffolding that once steered a run, so the cycle summary
   // sits below, terse, one line).
   const step = currentLoopStep(loop);
-  const lines: string[] = [step ? step.text : loop.goal, ""];
+  // A group position never composes a wake prompt — the tick launches its
+  // members as helpers instead of running a work turn — so the defensive
+  // join below only ever renders if a caller slips. Single steps lead.
+  const lines: string[] = [step ? (step.kind === "single" ? step.text : step.members.join(" and ")) : loop.goal, ""];
   if (step) {
-    lines.push(`(Step ${step.index + 1} of ${step.total} in a repeating cycle: ${loop.steps!.join(" -> ")}.)`, "");
+    lines.push(`(Step ${step.index + 1} of ${step.total} in a repeating cycle: ${formatStepChain(loop.steps!)}.)`, "");
   }
 
   if (loop.history.length) {

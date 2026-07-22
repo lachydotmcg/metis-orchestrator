@@ -133,6 +133,15 @@ console.log("\nFLOWCHART STEPS (currentLoopStep + wake prompt)");
   check("foreign negative index cannot escape the chain", currentLoopStep({ ...chained, stepIndex: -1 })?.index, 2);
   check("plain goal loop has no step", currentLoopStep(base), null);
   check("plain goal loop prompt unchanged", composeWakePrompt(base).split("\n")[0], base.goal);
+
+  // Parallel groups ("&"): the step resolution the group tick keys off.
+  const grouped = { ...chained, steps: ["read", ["research", "review"], "implement"], stepIndex: 1 };
+  check("group position resolves as a group", currentLoopStep(grouped),
+    { kind: "group", index: 1, members: ["research", "review"], total: 3 });
+  check("single position still resolves as single", currentLoopStep({ ...grouped, stepIndex: 2 }),
+    { kind: "single", index: 2, text: "implement", total: 3 });
+  check("one-member 'group' collapses to a single step", currentLoopStep({ ...grouped, steps: ["a", ["only"], "c"], stepIndex: 1 })?.kind, "single");
+  check("cycle line renders groups with &", composeWakePrompt({ ...grouped, stepIndex: 0 }).includes("read -> research & review -> implement"), true);
 }
 
 console.log("\nSUMMARY DIGEST");

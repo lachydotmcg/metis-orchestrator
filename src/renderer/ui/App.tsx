@@ -162,7 +162,7 @@ import type {
 import type { LoopRecord } from "../../electron/loops";
 // The SAME parser main.ts uses, so the hint strip under the composer cannot
 // promise something different from what the command will actually do.
-import { describeLoopCommand, formatLoopDuration, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
+import { describeLoopCommand, formatLoopDuration, formatStepChain, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
 
@@ -16929,7 +16929,7 @@ function ActiveLoopsPanel(): JSX.Element | null {
                   Iteration {loop.iterations} of {loop.maxIterations}
                 </span>
                 {loop.steps?.length ? (
-                  <span title={`Cycle: ${loop.steps.join(" -> ")}`}>
+                  <span title={`Cycle: ${formatStepChain(loop.steps)}`}>
                     step {(((loop.stepIndex ?? 0) % loop.steps.length) + loop.steps.length) % loop.steps.length + 1} of {loop.steps.length}
                   </span>
                 ) : null}

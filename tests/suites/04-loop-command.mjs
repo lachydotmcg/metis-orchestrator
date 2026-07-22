@@ -86,8 +86,14 @@ check("chain composes with flags", parseLoopCommand('/loop --steps "a -> b" --tu
   { goal: "", steps: ["a", "b"], turns: 4, budgetTokens: 20000 });
 check("--steps with no value", Boolean(parseLoopCommand("/loop --steps").error), true);
 check("unclosed quote refused", Boolean(parseLoopCommand('/loop --steps "read -> plan').error), true);
-check("ampersand refused with a coming-later message", /not runnable yet/.test(parseLoopCommand('/loop --steps "a & b -> c"').error ?? ""), true);
-check("parentheses refused the same way", /not runnable yet/.test(parseLoopCommand('/loop --steps "(a -> b) -> c"').error ?? ""), true);
+check("ampersand parses into a parallel group", parseLoopCommand('/loop --steps "a & b -> c"').parts?.steps, [["a", "b"], "c"]);
+check("group binds tighter than the arrow", parseLoopCommand('/loop --steps "read -> research & review -> implement"').parts?.steps,
+  ["read", ["research", "review"], "implement"]);
+check("group over the helper cap refused", Boolean(parseLoopCommand('/loop --steps "a & b & c & d -> e"').error), true);
+check("group at the helper cap ok", parseLoopCommand('/loop --steps "a & b & c -> e"').parts?.steps, [["a", "b", "c"], "e"]);
+check("empty group member refused", Boolean(parseLoopCommand('/loop --steps "a & -> b"').error), true);
+check("group members count toward the total cap", Boolean(parseStepChain("a & b & c -> d & e & f -> g -> h -> i").error), true);
+check("parentheses still refused with a coming-later message", /not runnable yet/.test(parseLoopCommand('/loop --steps "(a -> b) & c -> d"').error ?? ""), true);
 check("empty step refused", Boolean(parseLoopCommand('/loop --steps "a -> -> b"').error), true);
 check("single step refused", Boolean(parseLoopCommand('/loop --steps "just one"').error), true);
 check("nine steps over the cap", Boolean(parseStepChain("a->b->c->d->e->f->g->h->i").error), true);

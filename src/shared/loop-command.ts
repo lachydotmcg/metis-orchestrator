@@ -61,43 +61,77 @@ export interface LoopCommandParts {
    *  apply, so "no budget" never means "unbounded". */
   budgetTokens?: number;
   /** Flowchart loop (docs/FLOWCHART_LOOPS_DESIGN.md): an ordered step chain
-   *  from '--steps "read -> plan -> implement"'. Sequential only in this
-   *  version — "&" parses and is REJECTED with a coming-later message, per
-   *  the design's "reject rather than quietly serialise" rule. The loop back
+   *  from '--steps "read -> plan -> research & review -> implement"'. Each
+   *  position is either one step (string) or a parallel GROUP (string[]) —
+   *  "&" binds tighter than "->", and a group's members run as phase 2A
+   *  helpers side by side before the chain moves on. Parenthesised
+   *  multi-step branches are still refused: a branch that is itself a chain
+   *  needs per-branch program counters that do not exist yet. The loop back
    *  to the start is implicit. */
-  steps?: string[];
+  steps?: LoopStepPosition[];
 }
 
-/** Step-count ceiling for "--steps". The chain is replayed into every wake
- *  prompt, so a long cycle costs tokens on every turn forever — the design
- *  doc calls for a hard cap rather than good intentions. */
+/** One position in a step chain: a single step, or a parallel group. */
+export type LoopStepPosition = string | string[];
+
+/** Step-count ceiling for "--steps", counted over every step INCLUDING group
+ *  members. The chain is replayed into every wake prompt, so a long cycle
+ *  costs tokens on every turn forever — the design doc calls for a hard cap
+ *  rather than good intentions. */
 export const LOOP_COMMAND_MAX_STEPS = 8;
 
-/** Parses a step chain: "read -> plan -> implement". Returns an error string
- *  (for the composer to show) or the step list. "&" (parallel) and
- *  parentheses are recognised and refused with a message that says the
- *  feature is coming, not that the user typed it wrong. */
-export function parseStepChain(raw: string): { steps?: string[]; error?: string } {
+/** A parallel group's size ceiling. Mirrors LOOP_MAX_SPAWN_PER_TURN in
+ *  electron/loops.ts: each group member becomes one helper, and one turn may
+ *  not ask for more helpers than that. */
+export const LOOP_COMMAND_MAX_GROUP = 3;
+
+/** Parses a step chain: "read -> plan -> research & review -> implement".
+ *  "&" binds tighter than "->" and produces a parallel group at that
+ *  position. Parentheses (multi-step branches) are recognised and refused
+ *  with a message that says the feature is coming, not that the user typed
+ *  it wrong. Returns an error string (for the composer to show) or the
+ *  position list. */
+export function parseStepChain(raw: string): { steps?: LoopStepPosition[]; error?: string } {
   const text = raw.trim();
   if (!text) return { error: '--steps needs a chain, like --steps "read -> plan -> implement".' };
-  if (/[&()]/.test(text)) {
-    return { error: "Parallel steps (\"&\" and parentheses) are designed but not runnable yet — this version runs a sequential chain only. Rewrite the chain with \"->\"." };
+  if (/[()]/.test(text)) {
+    return { error: "Parenthesised multi-step branches are designed but not runnable yet — a branch that is itself a chain needs its own program counter. Single steps joined with \"&\" DO run in parallel." };
   }
-  const steps = text.split("->").map((step) => step.replace(/\s+/g, " ").trim());
-  if (steps.some((step) => !step)) {
-    return { error: 'The chain has an empty step — check for a doubled or trailing "->".' };
+  const positions: LoopStepPosition[] = [];
+  let flatCount = 0;
+  for (const rawPosition of text.split("->")) {
+    const members = rawPosition.split("&").map((step) => step.replace(/\s+/g, " ").trim());
+    if (members.some((step) => !step)) {
+      return { error: 'The chain has an empty step — check for a doubled or trailing "->" or "&".' };
+    }
+    if (members.length > LOOP_COMMAND_MAX_GROUP) {
+      return { error: `A parallel group is capped at ${LOOP_COMMAND_MAX_GROUP} steps — each one runs as its own helper, and one turn may not start more than that.` };
+    }
+    const tooLong = members.find((step) => step.length > 80);
+    if (tooLong) {
+      return { error: `Step "${tooLong.slice(0, 40)}…" is over 80 characters — steps are instructions, not paragraphs.` };
+    }
+    flatCount += members.length;
+    positions.push(members.length === 1 ? members[0] : members);
   }
-  if (steps.length < 2) {
-    return { error: "A chain needs at least two steps. For a single goal, plain /loop already does this." };
+  if (positions.length < 2) {
+    return { error: "A chain needs at least two positions. For a single goal, plain /loop already does this." };
   }
-  if (steps.length > LOOP_COMMAND_MAX_STEPS) {
-    return { error: `The chain is capped at ${LOOP_COMMAND_MAX_STEPS} steps — it is replayed every turn, so every extra step costs tokens forever.` };
+  if (flatCount > LOOP_COMMAND_MAX_STEPS) {
+    return { error: `The chain is capped at ${LOOP_COMMAND_MAX_STEPS} steps in total — it is replayed every turn, so every extra step costs tokens forever.` };
   }
-  const tooLong = steps.find((step) => step.length > 80);
-  if (tooLong) {
-    return { error: `Step "${tooLong.slice(0, 40)}…" is over 80 characters — steps are instructions, not paragraphs.` };
-  }
-  return { steps };
+  return { steps: positions };
+}
+
+/** "read -> a & b -> done" — the one true rendering of a chain, used by the
+ *  hint, the panel and the record label so no surface invents its own. */
+export function formatStepChain(steps: LoopStepPosition[]): string {
+  return steps.map((position) => (Array.isArray(position) ? position.join(" & ") : position)).join(" -> ");
+}
+
+/** Total step count including group members, for caps and labels. */
+export function countChainSteps(steps: LoopStepPosition[]): number {
+  return steps.reduce<number>((sum, position) => sum + (Array.isArray(position) ? position.length : 1), 0);
 }
 
 export interface LoopCommandParse {
@@ -291,8 +325,8 @@ export function describeLoopCommand(parse: LoopCommandParse): LoopCommandHintSeg
 
   if (parts.steps) {
     segments.push({
-      label: `${parts.steps.length}-step cycle`,
-      meaning: truncate(parts.steps.join(" -> "), 60),
+      label: `${countChainSteps(parts.steps)}-step cycle`,
+      meaning: truncate(formatStepChain(parts.steps), 60),
       typed: true
     });
   }

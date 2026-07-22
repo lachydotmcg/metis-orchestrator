@@ -1,14 +1,18 @@
 # Flowchart Loops
 
-**Status: SEQUENTIAL v1 SHIPPED (2026-07-21). `&` still refused, exactly as this doc planned.**
+**Status: SHIPPED (2026-07-21), including `&`. Parenthesised branches still refused.**
 
-`/loop --steps "read -> plan -> implement"` parses (`parseStepChain`, shared/loop-command.ts),
-the record carries `steps` + a wrapping `stepIndex` program counter, the current step LEADS the
-wake prompt and is the routing prompt for its turn, the cycle summary sits below it in one terse
-line, and the panel shows "step N of M" with the chain on hover. The chain is capped at 8 steps
-because it is replayed every turn. `&` and parentheses are recognised and refused with a
-coming-later message rather than a syntax error — the parallel substrate (Loops phase 2A helpers)
-now exists, so wiring `&` to it is the follow-up this doc predicted. `--flowchart <goal>`
+`/loop --steps "read -> plan -> research & review -> implement"` parses (`parseStepChain`,
+shared/loop-command.ts) into positions that are either one step or a parallel group — `&` binds
+tighter than `->`, exactly as designed below. The record carries `steps` + a wrapping `stepIndex`
+program counter; a single step LEADS the wake prompt and is the routing prompt for its turn; a
+GROUP position launches its members as phase 2A helpers instead of running a work turn, parks on
+`currentGroup` until every member finishes (completions wake it, the 60s chain is the heartbeat,
+wait-checks consume no iteration), then advances and re-ticks immediately. Groups cap at 3 (the
+per-turn helper cap), the flattened chain at 8 because it replays every turn, and a group the
+helper lifetime allowance cannot fit settles the loop as exhausted rather than parking it forever
+on members that never launched. Parentheses (a branch that is itself a chain) are still refused
+with a coming-later message — that needs per-branch program counters. `--flowchart <goal>`
 (AI-authored chains) is not built. No recorded live run yet.
 
 The rest of this document is the original design note, kept as written.
