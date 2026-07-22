@@ -143,6 +143,7 @@ interface ParsedArgs {
   respectDelays: boolean;
   everySeconds?: number;
   budgetTokens?: number;
+  conversationId?: string;
 }
 
 function usageText(): string {
@@ -169,6 +170,10 @@ function usageText(): string {
     "  --max-iterations <n>      loop only. Hard cap on how many times the loop may wake. Default 8,",
     `                             clamped to at most ${LOOP_MAX_ITERATIONS_CEILING} (src/electron/loops.ts). The loop can still stop`,
     "                             itself earlier, and usually should.",
+    "  --conversation <id>       chat/build only. Continue the conversation a previous run printed",
+    "                             (its JSON carries conversationId; human output prints it too), so",
+    "                             a multi-turn sequence gets real context carry-over instead of every",
+    "                             CLI turn starting amnesiac.",
     "  --budget <tokens>         loop only. Token ceiling across every iteration together (input +",
     "                             output, summed from the usage ledger). Accepts 50000, 200k or 1.5m.",
     '                             The loop settles as "exhausted" once its spend reaches it. No budget',
@@ -233,6 +238,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   let respectDelays = false;
   let everySeconds: number | undefined;
   let budgetTokens: number | undefined;
+  let conversationId: string | undefined;
   let helpRequested = false;
   const positionals: string[] = [];
 
@@ -299,6 +305,12 @@ function parseArgs(argv: string[]): ParsedArgs {
       projectPath = value;
       continue;
     }
+    if (token === "--conversation") {
+      const value = rest[++i];
+      if (!value) throw new CliUsageError("--conversation requires the id a previous chat/build run printed.");
+      conversationId = value;
+      continue;
+    }
     if (token === "--model") {
       const value = rest[++i];
       if (!value) throw new CliUsageError("--model requires a provider/model argument, e.g. ollama/qwen3:8b.");
@@ -363,7 +375,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   if (subcommand === "loop" && !timeoutExplicit) {
     timeoutSeconds = DEFAULT_LOOP_TIMEOUT_SECONDS;
   }
-  return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays, everySeconds, budgetTokens };
+  if (subcommand === "loop" && conversationId) {
+    throw new CliUsageError('"loop" manages its own conversation; --conversation applies to chat and build.');
+  }
+  return { subcommand, prompt, projectPath, model, json, timeoutSeconds, maxIterations, respectDelays, everySeconds, budgetTokens, conversationId };
 }
 
 function parseModelOverride(raw: string, providerInfo: CliRuntime["providerInfo"]): SessionModelOverride {
@@ -699,6 +714,7 @@ function printSummary(run: SessionRun, totalMs: number, sawMessageDelta: boolean
     })`
   );
   out(`Pipeline:    ${run.pipelineName}${run.routeLabel ? ` (${run.routeLabel})` : ""}${typeof run.depth === "number" ? ` depth=${run.depth}` : ""}`);
+  if (run.conversationId) out(`Conversation: ${run.conversationId}  (pass --conversation ${run.conversationId} to continue this thread)`);
 
   if (!sawMessageDelta) {
     out("");
@@ -756,6 +772,11 @@ async function runTurn(parsed: ParsedArgs, deps: CliRuntime): Promise<number> {
   const input: SessionRunInput = {
     prompt: promptText,
     projectPath: resolvedProjectPath,
+    // Multi-turn testing (Lachy, 2026-07-21): passing the conversationId a
+    // previous run printed continues THAT conversation, so a headless
+    // sequence exercises the same recentConversationContext injection an
+    // iterative GUI session gets. Without it every CLI turn was an amnesiac.
+    conversationId: parsed.conversationId,
     // See the module doc comment: CLI mode always uses "auto" because there
     // is no human available to answer an in-run permission or question
     // prompt. In-run prompts are still auto-resolved (not skipped) by the
