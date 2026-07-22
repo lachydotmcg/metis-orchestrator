@@ -91,6 +91,7 @@ import {
   LOOP_MAX_SPAWNED_TOTAL,
   LOOP_MIN_DELAY_SECONDS,
   composeWakePrompt,
+  currentLoopStep,
   decideLoopContinuation,
   assessLoopCapability,
   extractLoopDecision,
@@ -101,7 +102,7 @@ import {
   type LoopSpawnRequest,
   type LoopSpawnedAgent
 } from "./loops.js";
-import { LOOP_COMMAND_MAX_INTERVAL_SECONDS, LOOP_COMMAND_MIN_BUDGET_TOKENS } from "../shared/loop-command.js";
+import { LOOP_COMMAND_MAX_INTERVAL_SECONDS, LOOP_COMMAND_MAX_STEPS, LOOP_COMMAND_MIN_BUDGET_TOKENS } from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
 // Lifted out of this file so the test suite can exercise the REAL predicates
 // rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
@@ -10378,8 +10379,22 @@ async function createLoop(input: {
   origin?: LoopRecord["origin"];
   fixedIntervalSeconds?: number;
   budgetTokens?: number;
+  steps?: string[];
 }): Promise<LoopRecord> {
-  const goal = typeof input.goal === "string" ? input.goal.trim() : "";
+  // Flowchart steps (docs/FLOWCHART_LOOPS_DESIGN.md), re-validated here
+  // because this is reachable over IPC: strings only, trimmed, capped, and a
+  // chain of fewer than two real steps is no chain at all.
+  const steps = Array.isArray(input.steps)
+    ? input.steps
+        .filter((step): step is string => typeof step === "string")
+        .map((step) => step.replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .slice(0, LOOP_COMMAND_MAX_STEPS)
+    : undefined;
+  const validSteps = steps && steps.length >= 2 ? steps : undefined;
+  // A steps-only command has no separate goal text; the chain IS the goal,
+  // and doubles as the record's label in the panel and audit log.
+  const goal = (typeof input.goal === "string" ? input.goal.trim() : "") || (validSteps ? validSteps.join(" -> ") : "");
   if (!goal) throw new Error("A loop needs a goal.");
 
   // The ceiling is the only thing standing between a caller-supplied number
@@ -10421,6 +10436,8 @@ async function createLoop(input: {
     permissionMode,
     fixedIntervalSeconds: normaliseFixedInterval(input.fixedIntervalSeconds),
     budgetTokens: normaliseBudgetTokens(input.budgetTokens),
+    steps: validSteps,
+    stepIndex: validSteps ? 0 : undefined,
     capabilityWarning: capability.warning,
     status: "sleeping",
     iterations: 0,
@@ -10440,7 +10457,8 @@ async function createLoop(input: {
     permissionMode,
     origin: loop.origin,
     fixedIntervalSeconds: loop.fixedIntervalSeconds,
-    budgetTokens: loop.budgetTokens
+    budgetTokens: loop.budgetTokens,
+    steps: loop.steps
   });
   scheduleNextLoopTick();
   // Start the first turn NOW rather than waiting up to a full 60s slice. A loop
@@ -10613,7 +10631,10 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       // asked to COUNT the functions in app.js ended up rewriting it from 171
       // lines to 10. The user's intent lives in the goal; the rest is
       // scaffolding Metis wrote to itself and must not be judged on.
-      routingPrompt: loaded.goal,
+      // For a flowchart loop the CURRENT STEP is this turn's goal — a "read
+      // the project" step must route as reading even when a later step in the
+      // same chain says "implement".
+      routingPrompt: currentLoopStep(loaded)?.text ?? loaded.goal,
       // Its OWN cancel scope. A loop runs in whatever folder it was started from,
       // which is usually the folder the user is actively chatting in, and the
       // composer Stop cancels by project path. Without this, stopping a chat
@@ -10778,6 +10799,10 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
         ...advanced,
         status: "sleeping",
         lastReason: decision.reason,
+        // Flowchart loops: the program counter advances on every continue,
+        // wrapping implicitly — reaching the end of the chain starts it
+        // again, because it is a loop (docs/FLOWCHART_LOOPS_DESIGN.md).
+        stepIndex: advanced.steps?.length ? ((advanced.stepIndex ?? 0) + 1) % advanced.steps.length : advanced.stepIndex,
         nextWakeAt: new Date(finishedAt.getTime() + delaySeconds * 1000).toISOString()
       };
       await appendAudit("info", "loop.tick", `Loop "${loopLabel(advanced)}" continues after iteration ${index}.`, {
@@ -13473,7 +13498,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-loops:list", () => listLoops());
   ipcMain.handle(
     "metis-loops:create",
-    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number }) =>
+    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: string[] }) =>
       // origin is forced here, never taken from the caller: a renderer must not
       // be able to mint a "cli" loop and inherit the never-resume-on-launch
       // handling that belongs to a process that has since exited.

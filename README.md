@@ -87,7 +87,7 @@ v1 navigation is exactly four items: New session, Orchestration, Benchmark, Sett
 
 | | |
 | --- | --- |
-| **Flowchart Loops** `PLANNED` | A loop given ordered steps: `/loop --steps "read -> plan -> implement"`. Design in [`docs/FLOWCHART_LOOPS_DESIGN.md`](docs/FLOWCHART_LOOPS_DESIGN.md). |
+| **Flowchart Loops** `SHIPPED` (sequential) | A loop given ordered steps: `/loop --steps "read -> plan -> implement"`. The chain cycles; parallel `&` steps are still refused with a coming-later message. Design and status in [`docs/FLOWCHART_LOOPS_DESIGN.md`](docs/FLOWCHART_LOOPS_DESIGN.md). |
 
 Built and complete but not reachable from v1's four-item navigation: Manager, Marketplace, Routines, Gallery, Graph View, the Community feed, and two Settings sections. Un-hiding any of them is deleting a string from one `Set`. Why each is held back is in [`docs/FEATURES.md`](docs/FEATURES.md).
 

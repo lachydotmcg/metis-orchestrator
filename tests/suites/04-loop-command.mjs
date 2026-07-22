@@ -6,7 +6,7 @@
 // thing, so every malformed input must be caught BEFORE the user presses enter.
 import { fromBuild } from "../harness.mjs";
 const m = await fromBuild("shared/loop-command.js");
-const { parseLoopCommand, parseLoopDuration, formatLoopDuration, describeLoopCommand, parseTokenCount, formatTokenCount } = m;
+const { parseLoopCommand, parseLoopDuration, formatLoopDuration, describeLoopCommand, parseTokenCount, formatTokenCount, parseStepChain } = m;
 
 let pass = 0, total = 0;
 function check(label, got, want) {
@@ -74,6 +74,26 @@ check("empty", parseLoopDuration(""), null);
 check("format 900", formatLoopDuration(900), "15m");
 check("format 3600", formatLoopDuration(3600), "1h");
 check("format 90", formatLoopDuration(90), "90s");
+
+console.log("\nSTEP CHAINS (--steps, docs/FLOWCHART_LOOPS_DESIGN.md)");
+check("quoted chain parses", parseLoopCommand('/loop --steps "read the files -> plan -> implement"').parts,
+  { goal: "", steps: ["read the files", "plan", "implement"] });
+check("unquoted single-token chain", parseLoopCommand("/loop --steps read->plan->implement").parts,
+  { goal: "", steps: ["read", "plan", "implement"] });
+check("chain plus goal text", parseLoopCommand('/loop --steps "a -> b" tidy the docs').parts,
+  { goal: "tidy the docs", steps: ["a", "b"] });
+check("chain composes with flags", parseLoopCommand('/loop --steps "a -> b" --turns 4 --budget 20k').parts,
+  { goal: "", steps: ["a", "b"], turns: 4, budgetTokens: 20000 });
+check("--steps with no value", Boolean(parseLoopCommand("/loop --steps").error), true);
+check("unclosed quote refused", Boolean(parseLoopCommand('/loop --steps "read -> plan').error), true);
+check("ampersand refused with a coming-later message", /not runnable yet/.test(parseLoopCommand('/loop --steps "a & b -> c"').error ?? ""), true);
+check("parentheses refused the same way", /not runnable yet/.test(parseLoopCommand('/loop --steps "(a -> b) -> c"').error ?? ""), true);
+check("empty step refused", Boolean(parseLoopCommand('/loop --steps "a -> -> b"').error), true);
+check("single step refused", Boolean(parseLoopCommand('/loop --steps "just one"').error), true);
+check("nine steps over the cap", Boolean(parseStepChain("a->b->c->d->e->f->g->h->i").error), true);
+check("eight steps at the cap ok", parseStepChain("a->b->c->d->e->f->g->h").steps?.length, 8);
+check("hint shows the cycle", describeLoopCommand(parseLoopCommand('/loop --steps "a -> b"')).some((s) => s.label === "2-step cycle"), true);
+check("chain-driven goal hint when no goal typed", describeLoopCommand(parseLoopCommand('/loop --steps "a -> b"'))[0].label, "chain-driven");
 
 console.log("\nTOKEN COUNT PARSING");
 check("bare 50000", parseTokenCount("50000"), 50000);

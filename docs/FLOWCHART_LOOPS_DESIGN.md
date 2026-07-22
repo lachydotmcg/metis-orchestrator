@@ -1,11 +1,17 @@
 # Flowchart Loops
 
-**Status: PLANNED. Designed, not built. No code exists for this yet.**
+**Status: SEQUENTIAL v1 SHIPPED (2026-07-21). `&` still refused, exactly as this doc planned.**
 
-Nothing in this document is runnable today. There is no `--steps` flag in the shipped parser, no step
-state on a loop, and no step chain in any UI. This is the design note, written before the work, so the
-shape is settled and the tradeoffs are on the record. If you came here looking for a feature to use,
-use `/loop "<goal>"`, which is what ships now.
+`/loop --steps "read -> plan -> implement"` parses (`parseStepChain`, shared/loop-command.ts),
+the record carries `steps` + a wrapping `stepIndex` program counter, the current step LEADS the
+wake prompt and is the routing prompt for its turn, the cycle summary sits below it in one terse
+line, and the panel shows "step N of M" with the chain on hover. The chain is capped at 8 steps
+because it is replayed every turn. `&` and parentheses are recognised and refused with a
+coming-later message rather than a syntax error — the parallel substrate (Loops phase 2A helpers)
+now exists, so wiring `&` to it is the follow-up this doc predicted. `--flowchart <goal>`
+(AI-authored chains) is not built. No recorded live run yet.
+
+The rest of this document is the original design note, kept as written.
 
 Status markers used across this repo's docs:
 

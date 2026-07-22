@@ -135,6 +135,22 @@ export interface LoopRecord {
    *  Persisted so the panel can show what ran unattended, and so the total
    *  cap survives restarts. */
   spawnedAgents?: LoopSpawnedAgent[];
+  /** Flowchart loop (docs/FLOWCHART_LOOPS_DESIGN.md): the ordered step chain
+   *  from "--steps", sequential in this version. Absent on a plain goal loop. */
+  steps?: string[];
+  /** Program counter into `steps`, 0-based, advanced on every continue and
+   *  wrapping implicitly — a loop that reaches the end of its chain starts
+   *  again, because it is a loop. Meaningless when `steps` is absent. */
+  stepIndex?: number;
+}
+
+/** The step a flowchart loop is currently on, or null for a plain goal loop.
+ *  The modulo is the implicit loop-back: no stored stepIndex can point past
+ *  the chain, even one written by an older or foreign build. */
+export function currentLoopStep(loop: LoopRecord): { index: number; text: string; total: number } | null {
+  if (!loop.steps?.length) return null;
+  const index = ((loop.stepIndex ?? 0) % loop.steps.length + loop.steps.length) % loop.steps.length;
+  return { index, text: loop.steps[index], total: loop.steps.length };
 }
 
 export interface LoopDecision {
@@ -466,7 +482,16 @@ export function composeWakePrompt(loop: LoopRecord): string {
   // autonomous Metis loop" and buried the goal below it; a question about the
   // code routed as a build and rewrote the file. Scaffolding goes underneath,
   // kept short so the goal stays the dominant signal.
-  const lines: string[] = [loop.goal, ""];
+  //
+  // A flowchart loop's CURRENT STEP is its goal for this turn, so the step
+  // leads instead (docs/FLOWCHART_LOOPS_DESIGN.md — the step list is exactly
+  // the class of scaffolding that once steered a run, so the cycle summary
+  // sits below, terse, one line).
+  const step = currentLoopStep(loop);
+  const lines: string[] = [step ? step.text : loop.goal, ""];
+  if (step) {
+    lines.push(`(Step ${step.index + 1} of ${step.total} in a repeating cycle: ${loop.steps!.join(" -> ")}.)`, "");
+  }
 
   if (loop.history.length) {
     lines.push(`(Loop turn ${loop.iterations + 1} of ${loop.maxIterations}. Already done, do not redo:`);

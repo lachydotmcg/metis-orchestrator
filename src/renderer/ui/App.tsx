@@ -4586,11 +4586,13 @@ function NewSessionWorkspace({
         projectPath: projectWorkspace?.path,
         maxIterations: parts.turns,
         fixedIntervalSeconds: parts.everySeconds,
-        budgetTokens: parts.budgetTokens
+        budgetTokens: parts.budgetTokens,
+        steps: parts.steps
       });
       const pace = loop.fixedIntervalSeconds ? `every ${formatLoopDuration(loop.fixedIntervalSeconds)}` : "at its own pace";
       const budget = loop.budgetTokens ? ` and a ${formatTokenCount(loop.budgetTokens)}-token budget` : "";
-      const base = `Loop started, up to ${loop.maxIterations} turns ${pace}${budget}. It is working now. Watch or stop it in Settings > Privacy & Data.`;
+      const cycle = loop.steps?.length ? ` cycling ${loop.steps.length} steps` : "";
+      const base = `Loop started${cycle}, up to ${loop.maxIterations} turns ${pace}${budget}. It is working now. Watch or stop it in Settings > Privacy & Data.`;
       // A capability warning goes FIRST, before the reassurance. It is the part
       // that changes what you should expect to happen, and burying it under
       // "it is working now" would be the wrong order to read them in.
@@ -16926,6 +16928,11 @@ function ActiveLoopsPanel(): JSX.Element | null {
                 <span>
                   Iteration {loop.iterations} of {loop.maxIterations}
                 </span>
+                {loop.steps?.length ? (
+                  <span title={`Cycle: ${loop.steps.join(" -> ")}`}>
+                    step {(((loop.stepIndex ?? 0) % loop.steps.length) + loop.steps.length) % loop.steps.length + 1} of {loop.steps.length}
+                  </span>
+                ) : null}
                 {loop.status === "sleeping" && loop.nextWakeAt ? (
                   <span>{wakeMs > 0 ? `wakes in ${formatLoopDelay(Math.round(wakeMs / 1000))}` : "waking now"}</span>
                 ) : null}

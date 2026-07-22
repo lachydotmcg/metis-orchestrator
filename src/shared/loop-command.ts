@@ -60,6 +60,44 @@ export interface LoopCommandParts {
    *  means no token ceiling — the iteration cap and wall-clock limit still
    *  apply, so "no budget" never means "unbounded". */
   budgetTokens?: number;
+  /** Flowchart loop (docs/FLOWCHART_LOOPS_DESIGN.md): an ordered step chain
+   *  from '--steps "read -> plan -> implement"'. Sequential only in this
+   *  version — "&" parses and is REJECTED with a coming-later message, per
+   *  the design's "reject rather than quietly serialise" rule. The loop back
+   *  to the start is implicit. */
+  steps?: string[];
+}
+
+/** Step-count ceiling for "--steps". The chain is replayed into every wake
+ *  prompt, so a long cycle costs tokens on every turn forever — the design
+ *  doc calls for a hard cap rather than good intentions. */
+export const LOOP_COMMAND_MAX_STEPS = 8;
+
+/** Parses a step chain: "read -> plan -> implement". Returns an error string
+ *  (for the composer to show) or the step list. "&" (parallel) and
+ *  parentheses are recognised and refused with a message that says the
+ *  feature is coming, not that the user typed it wrong. */
+export function parseStepChain(raw: string): { steps?: string[]; error?: string } {
+  const text = raw.trim();
+  if (!text) return { error: '--steps needs a chain, like --steps "read -> plan -> implement".' };
+  if (/[&()]/.test(text)) {
+    return { error: "Parallel steps (\"&\" and parentheses) are designed but not runnable yet — this version runs a sequential chain only. Rewrite the chain with \"->\"." };
+  }
+  const steps = text.split("->").map((step) => step.replace(/\s+/g, " ").trim());
+  if (steps.some((step) => !step)) {
+    return { error: 'The chain has an empty step — check for a doubled or trailing "->".' };
+  }
+  if (steps.length < 2) {
+    return { error: "A chain needs at least two steps. For a single goal, plain /loop already does this." };
+  }
+  if (steps.length > LOOP_COMMAND_MAX_STEPS) {
+    return { error: `The chain is capped at ${LOOP_COMMAND_MAX_STEPS} steps — it is replayed every turn, so every extra step costs tokens forever.` };
+  }
+  const tooLong = steps.find((step) => step.length > 80);
+  if (tooLong) {
+    return { error: `Step "${tooLong.slice(0, 40)}…" is over 80 characters — steps are instructions, not paragraphs.` };
+  }
+  return { steps };
 }
 
 export interface LoopCommandParse {
@@ -184,11 +222,36 @@ export function parseLoopCommand(text: string): LoopCommandParse {
       continue;
     }
 
+    if (lower === "--steps" || lower === "--flowchart") {
+      const first = tokens[index + 1];
+      if (first === undefined) return { isLoopCommand: true, error: '--steps needs a chain, like --steps "read -> plan -> implement".' };
+      // The tokenizer split on whitespace, so a quoted chain arrives in
+      // pieces — re-join up to the closing quote. An unquoted chain must be
+      // a single token ("read->plan->implement").
+      let chain = first;
+      let consumed = 1;
+      const quote = first.startsWith('"') ? '"' : first.startsWith("'") ? "'" : null;
+      if (quote) {
+        while (!(chain.length > 1 && chain.endsWith(quote))) {
+          const next = tokens[index + 1 + consumed];
+          if (next === undefined) return { isLoopCommand: true, error: "--steps has an unclosed quote." };
+          chain += ` ${next}`;
+          consumed += 1;
+        }
+        chain = chain.slice(1, -1);
+      }
+      const parsedChain = parseStepChain(chain);
+      if (parsedChain.error) return { isLoopCommand: true, error: parsedChain.error };
+      parts.steps = parsedChain.steps;
+      index += consumed;
+      continue;
+    }
+
     // An unrecognised --flag is an error rather than goal text. Swallowing it
     // into the goal would mean a typo like "--turn 5" silently becomes part of
     // what the model is asked to do, and the loop runs with the default cap.
     if (lower.startsWith("--")) {
-      return { isLoopCommand: true, error: `I do not know the flag "${token}". Supported: --turns, --every, --budget.` };
+      return { isLoopCommand: true, error: `I do not know the flag "${token}". Supported: --turns, --every, --budget, --steps.` };
     }
 
     goalWords.push(token);
@@ -221,8 +284,18 @@ export function describeLoopCommand(parse: LoopCommandParse): LoopCommandHintSeg
   segments.push(
     parts.goal
       ? { label: truncate(parts.goal, 52), meaning: "the goal it works on", typed: true }
-      : { label: "no goal yet", meaning: "type what you want it to work on", typed: false }
+      : parts.steps
+        ? { label: "chain-driven", meaning: "the step cycle below is the goal", typed: false }
+        : { label: "no goal yet", meaning: "type what you want it to work on", typed: false }
   );
+
+  if (parts.steps) {
+    segments.push({
+      label: `${parts.steps.length}-step cycle`,
+      meaning: truncate(parts.steps.join(" -> "), 60),
+      typed: true
+    });
+  }
 
   segments.push(
     parts.turns !== undefined

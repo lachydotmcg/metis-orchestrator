@@ -122,6 +122,19 @@ check("replays prior work", p2.includes("read the files") && p2.includes("listed
 check("says do not redo", p2.includes("do not redo"), true);
 check("counts the turn", p2.includes("Loop turn 3 of 3"), true);
 
+console.log("\nFLOWCHART STEPS (currentLoopStep + wake prompt)");
+{
+  const { currentLoopStep } = mod;
+  const chained = { ...base, goal: "read -> plan -> implement", steps: ["read the project files", "plan the change", "apply the plan"], stepIndex: 0 };
+  check("step 1 leads the wake prompt", composeWakePrompt(chained).split("\n")[0], "read the project files");
+  check("cycle summary is present but below", composeWakePrompt(chained).includes("Step 1 of 3 in a repeating cycle"), true);
+  check("step 2 after advance", currentLoopStep({ ...chained, stepIndex: 1 })?.text, "plan the change");
+  check("wraps implicitly past the end", currentLoopStep({ ...chained, stepIndex: 3 })?.index, 0);
+  check("foreign negative index cannot escape the chain", currentLoopStep({ ...chained, stepIndex: -1 })?.index, 2);
+  check("plain goal loop has no step", currentLoopStep(base), null);
+  check("plain goal loop prompt unchanged", composeWakePrompt(base).split("\n")[0], base.goal);
+}
+
 console.log("\nSUMMARY DIGEST");
 check("strips the decision block", summariseTurn("Did it.\n```metis-loop\n{\"decision\":\"stop\"}\n```"), "Did it.");
 check("collapses code fences", summariseTurn("Here:\n```js\nconst a=1;\n```"), "Here: (code)");

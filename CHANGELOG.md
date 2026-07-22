@@ -27,6 +27,13 @@ engine referenced below.
   picks each stage's rung; the stage's normal chain stays the fallback.
 - **/loop in the "/" popover.** The slash popover now offers /loop
   alongside /orchestration, /export, /summarize and /handoff.
+- **Flowchart Loops, sequential v1.** `/loop --steps "read -> plan ->
+  implement"` gives a loop an ordered step cycle with a wrapping program
+  counter: each turn runs (and routes as) its current step, the panel
+  shows step N of M, and the chain caps at 8 steps because it replays
+  every turn. Parallel "&" steps are recognised and refused with a
+  coming-later message, per the design doc. Three one-click loop
+  starters also join the "/" popover.
 - **Loop helpers (phase 2A).** A loop's "continue" decision can now ask
   for up to 3 parallel helpers, each a normal tracked run in its own
   conversation with the loop's frozen permissions and cancel scope,
