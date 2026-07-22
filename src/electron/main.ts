@@ -9320,7 +9320,17 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   const route = effectiveDecision.selected_route;
   const override = input.modelOverride;
   const provider = override ? override.provider : depthRoute ? depthRoute.provider : providerFromRoute(route.provider, route.runtime, route.kind);
-  const model = override ? resolveOverrideModel(override) : depthRoute ? depthRoute.model : route.model ?? providerInfo[provider].defaultModel ?? "auto";
+  // The depth rung is resolved through the SAME display-name mapping pinned
+  // models use: the depthRoutes store carries picker display names ("Opus
+  // 4.8"), and passing one raw to Anthropic 404s — caught live by the first
+  // metis-devbox navigation run (2026-07-21), which routed L2 to "Opus 4.8"
+  // and got not_found_error back. The per-node stage path already resolved;
+  // this chat path predated the rule.
+  const model = override
+    ? resolveOverrideModel(override)
+    : depthRoute
+      ? resolveGraphStageModel(depthRoute.provider, depthRoute.model)
+      : route.model ?? providerInfo[provider].defaultModel ?? "auto";
   // The route line names the route ACTUALLY taken (Lachy): an explicit
   // prompt/continuation label first, else the user's own graph-node name for
   // the selected model ("backend"), else the honest provider+model pair —
