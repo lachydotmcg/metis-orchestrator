@@ -12,6 +12,41 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Added (2026-07-22)
+
+- **Image generation route.** "Generate an image of X" now routes to a
+  dedicated Image Generation pipeline with a July-2026 catalog — GPT
+  Image 2, Nano Banana 2 (Gemini 3.1 Flash Image, the default) and Nano
+  Banana Pro — as a fallback chain. Images write as new timestamped
+  files under the project's `images/` folder. FLUX.2 is the noted
+  follow-up (needs its own provider + secret slot).
+- **`--conversation <id>` for the CLI.** `chat` and `build` runs print
+  their conversation id and can continue an earlier one, so a multi-turn
+  sequence gets real context carry-over headless instead of every turn
+  starting fresh.
+
+### Changed (2026-07-22)
+
+- **Depth levels reversed.** L1 is now the hardest tier on your strongest
+  model and higher numbers get cheaper, leaving room for future L4/L5 at
+  the cheap end. Picking an L1 model rewrites the node itself; the
+  "Default" row is gone from the level picker; existing stacks migrate
+  once on load.
+- **License is FSL-1.1-MIT.** Use, fork and run it freely; the one
+  restriction is selling a competing product, and every release converts
+  to plain MIT two years after it ships.
+
+### Fixed (2026-07-22)
+
+- **Depth routing sweep.** Trivial fast-lane turns are depth 1 outright
+  (a two-word prompt no longer pays for a pinned cloud rung), and
+  analysis questions ("analyse the trade-offs… and recommend a design")
+  stay in chat instead of running the file-writing build pipeline.
+- **Two-process routing honesty.** A depth rung's display name ("Opus
+  4.8") is resolved to its API id before the provider call, and a
+  statement opening with "when" ("When something goes wrong… fix it") is
+  no longer misread as a question and routed to chat.
+
 ### Added (2026-07-21)
 
 - **Loop spend ceiling.** `/loop --budget 200k` (CLI: `--budget`, alias
