@@ -182,3 +182,10 @@ and `npm test` are gates only if you run them. And the
 
 Everything else worth knowing before you rely on it is in
 [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
+
+## License
+
+[FSL-1.1-MIT](LICENSE) — the Functional Source License. Use it, read it, fork
+it, run it inside your company freely; the one thing you cannot do is sell a
+competing product built from it. Each release automatically becomes plain MIT
+two years after it ships.
