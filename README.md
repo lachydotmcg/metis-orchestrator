@@ -87,7 +87,8 @@ v1 navigation is exactly four items: New session, Orchestration, Benchmark, Sett
 
 | | |
 | --- | --- |
-| **Flowchart Loops** `SHIPPED` | A loop given ordered steps: `/loop --steps "read -> plan -> research & review -> implement"`. The chain cycles, and `&` runs steps side by side as helpers. Parenthesised branches still refused. Design and status in [`docs/FLOWCHART_LOOPS_DESIGN.md`](docs/FLOWCHART_LOOPS_DESIGN.md). |
+| **Parenthesised step branches** `PLANNED` | `(research -> write) & review` — a branch that is itself a chain. Needs per-branch program counters; single steps joined with `&` already run in parallel. Design in [`docs/FLOWCHART_LOOPS_DESIGN.md`](docs/FLOWCHART_LOOPS_DESIGN.md). |
+| **A document view with comments** `PLANNED` | Open a file an agent is editing in a side panel, select a passage, and comment on it — steering one paragraph instead of the whole run. The hard part is anchoring a comment that survives the text being rewritten. |
 
 Built and complete but not reachable from v1's four-item navigation: Manager, Marketplace, Routines, Gallery, Graph View, the Community feed, and two Settings sections. Un-hiding any of them is deleting a string from one `Set`. Why each is held back is in [`docs/FEATURES.md`](docs/FEATURES.md).
 
