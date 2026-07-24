@@ -51,6 +51,15 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
   a routed provider reply. Still open in narrower form: the same proof against the actual NSIS
   installer output. (Packing note: winCodeSign needs symlink privileges Windows denies without
   admin/dev-mode — `--config.win.signAndEditExecutable=false` packs cleanly without it.)
+- **A document view with selection and comments** (Lachy, 2026-07-22). Open a file an agent is
+  working on in a side panel, watch it change as the run edits it, select a passage and leave a
+  comment on it. The comment is the interesting half: it turns "steer the whole run" into "steer
+  THIS paragraph", which is a much sharper instruction than anything the composer can express
+  today. Pieces that already exist: the `metis-files:read`/`write` IPC and its path guard, the
+  Graph View doc panel, the right rail that already hosts the preview and side chats, and the
+  directive bus that carries mid-run steering. What is missing is anchoring — a comment has to
+  survive the agent rewriting the text under it, which is the same stale-range problem every
+  review tool has, and the reason this is a design task rather than a wiring one.
 - **Learned routing.** Metis already keeps a private local log of how you actually use it. Nothing
   reads it back into a routing decision yet, and doing so without making routing unpredictable is
   the hard part.
