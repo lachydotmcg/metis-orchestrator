@@ -9,21 +9,33 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Loops
 
-- **A loop runs alone.** Phase 2 (spawning parallel workers, waking when one finishes) is not
-  built. A loop is one goal, worked one turn at a time.
-- **No token ceiling.** Phase 3. The iteration cap (25) and wall-clock ceiling (12h) are still the
-  only spend bounds. The prerequisite is now done: the ledger attributes each row to its loop and
-  conversation, and `loopUsageTotals` sums it, so what remains is enforcing a limit rather than
-  being able to measure one.
+- ~~**A loop runs alone.**~~ Phase 2A shipped 2026-07-24 (`50ab730`): a continue decision can carry
+  up to 3 `spawn` helpers, 9 per loop lifetime, and a finished helper wakes the sleeping loop.
+- **A helper is handed the step, and nothing else.** `runLoopWorker` invokes each parallel-group
+  member with the bare step string as its whole prompt and no conversation of its own, so
+  `--steps "draft -> review & review & review"` starts three helpers whose entire instruction is
+  the word "review". They never see the draft. There is no artifact channel between chain
+  positions, which makes `&` groups useful for independent work and not for review-then-revise.
+- **The helper digest is not scoped to the group that produced it.** `composeWakePrompt` renders
+  `spawnedAgents.slice(-6)`, a loop-lifetime window carrying no group or cycle marker, so a step
+  that consumes helper output on the second pass through a chain cannot tell which pass each
+  summary came from.
+- **A step chain is a ring with no branches.** `stepIndex` only ever advances `(i + 1) % len`, so
+  there is no conditional edge, no jump to an earlier step, and no terminal step. A chain cannot
+  express "if this fails, go back and try again", and the only verdict the model gets to steer with
+  is the binary continue/stop.
+- ~~**No token ceiling.**~~ Shipped 2026-07-24 (`0d48f27`): `/loop --budget 200k` sums the ledger's
+  per-loop attribution before and after every turn and settles the loop at `exhausted` with both
+  numbers in the reason.
 - **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
   are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
   is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the
   protocol, only that nothing below it reliably does. Deliberately never refuses: Metis is
   local-first, and a gate that only passed metered cloud models would invert the product's own
   argument for the feature.
-- **No tray presence for sleeping loops.** With headless start, the tray is the only surface, and a
-  sleeping loop does not appear there yet. It is visible in Settings > Privacy & Data and pausable
-  from the tray, but not listed there.
+- ~~**No tray presence for sleeping loops.**~~ Shipped 2026-07-24 (`5da4760`): live loops get their
+  own tray section with status, turn count, budget and a Stop item, and the one-line status says
+  "idle, 2 loops waiting" rather than a flat "idle" while something is armed to spend money later.
 
 ## Safety and recovery
 
