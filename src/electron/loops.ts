@@ -54,6 +54,14 @@ export const LOOP_MAX_SPAWN_PER_TURN = 3;
  *  certainly stopped converging, and every helper is a real model call. */
 export const LOOP_MAX_SPAWNED_TOTAL = 9;
 
+/** How much of a turn's output is carried to the step that runs next.
+ *
+ *  Generous compared with the 240-char history digest, because this is read
+ *  once by the following step rather than replayed for the rest of the loop's
+ *  life. Bounded all the same: a chain that hands its whole transcript forward
+ *  grows its own prompt every cycle until the budget stops it. */
+export const LOOP_ARTIFACT_LIMIT = 3000;
+
 /** One helper a loop turn asked for (docs/LOOPS.md phase 2). The record is
  *  the visibility story: a helper that ran while nobody watched must be
  *  listed, with what it was asked and how it ended. */
@@ -70,12 +78,29 @@ export interface LoopSpawnedAgent {
    *  the loop's conversation, so two concurrent runs never interleave one
    *  transcript. */
   conversationId?: string;
+  /** Set when this helper was launched as a member of a parallel step GROUP,
+   *  to the group's startedAt. Absent for a helper a decision block asked for.
+   *
+   *  This is what makes the wake digest readable on the second pass through a
+   *  chain: without it, a step that consumes helper output sees a flat
+   *  loop-lifetime window and cannot tell this cycle's reviewers from the last
+   *  cycle's. See helpersForWakePrompt. */
+  groupStartedAt?: string;
 }
 
 /** A spawn request as parsed out of the decision block, before launch. */
 export interface LoopSpawnRequest {
   name: string;
   task: string;
+  /** Material the helper needs in order to do the task at all — the previous
+   *  step's output, when this helper is a member of a step group.
+   *
+   *  Kept separate from `task` on purpose. `task` is what the helper is ROUTED
+   *  on, and routing classifies from prompt text: fold a draft full of code
+   *  into it and "review this" starts routing as a build. The context lands in
+   *  the prompt only. Same split, and the same reason, as routingPrompt in the
+   *  main tick. */
+  context?: string;
 }
 
 export interface LoopIterationRecord {
@@ -87,6 +112,16 @@ export interface LoopIterationRecord {
   decision: "continue" | "stop" | "silent";
   reason?: string;
   error?: string;
+  /** What the turn actually PRODUCED, kept whole enough to be worked on — code
+   *  fences intact, unlike `summary`, which collapses them to "(code)".
+   *
+   *  `summary` and `artifact` answer different questions and both are needed.
+   *  The summary is the anti-redo reminder ("already done, do not redo") and is
+   *  replayed for the rest of the loop's life, so it has to stay cheap. The
+   *  artifact is the handoff to the NEXT step only, so it can afford to be
+   *  large. A chain whose steps cannot hand each other work is just a list of
+   *  unrelated prompts sharing a timer. */
+  artifact?: string;
 }
 
 export interface LoopRecord {
@@ -529,13 +564,27 @@ export function composeWakePrompt(loop: LoopRecord): string {
   // Phase 2: what the helpers produced, so the main line of work builds on
   // them instead of redoing them. Same neutral wording rule as everything
   // else here — this is scaffolding, and scaffolding is a routing signal.
-  if (loop.spawnedAgents?.length) {
+  const helpers = helpersForWakePrompt(loop.spawnedAgents ?? []);
+  if (helpers.length) {
     lines.push("(Helpers you already asked for:");
-    for (const agent of loop.spawnedAgents.slice(-6)) {
+    for (const agent of helpers) {
       const state = agent.status === "running" ? "still going" : agent.status;
       lines.push(`- ${agent.name} (${state})${agent.summary ? `: ${agent.summary}` : ""}`);
     }
     lines.push(")", "");
+  }
+
+  // The previous step's output, verbatim. Last before the protocol block and
+  // farthest from the top on purpose: the step text has to stay the dominant
+  // signal, and this is the longest thing in the prompt.
+  //
+  // Safe to include despite that: the tick routes on `routingPrompt` (the step
+  // text alone), never on this string, so a draft full of code cannot turn
+  // "review it" into a build. Only for a chain — a plain goal loop already
+  // carries its own thread in one conversation and has nothing to hand across.
+  const artifact = step ? latestArtifact(loop) : "";
+  if (artifact) {
+    lines.push("(What the previous step produced, to work from:", artifact, ")", "");
   }
 
   lines.push(loopDecisionPromptBlock());
@@ -553,4 +602,56 @@ export function summariseTurn(assistantText: string, limit = 240): string {
     .trim();
   if (!cleaned) return "(no reply text)";
   return cleaned.length > limit ? `${cleaned.slice(0, limit - 1)}…` : cleaned;
+}
+
+/** What a turn produced, kept whole enough for the next step to work ON it.
+ *
+ *  The only thing stripped is the metis-loop protocol block, which is Metis
+ *  talking to itself and would otherwise invite the next step to answer a
+ *  decision it was never asked for. Code fences survive: handing a reviewer
+ *  the word "(code)" is the whole bug this exists to fix.
+ *
+ *  Truncation is head-and-tail rather than head-only. A draft's last lines are
+ *  usually where it is weakest (an unclosed block, a trailing TODO, a stopped
+ *  mid-sentence), so a reviewer that only ever sees the opening is blind to the
+ *  most likely defect. */
+export function captureArtifact(assistantText: string, limit = LOOP_ARTIFACT_LIMIT): string {
+  const cleaned = (assistantText ?? "").replace(/```metis-loop[\s\S]*?```/g, "").trim();
+  if (!cleaned) return "";
+  if (cleaned.length <= limit) return cleaned;
+  const head = Math.floor(limit * 0.7);
+  const tail = limit - head;
+  return `${cleaned.slice(0, head).trimEnd()}\n\n[… ${cleaned.length - limit} characters trimmed from the middle …]\n\n${cleaned.slice(-tail).trimStart()}`;
+}
+
+/** The most recent turn output available to hand the step that runs next, or
+ *  "" when there is nothing yet (turn one) or the last turns all errored. */
+export function latestArtifact(loop: LoopRecord): string {
+  for (let i = loop.history.length - 1; i >= 0; i -= 1) {
+    const candidate = loop.history[i]?.artifact;
+    if (candidate) return candidate;
+  }
+  return "";
+}
+
+/** Which helpers a wake prompt should show.
+ *
+ *  Not simply the last N. Helpers arrive from two places — a decision block's
+ *  `spawn`, and the members of a parallel step group — and on the second pass
+ *  through a chain the flat tail mixes this cycle's group with the last one's,
+ *  with nothing in the rendered line to tell them apart. So: every member of
+ *  the NEWEST group is kept whole (a synthesise step that silently loses a
+ *  reviewer to a six-entry window is worse than one that shows none), older
+ *  groups are dropped entirely, and ungrouped helpers fill the remaining room
+ *  newest-first. */
+export function helpersForWakePrompt(agents: LoopSpawnedAgent[], limit = 6): LoopSpawnedAgent[] {
+  if (!agents.length) return [];
+  const newestGroup = agents.reduce<string | undefined>(
+    (best, agent) => (agent.groupStartedAt && (!best || agent.groupStartedAt > best) ? agent.groupStartedAt : best),
+    undefined
+  );
+  const current = newestGroup ? agents.filter((agent) => agent.groupStartedAt === newestGroup) : [];
+  const room = Math.max(0, limit - current.length);
+  const ungrouped = agents.filter((agent) => !agent.groupStartedAt).slice(-room);
+  return [...ungrouped, ...current];
 }

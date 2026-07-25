@@ -87,7 +87,36 @@ to show them as if they had:
 - **`spawnedAgents` shipped with phase 2A.** `LoopSpawnedAgent[]` on the record: name, task,
   start/end, running/done/failed, a one-line summary replayed into the next wake prompt, and the
   helper's own conversation id (helpers never write into the loop's conversation, so two
-  concurrent runs cannot interleave one transcript).
+  concurrent runs cannot interleave one transcript). It gained `groupStartedAt` on 2026-07-25,
+  which is what lets the wake prompt show one cycle's step group rather than a flat lifetime tail.
+
+## The artifact channel (2026-07-25)
+
+Phase 2A shipped helpers that could not be handed anything. `runLoopWorker` invoked each member of
+a parallel step group with the bare step string as its whole prompt, so
+`--steps "draft -> review & review & review"` started three helpers whose entire instruction was
+the word "review". They never saw the draft, because nothing carried work between chain positions
+at all.
+
+The fix is one field and one rule.
+
+`LoopIterationRecord.artifact` holds what a turn actually produced, capped at
+`LOOP_ARTIFACT_LIMIT` (3000) and trimmed from the middle so both the opening and the ending
+survive — a draft's last lines are where it is usually weakest, so a reviewer that only sees the
+opening is blind to the likeliest defect. It exists alongside `summary` rather than replacing it
+because the two answer different questions: `summary` is the anti-redo reminder replayed for the
+rest of the loop's life, so it stays cheap and collapses code to `(code)`; `artifact` is a
+one-hop handoff, so it can afford to be large and keeps its fences.
+
+The rule: **an artifact travels in the prompt, never in the routing prompt.** `LoopSpawnRequest`
+gained a `context` field kept separate from `task` for exactly this reason. Routing classifies
+from prompt text, and folding a draft full of code into the task is how "review this" starts
+routing as a build and a reviewer rewrites the thing it was asked to read. Same split, and the
+same reason, as `routingPrompt` in the main tick — which exists because a loop asked to COUNT the
+functions in a file once rewrote it from 171 lines to 10.
+
+Still one hop and only the last one: a step sees its immediate predecessor's output, not
+everything the chain has produced. Pinned by `tests/suites/11-loop-artifact.mjs`.
 - **`budget` shipped later, as `budgetTokens`.** The draft's name did not survive but the idea did:
   `/loop --budget 200k` sets a token ceiling, the tick path sums the loop's ledger-attributed spend
   (input + output) before and after each turn, and `loopTerminalReason` settles the loop as

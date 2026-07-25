@@ -90,11 +90,13 @@ import {
   LOOP_MAX_ITERATIONS_CEILING,
   LOOP_MAX_SPAWNED_TOTAL,
   LOOP_MIN_DELAY_SECONDS,
+  captureArtifact,
   composeWakePrompt,
   currentLoopStep,
   decideLoopContinuation,
   assessLoopCapability,
   extractLoopDecision,
+  latestArtifact,
   loopTerminalReason,
   summariseTurn,
   type LoopIterationRecord,
@@ -10908,7 +10910,11 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     summary: summariseTurn(assistantText),
     decision: decision ? decision.decision : "silent",
     reason: decision?.reason,
-    error: runError
+    error: runError,
+    // Only a chain carries work between steps; a plain goal loop keeps one
+    // conversation and already has its own thread. Storing it either way would
+    // put a copy of every turn in the loop record for no reader.
+    artifact: positionNow ? captureArtifact(assistantText) : undefined
   };
 
   const finishedAt = new Date();
@@ -11157,7 +11163,17 @@ async function runLoopGroupTick(id: string, loaded: LoopRecord, members: string[
       iteration: index,
       members
     });
-    launchLoopWorkers(settled, members.map((member) => ({ name: member.slice(0, 40), task: member })));
+    // The members get the previous step's output. Without it each helper's
+    // whole prompt was its own step text — "review" and nothing else — so a
+    // group asked to review a draft was three agents reviewing a word.
+    // Passed as `context`, never folded into `task`, so routing still reads
+    // the step alone (see LoopSpawnRequest.context).
+    const handoff = latestArtifact(settled);
+    launchLoopWorkers(
+      settled,
+      members.map((member) => ({ name: member.slice(0, 40), task: member, context: handoff || undefined })),
+      startedAt
+    );
     return settled;
   }
 
@@ -11195,7 +11211,7 @@ async function runLoopGroupTick(id: string, loaded: LoopRecord, members: string[
 /** Launches a turn's helper requests, enforcing the lifetime cap. Fire and
  *  forget by design: the loop is asleep while helpers work, and each helper's
  *  completion is what wakes it (runLoopWorker below). */
-function launchLoopWorkers(loop: LoopRecord, requests: LoopSpawnRequest[]): void {
+function launchLoopWorkers(loop: LoopRecord, requests: LoopSpawnRequest[], groupStartedAt?: string): void {
   const already = loop.spawnedAgents?.length ?? 0;
   const room = Math.max(0, LOOP_MAX_SPAWNED_TOTAL - already);
   const toRun = requests.slice(0, room);
@@ -11207,7 +11223,7 @@ function launchLoopWorkers(loop: LoopRecord, requests: LoopSpawnRequest[]): void
     });
   }
   for (const request of toRun) {
-    void runLoopWorker(loop.id, request).catch(async (error) => {
+    void runLoopWorker(loop.id, request, groupStartedAt).catch(async (error) => {
       await appendAudit("error", "loop.spawn.error", `Helper "${request.name}" of loop "${loopLabel(loop)}" failed to start.`, {
         id: loop.id,
         name: request.name,
@@ -11234,7 +11250,7 @@ function launchLoopWorkers(loop: LoopRecord, requests: LoopSpawnRequest[]): void
  *  counts against --budget; it gets its OWN conversation so two concurrent
  *  runs never interleave one transcript; and helpers cannot spawn helpers —
  *  nothing parses a metis-loop block out of a helper's reply. */
-async function runLoopWorker(loopId: string, request: LoopSpawnRequest): Promise<void> {
+async function runLoopWorker(loopId: string, request: LoopSpawnRequest, groupStartedAt?: string): Promise<void> {
   const startedAt = new Date().toISOString();
   const registered = await mutateLoops<LoopRecord | undefined>((current) => {
     const loop = current.find((item) => item.id === loopId);
@@ -11242,7 +11258,7 @@ async function runLoopWorker(loopId: string, request: LoopSpawnRequest): Promise
     // Only a live loop runs helpers — a stop that landed between launch and
     // here wins.
     if (loop.status !== "sleeping" && loop.status !== "running") return { next: current, result: undefined };
-    const entry: LoopSpawnedAgent = { name: request.name, task: request.task, startedAt, status: "running" };
+    const entry: LoopSpawnedAgent = { name: request.name, task: request.task, startedAt, status: "running", groupStartedAt };
     const updated: LoopRecord = { ...loop, spawnedAgents: [...(loop.spawnedAgents ?? []), entry] };
     return { next: current.map((item) => (item.id === loopId ? updated : item)), result: updated };
   });
@@ -11258,9 +11274,15 @@ async function runLoopWorker(loopId: string, request: LoopSpawnRequest): Promise
   let workerConversationId: string | undefined;
   try {
     const run = await runSessionTracked({
-      prompt: request.task,
-      // Route on the task itself — it carries no scaffolding, but the rule
-      // stays explicit so nobody wraps this prompt later without reading it.
+      // The task leads, and anything it needs to work ON follows underneath.
+      // Same ordering rule as composeWakePrompt: whatever leads decides what
+      // Metis thinks it was asked to do, so the instruction stays on top and
+      // the material sits below it.
+      prompt: request.context ? `${request.task}\n\n(What the previous step produced, to work from:\n${request.context}\n)` : request.task,
+      // Route on the TASK ALONE, never the context. The task is one clean
+      // instruction; the context can be a draft full of code, and folding it
+      // in here is how "review this" starts routing as a build and a reviewer
+      // rewrites the thing it was asked to read.
       routingPrompt: request.task,
       cancelScope: loopCancelScope(loopId),
       loopId,

@@ -11,15 +11,19 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 - ~~**A loop runs alone.**~~ Phase 2A shipped 2026-07-24 (`50ab730`): a continue decision can carry
   up to 3 `spawn` helpers, 9 per loop lifetime, and a finished helper wakes the sleeping loop.
-- **A helper is handed the step, and nothing else.** `runLoopWorker` invokes each parallel-group
-  member with the bare step string as its whole prompt and no conversation of its own, so
-  `--steps "draft -> review & review & review"` starts three helpers whose entire instruction is
-  the word "review". They never see the draft. There is no artifact channel between chain
-  positions, which makes `&` groups useful for independent work and not for review-then-revise.
-- **The helper digest is not scoped to the group that produced it.** `composeWakePrompt` renders
-  `spawnedAgents.slice(-6)`, a loop-lifetime window carrying no group or cycle marker, so a step
-  that consumes helper output on the second pass through a chain cannot tell which pass each
-  summary came from.
+- ~~**A helper is handed the step, and nothing else.**~~ Fixed 2026-07-25: a turn on a chain now
+  records an artifact — its real output, code fences intact, unlike the history digest that
+  replaces them with "(code)" — and the next position receives it, group members included. So the
+  members of `draft -> review & review & review` are handed the draft. The artifact travels as
+  `context`, never folded into the task, because routing classifies from prompt text and a draft
+  full of code turns "review it" into a build.
+- ~~**The helper digest is not scoped to the group that produced it.**~~ Fixed 2026-07-25: helpers
+  launched as group members carry the group's `startedAt`, and the wake prompt shows the newest
+  group whole plus any ungrouped helpers, rather than a flat lifetime tail.
+- **An artifact is one hop, and only the last one.** A step sees what the step before it produced,
+  not everything the chain has made. A synthesise step at the end of a long chain cannot reach
+  back past its immediate predecessor, and two steps that both produce work hand only the later
+  one forward.
 - **A step chain is a ring with no branches.** `stepIndex` only ever advances `(i + 1) % len`, so
   there is no conditional edge, no jump to an earlier step, and no terminal step. A chain cannot
   express "if this fails, go back and try again", and the only verdict the model gets to steer with
@@ -55,11 +59,11 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 10 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 11 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
-  line-diff counts and the per-node depth rung rule. They cover the adversarially-important
-  slices, not the breadth of `src/`.
+  line-diff counts, the per-node depth rung rule and the chain artifact channel. They cover the
+  adversarially-important slices, not the breadth of `src/`.
 - **The manual walkthrough checklist is unticked.** It is kept privately rather than in the repo,
   but the consequence is public: it is why most README sections say `SHIPPED` rather than
   `VERIFIED`.
