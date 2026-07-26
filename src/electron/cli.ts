@@ -116,7 +116,12 @@ const DEFAULT_LOOP_TIMEOUT_SECONDS = 1800;
  *  which is the whole point of a documented default. */
 const FEATURE_FLAGS: ReadonlyArray<{ key: string; label: string; default: boolean }> = [
   { key: "knowledgeBankEnabled", label: "Knowledge bank", default: true },
+  { key: "followupsEnabled", label: "Model-written follow-up suggestions", default: true },
   { key: "fanoutEnabled", label: "Multi-agent fan-out", default: false },
+  // Gates whether a model may read and edit your files at all, so leaving it
+  // out of doctor made the one flag with real blast radius the only one you
+  // could not check without opening Settings. Found by 12-doc-honesty.
+  { key: "agentToolsEnabled", label: "Agentic tools (models read and edit files)", default: false },
   { key: "prewarmEnabled", label: "Speculative prewarm (Oracle)", default: false },
   { key: "oracleCloudEnabled", label: "Oracle cloud draft", default: false },
   { key: "oracleSimilarityEnabled", label: "Oracle similarity serve", default: false },

@@ -59,11 +59,18 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 11 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 12 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
-  line-diff counts, the per-node depth rung rule and the chain artifact channel. They cover the
-  adversarially-important slices, not the breadth of `src/`.
+  line-diff counts, the per-node depth rung rule, the chain artifact channel, and the honesty of
+  this documentation itself. They cover the adversarially-important slices, not the breadth of
+  `src/`.
+- **The docs are checked against the code, but only where a claim is mechanical.** `12-doc-honesty`
+  verifies that every `FLAG OFF` feature names a store key that really falls back to off, that
+  `doctor` reports every boolean flag the app reads, that the not-built-yet table contains nothing
+  already built, that internal doc links resolve, and that a claimed suite count is the real one.
+  It cannot check whether a paragraph of prose is a fair description of what the code does. It
+  catches the decay that follows shipping, not inaccuracy at the time of writing.
 - **The manual walkthrough checklist is unticked.** It is kept privately rather than in the repo,
   but the consequence is public: it is why most README sections say `SHIPPED` rather than
   `VERIFIED`.
