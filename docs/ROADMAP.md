@@ -43,9 +43,41 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
 
 - **Broader automated tests.** The repo now has offline suites (`npm test`, tests/suites/, run on
   every push by CI) covering the loop decision layer, the /loop grammar, permission clamping, edit
-  intent, path containment and the line-diff counts — but they cover the adversarially-important
-  slices, not the breadth of `src/`. The session pipeline, the build path and the renderer remain
-  untested by machine.
+  intent, path containment, the store-mutation races, the line-diff counts, the per-node depth rung,
+  the chain artifact channel and the doc markers themselves — but they cover the
+  adversarially-important slices, not the breadth of `src/`. The session pipeline, the build path
+  and the renderer remain untested by machine.
+- **Running a loop without leaving the desktop on** (Lachy, 2026-07-26). The complaint is real: an
+  overnight loop currently means an overnight PC. Researched, and the conclusion is that the
+  obvious shape is the wrong one.
+
+  The obvious shape is "put the project in OneDrive and let something in the cloud edit it". Do
+  not build that. Sync clients are not transactional and OneDrive is documented, in Microsoft's
+  own forums, to corrupt a `.git` folder once sync completes — and an agent writing forty files in
+  ten seconds is close to the worst input a sync client can be given. The failure mode is a
+  conflict copy per file and no way to tell which one the run meant. Every product in this space
+  reached the same conclusion and uses git as the sync layer instead: Jules, Codex cloud, Copilot's
+  coding agent, Cursor Cloud Agents and Claude Code on the web all clone a repo into a cloud
+  sandbox and hand back a pull request rather than touching your disk. (For *documents* rather than
+  repos the sync shape is fine, and OneDrive/Drive MCP connectors already do it — one writer, no
+  dotfiles to corrupt.)
+
+  A Metis cloud runner is also the wrong shape, for a product reason rather than a technical one.
+  It would compete with those five on their own ground while giving up the sentence this README
+  says three times: local-first, your keys, no server of ours in the path. The differentiator is
+  not "an agent that runs while you sleep" — five companies sell that. It is "it runs on hardware
+  you own, on models you chose".
+
+  So the version worth building keeps the machine yours and only makes it cheaper to keep awake:
+
+  1. **Wake-to-run.** Windows can wake a sleeping machine for a scheduled task. Headless start is
+     already built and the loop scheduler is already written to survive sleep and clock changes, so
+     this may be configuration rather than code. Cheapest thing to try, and it should be tried
+     first because it might cost nothing.
+  2. **A second small machine.** Metis headless on a mini PC or Pi, keys on your own hardware,
+     Ollama serving the cheap rungs for free. Needs the loop store and conversations to be
+     reachable from the desktop to see and stop a run, which is the actual design work: a loop must
+     never be running with no surface that can stop it, and today that surface assumes one machine.
 - ~~**A packaged-build run of the Auto Router.**~~ Recorded 2026-07-21 (see docs/LIMITATIONS.md):
   an `electron-builder --dir` build answered `--cli chat` with a real metis-policy-cli decision and
   a routed provider reply. Still open in narrower form: the same proof against the actual NSIS
