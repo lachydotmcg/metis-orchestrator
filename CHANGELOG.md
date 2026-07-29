@@ -12,6 +12,43 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Fixed (2026-07-25)
+
+- **A parallel step group is handed the work it is meant to act on.** Each
+  member of an `&` group was invoked with the bare step string as its
+  entire prompt, so `--steps "draft -> review & review & review"` started
+  three helpers whose whole instruction was the word "review" — reviewing
+  a draft they had never been shown. A turn on a chain now records an
+  artifact (its real output, code fences intact, unlike the history digest
+  that replaces them with `(code)`) and the next position receives it,
+  group members included. The artifact travels as `context` and is never
+  folded into the task, because routing classifies from prompt text and a
+  draft full of code turns "review it" into a build. Still one hop and only
+  the last one, which is recorded in `docs/LIMITATIONS.md` rather than left
+  to be discovered.
+- **Helper summaries are scoped to the group that produced them.** The wake
+  prompt rendered a flat loop-lifetime window, so a second pass through a
+  chain mixed this cycle's helpers with the last cycle's and rendered
+  nothing to tell them apart.
+
+### Added (2026-07-26)
+
+- **The documentation is checked against the code by CI.** A new offline
+  suite verifies that every `FLAG OFF` feature names a store key that
+  really falls back to off, that `doctor` reports every boolean flag the
+  app reads, that the "Designed, not built yet" table contains nothing
+  already built, that internal doc links resolve, and that a claimed suite
+  count is the real one. The marker table in the README was a promise kept
+  by hand until now, and prose describing a gap outlives the gap: three
+  separate corrections were needed in one week for features that had
+  shipped. It checks whether a claim is still true, not whether it was ever
+  fair.
+- **`doctor` reports two flags it was silently missing.**
+  `agentToolsEnabled` — which decides whether a model may read and edit
+  your files, and was the only flag with real blast radius you could not
+  check without opening Settings — and `followupsEnabled`. Found by the
+  suite above on its first run.
+
 ### Added (2026-07-22)
 
 - **Image generation route.** "Generate an image of X" now routes to a
