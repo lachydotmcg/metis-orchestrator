@@ -29,6 +29,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, because 12-doc-honesty measures how many commits have
+          # touched src/ since CHANGELOG.md last changed. The default shallow
+          # clone has no history to measure, so that check would skip itself in
+          # the one place it most needs to run.
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:

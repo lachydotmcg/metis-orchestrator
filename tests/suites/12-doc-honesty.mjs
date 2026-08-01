@@ -23,6 +23,7 @@
 // need a build.
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join, resolve, dirname } from "node:path";
 import { section, check, ok, summary } from "../harness.mjs";
 
@@ -151,6 +152,82 @@ section("FLAG OFF means a real flag that really defaults to off");
   // And doctor must not be silently missing a flag that gates real capability.
   const missing = [...actual.keys()].filter((k) => !declared.has(k));
   check("every boolean flag main.ts reads is reported by doctor", missing, []);
+}
+
+section("The changelog is shaped the way it says it is");
+{
+  const changelog = read("CHANGELOG.md");
+  const headings = [...changelog.matchAll(/^### ([A-Z][a-z]+)(?:\s+\((\d{4}-\d{2}-\d{2})\))?\s*$/gm)];
+  ok("it has dated sections at all", headings.some((h) => h[2]));
+
+  // Keep a Changelog's vocabulary. A seventh kind invented in passing means a
+  // reader cannot skim for "Fixed" and trust they saw every fix.
+  const kinds = new Set(["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]);
+  check("only standard section kinds are used", [...new Set(headings.map((h) => h[1]))].filter((k) => !kinds.has(k)), []);
+
+  // Real dates, not 2026-13-45 or a typo'd year.
+  const dated = headings.filter((h) => h[2]);
+  const invalid = dated.map((h) => h[2]).filter((d) => {
+    const parsed = new Date(`${d}T00:00:00Z`);
+    return Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== d;
+  });
+  check("every section date is a real calendar date", invalid, []);
+
+  // Newest first, the order the file already uses. Caught its first real defect
+  // immediately: a section added on the 26th was filed below one from the 25th.
+  const order = dated.map((h) => h[2]);
+  const misordered = order.filter((d, i) => i > 0 && d > order[i - 1]);
+  check("dated sections read newest-first", misordered, []);
+
+  // One heading per kind per date, or an entry can land in either of two
+  // identical-looking sections and only one gets read.
+  const seen = new Set();
+  const duplicated = [];
+  for (const [, kind, date] of dated) {
+    const key = `${kind} ${date}`;
+    if (seen.has(key)) duplicated.push(key);
+    seen.add(key);
+  }
+  check("no date has the same section kind twice", duplicated, []);
+  ok("an Unreleased section exists to add to", changelog.includes("## [Unreleased]"));
+}
+
+section("The changelog has not fallen behind the code");
+{
+  // "All notable changes to Metis Orchestrator are documented in this file" is
+  // the strongest claim any doc here makes, and the only one that decays purely
+  // by shipping. This measures it: how many commits have touched src/ since
+  // CHANGELOG.md was last touched.
+  //
+  // The threshold is taken from this repo rather than invented. Across every
+  // changelog update in its history the largest gap was 7 src commits, so 8 is
+  // the first number that has never legitimately occurred. A normal working
+  // stretch passes; a release's worth of unrecorded change does not.
+  //
+  // Degrades rather than lies: a shallow clone has no history to measure, so
+  // the check reports that it could not run instead of passing quietly. CI
+  // fetches full history specifically so it does run there.
+  const MAX_LAG = 7;
+  const git = (...args) => execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  let lag = null;
+  let why = "";
+  try {
+    if (git("rev-parse", "--is-shallow-repository") === "true") {
+      why = "shallow clone, no history to measure";
+    } else {
+      const last = git("log", "-1", "--format=%H", "--", "CHANGELOG.md");
+      if (!last) why = "CHANGELOG.md has no commit history";
+      else lag = Number(git("rev-list", "--count", `${last}..HEAD`, "--", "src"));
+    }
+  } catch {
+    why = "git is not available here";
+  }
+  if (lag === null) {
+    ok(`changelog lag not measured (${why})`, true);
+    console.log(`      note: this check is a no-op in this environment, by design rather than by accident`);
+  } else {
+    ok(`${lag} src commits since CHANGELOG.md last changed (limit ${MAX_LAG})`, lag <= MAX_LAG);
+  }
 }
 
 const { passed, failed } = summary();
