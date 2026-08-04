@@ -139,6 +139,16 @@ engine referenced below.
   hidden from v1's navigation, and the chat prompt stops advertising the
   action kind entirely.
 
+## [1.1.0] - 2026-07-20
+
+Tagged and released, and until now undocumented: every section below this
+heading shipped in `v1.1.0`, and everything above it landed after the tag
+and is still unreleased. The split is by date against the tag, so an entry
+dated later than 2026-07-20 belongs above.
+
+129 commits separate this from `1.0.0`, and the sections below are the
+notable ones rather than all of them.
+
 ### Added (2026-07-17)
 
 - **Per-model gateways.** Click a model in the orchestration Library to set

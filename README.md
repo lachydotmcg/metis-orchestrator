@@ -178,8 +178,9 @@ choose, it backs up what it touches, and it can be handed a goal it works on by 
 
 Two things a sceptical reader should know. There is an offline test suite (`npm test`, 12 suites,
 no network or API keys needed), run by CI on every push, so `npm run typecheck`, `npm run build`
-and `npm test` are the gates. And the
-`v1.0.0` tag predates almost everything described here, which is all on `main` and not yet tagged.
+and `npm test` are the gates. And the latest tag is `v1.1.0`, from 2026-07-20, so the newest
+features described here — the loop step chains, per-node depths, image generation — are on `main`
+ahead of it. If you install from a release you get the tag, not this page.
 
 Everything else worth knowing before you rely on it is in
 [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).
