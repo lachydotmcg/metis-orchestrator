@@ -192,6 +192,37 @@ section("The changelog is shaped the way it says it is");
   ok("an Unreleased section exists to add to", changelog.includes("## [Unreleased]"));
 }
 
+section("A shipped version has somewhere to read about it");
+{
+  // Written after v1.1.0 was found tagged, released and entirely undocumented:
+  // the changelog jumped from Unreleased to 1.0.0, so 129 commits of work sat
+  // under a heading saying it had not shipped, and the installer that release
+  // built had no notes at all. The commit that fixed it claimed no mechanical
+  // check could have caught this. That was wrong, and this is the check.
+  //
+  // Only the NEWEST tag is required, not every tag. v0.1.0 and v0.2.0 are
+  // pre-1.0 development tags with no entries by choice, and demanding notes for
+  // them retroactively would be inventing history rather than recording it.
+  const documented = new Set([...read("CHANGELOG.md").matchAll(/^## \[(\d+\.\d+\.\d+)\]/gm)].map((m) => m[1]));
+  ok(`the changelog documents ${documented.size} releases`, documented.size > 0);
+
+  const version = JSON.parse(read("package.json")).version;
+  ok(`package.json version ${version} has a changelog section`, documented.has(version));
+
+  let newestTag = null;
+  try {
+    newestTag = execFileSync("git", ["tag", "--sort=-v:refname"], { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] })
+      .split("\n").map((t) => t.trim()).filter(Boolean)[0] ?? null;
+  } catch {
+    newestTag = null;
+  }
+  if (!newestTag) {
+    ok("newest tag not checked (no tags fetched here)", true);
+  } else {
+    ok(`newest tag ${newestTag} has a changelog section`, documented.has(newestTag.replace(/^v/, "")));
+  }
+}
+
 section("The changelog has not fallen behind the code");
 {
   // "All notable changes to Metis Orchestrator are documented in this file" is

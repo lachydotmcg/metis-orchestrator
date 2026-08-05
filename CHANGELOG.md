@@ -2,9 +2,9 @@
 
 All notable changes to Metis Orchestrator are documented in this file.
 
-This is the project's first tagged release. Everything below shipped during
-active development leading up to it; there is no prior tagged version to
-diff against, so this entry reads as a feature summary rather than a delta.
+`1.0.0` is the first release documented here rather than the first tag:
+`v0.1.0` and `v0.2.0` were cut on the two days before it and have no
+entries, so that section reads as a feature summary rather than a delta.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how the app is put
 together and [`docs/ORACLE.md`](docs/ORACLE.md) for the speculative-inference
