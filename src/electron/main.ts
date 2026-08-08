@@ -84,6 +84,7 @@ import type {
   UserProfile,
   GatewayStatus
 } from "../shared/runtime-contracts.js";
+import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import {
   LOOP_MAX_AGE_HOURS,
@@ -564,6 +565,23 @@ const registryFallbackPackages: RegistryPackage[] = [
     policy_compat: "0.1.x"
   }
 ];
+
+/** Refuses a renderer request for a key the renderer has no business reading.
+ *
+ *  Not currently exploitable: nothing untrusted executes in the renderer,
+ *  because the chat renders through react-markdown with no rehype-raw, so
+ *  model-authored HTML is stripped rather than run. This is defence in depth
+ *  ahead of the artifacts work specifically — rendering model-authored markup
+ *  is exactly the change that turns "unreachable" into "reachable", and a
+ *  guard added before that lands is worth more than one added after.
+ *
+ *  Main-process code is unaffected: readSecrets calls readStoreValue directly
+ *  and never crosses this boundary. Only the IPC entry points check. */
+function assertRendererMayReachStoreKey(key: string): void {
+  if (!rendererMayReachStoreKey(key)) {
+    throw new Error(`The store key "${key}" is not reachable from the renderer. Use the dedicated secrets IPC, which returns status rather than values.`);
+  }
+}
 
 function storePath(key: string): string {
   if (!storeKeyPattern.test(key)) {
@@ -13783,8 +13801,17 @@ app.whenReady().then(async () => {
     const error = await shell.openPath(path);
     if (error) throw new Error(error);
   });
-  ipcMain.handle("metis-store:get", (_event, key: string, fallback: unknown) => readStoreValue(key, fallback));
-  ipcMain.handle("metis-store:set", (_event, key: string, value: unknown) => writeStoreValue(key, value));
+  ipcMain.handle("metis-store:get", (_event, key: string, fallback: unknown) => {
+    assertRendererMayReachStoreKey(key);
+    return readStoreValue(key, fallback);
+  });
+  ipcMain.handle("metis-store:set", (_event, key: string, value: unknown) => {
+    // Blocked for writes too, not just reads: overwriting "secrets" through the
+    // generic channel would clear every provider key with no audit line, while
+    // metis-secrets:set/delete both write one.
+    assertRendererMayReachStoreKey(key);
+    return writeStoreValue(key, value);
+  });
   ipcMain.handle("metis-secrets:list", () => listSecrets());
   ipcMain.handle("metis-secrets:set", (_event, provider: ProviderKey, value: string) => setSecret(provider, value));
   ipcMain.handle("metis-secrets:delete", (_event, provider: ProviderKey) => deleteSecret(provider));

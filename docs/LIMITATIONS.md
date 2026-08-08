@@ -56,15 +56,29 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 - **Key encryption depends on the OS.** `safeStorage` where the platform provides it, base64 on
   disk where it does not. The app shows you which one is in use rather than implying encryption it
   does not have.
+- **The renderer is trusted, and three things depend on it staying that way.** Audited 2026-08-05.
+  There is no CSP anywhere, no navigation guard (`setWindowOpenHandler`, `will-navigate`), and
+  none of the ~100 `ipcMain` handlers validates its sender — the ten `event.sender` uses all send
+  replies rather than checking origin. `contextIsolation` is on and `nodeIntegration` off, so this
+  is not a hole today: the chat renders through react-markdown with no `rehype-raw`, so
+  model-authored HTML is stripped rather than executed and nothing untrusted runs in that origin.
+  It is a standing precondition, not a guarantee. Rendering model-authored markup — the artifacts
+  work — is the change that would make it matter, and these three should land with it rather than
+  after it. Closed in the same audit: the generic store channel no longer reaches the `secrets`
+  key (`13-store-key-guard`).
+- **`shell.openExternal` accepts any `https?` URL from the renderer.** Its only check is the
+  protocol, so it is a working outbound channel for anything already running in the renderer. Same
+  precondition as above, and the same reason it is written down rather than fixed: an allowlist
+  that has to cover every legitimate link the app opens is a change worth making deliberately.
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 12 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 13 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
-  line-diff counts, the per-node depth rung rule, the chain artifact channel, and the honesty of
-  this documentation itself. They cover the adversarially-important slices, not the breadth of
-  `src/`.
+  line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
+  into the store, and the honesty of this documentation itself. They cover the
+  adversarially-important slices, not the breadth of `src/`.
 - **The docs are checked against the code, but only where a claim is mechanical.** `12-doc-honesty`
   verifies that every `FLAG OFF` feature names a store key that really falls back to off, that
   `doctor` reports every boolean flag the app reads, that the not-built-yet table contains nothing
@@ -80,8 +94,9 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   and a real routed provider answer, end to end inside the packaged executable. The remaining
   narrower caveat: that run used the unpacked directory target, not the NSIS installer output,
   which shares the same asar/app layout but is not literally the installed artifact.
-- **The `v1.0.0` tag predates almost everything described in the README.** It is all on `main` and
-  is not yet tagged.
+- **The newest tag is `v1.1.0`, from 2026-07-20, and `main` is well ahead of it.** Loop step
+  chains, per-node depths and image generation are all on `main` and in no release, so installing
+  from a release gets you materially less than the README describes.
 
 ## Narrower than the name suggests
 
