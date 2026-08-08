@@ -12,6 +12,37 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Security (2026-08-05)
+
+- **The renderer can no longer reach the `secrets` store key.**
+  `metis-store:get` forwarded any key to `readStoreValue` with only a
+  character check, and provider API keys live at that key —
+  `readSecrets` is `readStoreValue("secrets", {})`. So the generic store
+  channel was a second, unguarded route to the key file, sitting beside
+  the deliberately narrow `metis-secrets:list`, which returns which
+  provider and which storage tier and never a value. Blocked for writes
+  too: overwriting that key generically would clear every provider key
+  with no audit line, while the dedicated set and delete each write one.
+  Nothing in the renderer asked for it generically, so nothing changes
+  for users.
+
+  It was not reachable. The chat renders through react-markdown with no
+  `rehype-raw`, so model-authored HTML is stripped rather than executed
+  and nothing untrusted runs in the renderer's origin. This is defence in
+  depth ahead of in-chat artifacts, which is the change that would make
+  it reachable.
+
+### Changed (2026-08-05)
+
+- **Three standing preconditions are now written down** in
+  `docs/LIMITATIONS.md` rather than merely being true: there is no CSP,
+  no navigation guard, and none of the ~100 `ipcMain` handlers validates
+  its sender. `contextIsolation` is on and `nodeIntegration` off, so none
+  of it is a hole today — it is a set of assumptions that in-chat
+  artifacts would invalidate, and they should land together with that
+  work. `shell.openExternal` accepting any `https?` URL is recorded for
+  the same reason.
+
 ### Added (2026-07-26)
 
 - **The documentation is checked against the code by CI.** A new offline
