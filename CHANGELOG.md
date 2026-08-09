@@ -14,6 +14,33 @@ engine referenced below.
 
 ### Added (2026-08-05)
 
+- **A ```svg fence is drawn instead of printed.** Ask for a chart and the
+  reply renders it, with "Show code" one click away rather than replaced —
+  the model wrote code, and hiding it would make an SVG the one kind of
+  output you cannot read or copy.
+
+  Nothing is stored. An image is a real file, so its artifact carries a
+  path; an SVG is markup that is already in the run's `assistantText`,
+  which is already in `conversations.json`, and that file is rewritten
+  whole on every turn. Storing it again would duplicate every chart in a
+  file re-serialised on every message, to save a parse costing
+  microseconds. So detection happens where the fence is rendered.
+
+  Drawn through the same `<img>` data URL boundary as generated images.
+  An SVG loaded via `<img>` runs in secure static mode — no scripts, no
+  external fetches, no interactivity — so nothing strips `<script>`, on
+  purpose: a sanitiser would imply the boundary needs one, and people
+  start trusting the sanitiser instead of the guarantee.
+
+  The gate (`isRenderableSvg`) exists because Metis routes to small local
+  models that truncate constantly, and a broken render is worse than no
+  render. Anything not a single complete root SVG stays a code block.
+  `15-svg-artifact` pins 31 cases, most of them refusals — it caught a
+  real bug during development, where two charts concatenated passed a
+  balanced-tag-count check and would have rendered as only the first.
+  Counting opens and closes cannot tell one nested document from two
+  siblings; it now tracks depth.
+
 - **Generated images render in the chat.** Image generation wrote a real
   PNG and then told you its file path — the one place in the app that
   produced something visual and rendered it as prose. A run can now carry

@@ -164,6 +164,7 @@ import type { LoopRecord } from "../../electron/loops";
 // The SAME parser main.ts uses, so the hint strip under the composer cannot
 // promise something different from what the command will actually do.
 import { describeLoopCommand, formatLoopDuration, formatStepChain, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
+import { isRenderableSvg, svgDataUrl } from "../../shared/svg-artifact";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
 
@@ -6823,6 +6824,41 @@ function reactNodeToPlainText(node: ReactNode): string {
   return "";
 }
 
+/** The fence's language, which react-markdown puts on the inner <code> element
+ *  rather than passing to `pre`. Recovering it means reading the child, because
+ *  the info string is otherwise gone by the time a `pre` component sees it. */
+function fenceLanguage(children: ReactNode): string {
+  if (!isValidElement(children)) return "";
+  const className = (children.props as { className?: string }).className ?? "";
+  return /language-([\w+-]+)/.exec(className)?.[1]?.toLowerCase() ?? "";
+}
+
+/** A ```svg fence, drawn instead of printed.
+ *
+ *  Rendered through an <img> data URL, never inlined into the DOM. An SVG
+ *  loaded via <img> runs in secure static mode — no script execution, no
+ *  external fetches, no interactivity — which is a browser guarantee rather
+ *  than a sanitiser to be maintained. Inlining the same markup would hand it
+ *  the renderer's origin, and the renderer holds the IPC bridge.
+ *
+ *  The source stays one click away rather than being replaced, because the
+ *  model wrote code and hiding it entirely would make an SVG the one kind of
+ *  output you cannot read or copy. */
+function SvgArtifactBlock({ source, children }: { source: string; children?: ReactNode }): JSX.Element {
+  const [showSource, setShowSource] = useState(false);
+  const dataUrl = useMemo(() => svgDataUrl(source, (value) => window.btoa(unescape(encodeURIComponent(value)))), [source]);
+  return (
+    <figure className="rendered-artifact svg-artifact">
+      {showSource ? <CodeBlock>{children}</CodeBlock> : <img src={dataUrl} alt="Generated diagram" loading="lazy" />}
+      <figcaption>
+        <button type="button" className="svg-artifact-toggle" onClick={() => setShowSource((current) => !current)}>
+          {showSource ? "Show image" : "Show code"}
+        </button>
+      </figcaption>
+    </figure>
+  );
+}
+
 function CodeBlock({ children }: { children?: ReactNode }): JSX.Element | null {
   const ref = useRef<HTMLPreElement>(null);
   const [copied, setCopied] = useState(false);
@@ -6845,7 +6881,16 @@ function CodeBlock({ children }: { children?: ReactNode }): JSX.Element | null {
 }
 
 const MARKDOWN_COMPONENTS: Components = {
-  pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
+  pre: ({ children }) => {
+    // Only a complete, single-root SVG is promoted. Anything a model truncated
+    // stays a code block, because a broken render is worse than no render and
+    // Metis routes to local models that truncate constantly.
+    if (fenceLanguage(children) === "svg") {
+      const source = reactNodeToPlainText(children);
+      if (isRenderableSvg(source)) return <SvgArtifactBlock source={source}>{children}</SvgArtifactBlock>;
+    }
+    return <CodeBlock>{children}</CodeBlock>;
+  },
   code: ({ className, children }) => (className ? <code className={className}>{children}</code> : <code className="md-inline">{children}</code>),
   a: ({ href, children }) => (
     <a

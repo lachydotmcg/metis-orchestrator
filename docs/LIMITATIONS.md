@@ -84,12 +84,16 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 14 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 15 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
-  into the store, the conversation-store race, and the honesty of this documentation itself. They
-  cover the adversarially-important slices, not the breadth of `src/`.
+  into the store, the conversation-store race, the SVG render gate, and the honesty of this
+  documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+- **Nothing in the artifact path is verified in a running app.** The SVG gate and the generated-image
+  contract are pinned offline, and the renderer wiring is typechecked, but no recorded run shows a
+  chart actually drawn in a bubble. It is `SHIPPED`, not `VERIFIED`, and for the usual reason: the
+  manual walkthrough is the missing half.
 - **The docs are checked against the code, but only where a claim is mechanical.** `12-doc-honesty`
   verifies that every `FLAG OFF` feature names a store key that really falls back to off, that
   `doctor` reports every boolean flag the app reads, that the not-built-yet table contains nothing

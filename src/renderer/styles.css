@@ -3982,6 +3982,40 @@ p {
   border-top: 0;
 }
 
+/* A ```svg fence drawn as an image, with its source one click away. */
+.svg-artifact {
+  margin: 0 0 12px;
+}
+
+.svg-artifact img {
+  /* Generated charts declare a viewBox but often no intrinsic size, so without
+     a height the img collapses to nothing. */
+  width: 100%;
+  height: auto;
+  min-height: 80px;
+  background: var(--surface);
+}
+
+.svg-artifact .md-codeblock {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.svg-artifact-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.svg-artifact-toggle:hover {
+  color: var(--text);
+}
+
 /* Boxed code block with copy button. */
 .md-codeblock {
   position: relative;
