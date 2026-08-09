@@ -127,6 +127,13 @@ contextBridge.exposeInMainWorld("metisFiles", {
   write: (path: string, content: string) => ipcRenderer.invoke("metis-files:write", path, content) as Promise<MetisFileWriteResult>
 });
 
+// Read-only, and only for images Metis itself generated — the main-process
+// guard (assertGeneratedImagePathAllowed) is what enforces that, not this line.
+contextBridge.exposeInMainWorld("metisArtifacts", {
+  readImage: (path: string) =>
+    ipcRenderer.invoke("metis-artifacts:read-image", path) as Promise<{ ok: true; dataUrl: string; bytes: number } | { ok: false; error: string }>
+});
+
 contextBridge.exposeInMainWorld("metisSecrets", {
   list: () => ipcRenderer.invoke("metis-secrets:list"),
   set: (provider: ProviderKey, value: string) => ipcRenderer.invoke("metis-secrets:set", provider, value),

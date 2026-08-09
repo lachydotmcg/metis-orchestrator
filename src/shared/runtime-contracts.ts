@@ -728,6 +728,34 @@ export interface SessionRunInput {
   attachments?: SessionAttachment[];
 }
 
+/** Something a run produced that the chat should SHOW, not describe.
+ *
+ *  The first case is image generation, which until now wrote a real PNG and
+ *  then told you its file path — the one place in the app that produced
+ *  something visual and rendered it as prose.
+ *
+ *  `path` rather than bytes, on purpose: conversations.json is rewritten whole
+ *  on every turn, so carrying the image inline would re-serialise every image
+ *  ever generated on every message. The renderer asks for the bytes when it
+ *  paints, through an IPC narrow enough to only ever serve Metis's own output.
+ *
+ *  `kind` is what the renderer needs to know to draw it, not what produced it.
+ *  "image" is a raster file on disk. "svg" is markup, which is drawn through
+ *  an <img> data URL rather than inlined — an <img> cannot execute script, so
+ *  that is a browser guarantee rather than a sanitiser to be trusted. */
+export interface RenderedArtifact {
+  kind: "image" | "svg";
+  /** Shown as the caption, and used as the download name. */
+  title: string;
+  mimeType: string;
+  /** Absolute path on disk. Never bytes — see above. */
+  path: string;
+  bytes?: number;
+  /** What produced it, e.g. "Nano Banana 2". Displayed as provenance so a
+   *  generated image is never mistaken for one the user supplied. */
+  producedBy?: string;
+}
+
 export interface ProjectArtifact {
   kind: "file" | "file_create" | "directory" | "preview";
   label: string;
@@ -956,6 +984,17 @@ export interface SessionRun {
   timeline?: SessionTimelineEvent[];
   steps: SessionPipelineStep[];
   assistantText: string;
+  /** Things this run produced that the chat should SHOW rather than describe.
+   *
+   *  Deliberately not called ProjectArtifact — that name is taken, and means
+   *  something different: a source file the build pipeline wrote into your
+   *  folder. This is the display channel. The two overlap today (a generated
+   *  image is both) and will not always.
+   *
+   *  Holds a path, never bytes. conversations.json is rewritten in full on
+   *  every turn, so inlining an image would re-serialise every image ever
+   *  generated on every message. */
+  renderedArtifacts?: RenderedArtifact[];
   stages?: OrchestrationStage[];
   outputUrl?: string;
   warnings: string[];

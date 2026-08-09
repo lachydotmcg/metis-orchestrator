@@ -39,6 +39,7 @@ import type {
   MetisFileReadResult,
   MetisFileWriteResult,
   ProjectArtifact,
+  RenderedArtifact,
   ProjectSnapshot,
   ProjectSnapshotFile,
   ProjectToolResult,
@@ -119,7 +120,14 @@ import {
 import { runCliMode, type CliRuntime } from "./cli.js";
 // Lifted out of this file so the test suite can exercise the REAL predicates
 // rather than a pasted copy of each regex. See src/shared/intent-and-paths.ts.
-import { clampPermissionMode, isBuildQuestionGuard, isEditIntent, isPathInside, sameResolvedPath } from "../shared/intent-and-paths.js";
+import {
+  clampPermissionMode,
+  isBuildQuestionGuard,
+  isEditIntent,
+  isGeneratedImagePath,
+  isPathInside,
+  sameResolvedPath
+} from "../shared/intent-and-paths.js";
 import { lineDiffCounts } from "../shared/line-diff.js";
 import { pickDepthRung } from "../shared/depth-stack.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
@@ -2060,6 +2068,12 @@ async function gatePermission(args: {
 
 const METIS_FILE_READ_MAX_BYTES = 200_000;
 
+/** Ceiling on a generated image painted in the chat. Base64 inflates by ~33%
+ *  and the string crosses IPC and then lives in a React tree, so this bounds
+ *  what one oversized image can do to the renderer. Comfortably above anything
+ *  the image models in IMAGE_MODEL_CATALOG actually return. */
+const GENERATED_IMAGE_MAX_BYTES = 12_000_000;
+
 /** Reads a file for the Graph View document viewer (file-node click). SECURITY: only allows
  *  paths inside the currently-granted project workspace (via resolveWritableProjectWorkspace)
  *  or inside a granted project resource (filesystem.read grant from addProjectResource) —
@@ -2071,6 +2085,59 @@ const METIS_FILE_READ_MAX_BYTES = 200_000;
  *  inside a granted project resource (filesystem.read grant from addProjectResource). Both
  *  readMetisFile and writeMetisFile call this exact same check so the write path can never be
  *  looser than read. Returns the resolved absolute target on success, throws otherwise. */
+/** The only paths the renderer may ask to be painted as an image.
+ *
+ *  Deliberately NOT assertMetisFilePathAllowed. That guard answers "may the
+ *  user open this file in the document viewer", which depends on workspace and
+ *  resource grants; generated images land outside any workspace when no project
+ *  folder is selected, so reusing it would have meant loosening it. Widening a
+ *  path guard to make a display feature work is how path guards stop meaning
+ *  anything.
+ *
+ *  This one answers a much smaller question: is this a file Metis itself
+ *  generated? Two locations, both written by runImageGenerationRequest, and
+ *  nothing else qualifies. A renderer asking for anything else — a source file,
+ *  a key file, an arbitrary absolute path — is refused whether or not the user
+ *  happens to have granted that folder for something else. */
+async function assertGeneratedImagePathAllowed(rawPath: string): Promise<string> {
+  if (!rawPath || typeof rawPath !== "string") throw new Error("A file path is required.");
+  const target = resolve(rawPath);
+
+  // The workspace must still be the SELECTED one — a stale path from an old run
+  // in a folder you have since moved on from is not readable.
+  const workspace = await readProjectWorkspace();
+  const allowed = isGeneratedImagePath(target, {
+    userDataImagesDir: join(app.getPath("userData"), "metis-store", "generated-projects", "images"),
+    workspaceImagesDir: workspace ? join(workspace.path, "images") : undefined
+  });
+  if (!allowed) throw new Error("That file is not a Metis-generated image.");
+  return target;
+}
+
+/** Reads a generated image as a data URL for the renderer to paint.
+ *
+ *  Bytes cross IPC rather than the renderer loading `file://` directly, because
+ *  in dev the renderer is served from http://127.0.0.1:5177 and Chromium
+ *  refuses a file:// subresource from an http origin. Going through main means
+ *  dev and packaged behave identically, and the path guard above is the only
+ *  way in. */
+async function readGeneratedImage(rawPath: string): Promise<{ ok: true; dataUrl: string; bytes: number } | { ok: false; error: string }> {
+  try {
+    const target = await assertGeneratedImagePathAllowed(rawPath);
+    const fileStat = await stat(target);
+    if (!fileStat.isFile()) return { ok: false, error: "Not a file." };
+    if (fileStat.size > GENERATED_IMAGE_MAX_BYTES) {
+      return { ok: false, error: `That image is larger than the ${Math.round(GENERATED_IMAGE_MAX_BYTES / 1024 / 1024)} MB display limit.` };
+    }
+    const raw = await readFile(target);
+    return { ok: true, dataUrl: `data:${mimeTypeFor(target)};base64,${raw.toString("base64")}`, bytes: fileStat.size };
+  } catch (error) {
+    // Never throws out of the IPC handler: a missing or refused image shows as
+    // a caption in the bubble, not an unhandled rejection that blanks the chat.
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 async function assertMetisFilePathAllowed(rawPath: string): Promise<string> {
   if (!rawPath || typeof rawPath !== "string") throw new Error("A file path is required.");
   const target = resolve(rawPath);
@@ -6132,6 +6199,7 @@ async function runImageGenerationRequest(args: {
   const workspace = await resolveActiveProjectWorkspace(input.projectPath, input.conversationId);
   const operations: AgentOperation[] = [];
   const warnings: string[] = [];
+  const renderedArtifacts: RenderedArtifact[] = [];
   let assistantText: string;
   let servedBy = route;
   try {
@@ -6174,6 +6242,17 @@ async function runImageGenerationRequest(args: {
     operations.push(op);
     emitStream(stream, { kind: "operation", operation: op });
     emitTimeline(stream, { id: randomUUID(), kind: "operations", title: "Image written", operationIds: [op.id] });
+    renderedArtifacts.push({
+      kind: "image",
+      title: fileName,
+      mimeType: image.mimeType,
+      path: target,
+      bytes: bytes.length,
+      producedBy: servedBy.label
+    });
+    // The path stays in the sentence. The image is now shown above it, but the
+    // file is real and on disk, and telling someone where their file went is
+    // not made redundant by also showing it to them.
     assistantText = `I generated the image with ${servedBy.label} and saved it to ${target}.`;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -6199,6 +6278,7 @@ async function runImageGenerationRequest(args: {
       { id: "provider", label: "Generate the image", detail: `${route.provider} / ${route.model}`, status: warnings.length ? "error" : "complete" }
     ],
     assistantText,
+    renderedArtifacts: renderedArtifacts.length ? renderedArtifacts : undefined,
     warnings
   };
   await appendRunToConversation(run, prompt);
@@ -13875,6 +13955,7 @@ app.whenReady().then(async () => {
     const error = await shell.openPath(path);
     if (error) throw new Error(error);
   });
+  ipcMain.handle("metis-artifacts:read-image", (_event, path: string) => readGeneratedImage(path));
   ipcMain.handle("metis-store:get", (_event, key: string, fallback: unknown) => {
     assertRendererMayReachStoreKey(key);
     return readStoreValue(key, fallback);

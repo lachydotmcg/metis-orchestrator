@@ -92,6 +92,20 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
   directive bus that carries mid-run steering. What is missing is anchoring — a comment has to
   survive the agent rewriting the text under it, which is the same stale-range problem every
   review tool has, and the reason this is a design task rather than a wiring one.
+- **A loop cannot check its own work** (found by dogfooding, 2026-08-05). The decision layer asks
+  one question — continue or stop — and nothing observable feeds into it. A turn can already run
+  `npm run test --if-present` as a conservative project command, but the result goes into the
+  transcript, not into the next decision, so a loop cannot say "the tests fail, try again" or
+  "the tests pass, move on". Every turn's judgement is the model reading its own prose about what
+  it did.
+
+  This is the difference between a loop that works overnight and one that DRIFTS overnight, and it
+  is a bigger gap than the missing conditional edges — an unverified loop with branches just
+  reaches the wrong step faster. It also overlaps the gate idea in the flowchart research: a gate
+  needs a verdict, and a command's exit code is a far better verdict than a model's opinion of its
+  own output. Pieces that already exist: the conservative command runner, `AgentOperation` records
+  with status, and the decision block's parser. What is missing is a channel from an operation's
+  outcome into the next turn's prompt, and a rule for which operations count.
 - **Learned routing.** Metis already keeps a private local log of how you actually use it. Nothing
   reads it back into a routing decision yet, and doing so without making routing unpredictable is
   the hard part.

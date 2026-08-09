@@ -150,6 +150,9 @@ declare global {
       read: (path: string) => Promise<MetisFileReadResult>;
       write: (path: string, content: string) => Promise<MetisFileWriteResult>;
     };
+    metisArtifacts?: {
+      readImage: (path: string) => Promise<{ ok: true; dataUrl: string; bytes: number } | { ok: false; error: string }>;
+    };
     metisSecrets?: {
       list: () => Promise<SecretStatus[]>;
       set: (provider: ProviderKey, value: string) => Promise<SecretStatus>;

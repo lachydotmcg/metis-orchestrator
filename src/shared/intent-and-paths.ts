@@ -117,3 +117,26 @@ export function isPathInside(child: string, parent: string): boolean {
   const parentWithSep = parentResolved.endsWith("\\") || parentResolved.endsWith("/") ? parentResolved : `${parentResolved}\\`;
   return childResolved.toLowerCase().startsWith(parentWithSep.toLowerCase()) || childResolved.toLowerCase().startsWith(`${parentResolved.toLowerCase()}/`);
 }
+
+/** Whether the renderer may ask for this path to be painted as an image.
+ *
+ *  Only files Metis itself generated qualify, and there are exactly two places
+ *  runImageGenerationRequest writes: an `images/` folder under the selected
+ *  workspace, or one under userData when no project folder is selected.
+ *
+ *  Deliberately separate from the document viewer's guard, which answers a
+ *  different question ("may the user open this file") using workspace and
+ *  resource grants. Generated images can land outside any workspace, so reusing
+ *  that guard would have meant widening it — and widening a path guard to make
+ *  a display feature work is how path guards stop meaning anything.
+ *
+ *  Pure, and takes its directories as arguments, so the rule can be tested
+ *  without an Electron app object. The caller supplies the real ones. */
+export function isGeneratedImagePath(
+  target: string,
+  dirs: { userDataImagesDir: string; workspaceImagesDir?: string }
+): boolean {
+  if (!target || typeof target !== "string") return false;
+  if (isPathInside(target, dirs.userDataImagesDir)) return true;
+  return Boolean(dirs.workspaceImagesDir) && isPathInside(target, dirs.workspaceImagesDir!);
+}

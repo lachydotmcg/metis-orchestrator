@@ -144,6 +144,7 @@ import type {
   RegistryState,
   Routine,
   SessionAttachment,
+  RenderedArtifact,
   SessionRun,
   SessionRunInput,
   SessionPipelineStep,
@@ -7544,6 +7545,87 @@ function AssistantResponse({ children, source }: { children: string; source: Ret
   );
 }
 
+/** Paints a generated image inline, in the bubble, where it was made.
+ *
+ *  Until this existed, image generation wrote a real PNG and then told you its
+ *  file path — the only place in the app that produced something visual and
+ *  rendered it as prose.
+ *
+ *  Drawn as an <img> with a data URL rather than by inlining anything. An <img>
+ *  cannot execute script whatever its bytes contain, which is a browser
+ *  guarantee rather than a sanitiser to be trusted, and it is why this phase
+ *  needs none of the CSP and sandbox work that HTML artifacts will.
+ *
+ *  Bytes come over IPC instead of a file:// src because in dev the renderer is
+ *  served from http://127.0.0.1:5177 and Chromium refuses a file:// subresource
+ *  from an http origin — so a file:// src would work packaged and silently fail
+ *  every day in development. */
+function RenderedArtifactImage({ artifact }: { artifact: RenderedArtifact }): JSX.Element | null {
+  const [dataUrl, setDataUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    const bridge = window.metisArtifacts;
+    if (!bridge) {
+      setError("Image display needs the desktop app.");
+      return;
+    }
+    void bridge
+      .readImage(artifact.path)
+      .then((result) => {
+        if (!live) return;
+        if (result.ok) setDataUrl(result.dataUrl);
+        else setError(result.error);
+      })
+      .catch((err: unknown) => {
+        if (live) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      live = false;
+    };
+  }, [artifact.path]);
+
+  // A failed read is a caption, never a broken-image icon and never nothing:
+  // the file is real and on disk, so the path stays useful even when the
+  // preview cannot be drawn.
+  if (error) {
+    return (
+      <figure className="rendered-artifact rendered-artifact-failed">
+        <figcaption>
+          {artifact.title} — could not be displayed ({error})
+        </figcaption>
+      </figure>
+    );
+  }
+  if (!dataUrl) return <figure className="rendered-artifact rendered-artifact-loading" aria-busy="true" />;
+  return (
+    <figure className="rendered-artifact">
+      <img src={dataUrl} alt={artifact.title} loading="lazy" />
+      <figcaption>
+        {artifact.title}
+        {artifact.producedBy ? ` · ${artifact.producedBy}` : ""}
+      </figcaption>
+    </figure>
+  );
+}
+
+/** Every renderable artifact a run produced, mounted once under the assistant
+ *  text — same placement rule as RunProposedActions, and for the same reason:
+ *  CompletedRun has three branches and an artifact belongs to the run, not to
+ *  whichever branch happened to render its text. */
+function RunRenderedArtifacts({ run }: { run: SessionRun }): JSX.Element | null {
+  const artifacts = run.renderedArtifacts ?? [];
+  if (!artifacts.length) return null;
+  return (
+    <div className="rendered-artifact-list">
+      {artifacts.map((artifact, index) => (
+        <RenderedArtifactImage key={`${artifact.path}-${index}`} artifact={artifact} />
+      ))}
+    </div>
+  );
+}
+
 /** Approve/dismiss cards for actions a completed run proposed (docs/DRILL_PLAN.md
  *  Phase 3 L6 part 2 — the same `ManagerAction[]` protocol the Manager tab uses,
  *  now attached to `SessionRun.actions` on a general-chat turn). Reuses
@@ -7652,6 +7734,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
       <>
         {roster}
         <RunTimeline run={run} events={run.timeline} warnings={warnings} />
+        <RunRenderedArtifacts run={run} />
         <RunProposedActions run={run} onNavigate={navigate} />
       </>
     );
@@ -7668,6 +7751,7 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
         {run.projectResult ? <ProjectArtifacts run={run} /> : null}
         <RouteLine run={run} />
         {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
+        <RunRenderedArtifacts run={run} />
         <RunProposedActions run={run} onNavigate={navigate} />
       </>
     );
@@ -7685,7 +7769,8 @@ const CompletedRun = memo(function CompletedRun({ run, onNavigate }: { run: Sess
       {showRouteTrace ? <RouteLine run={run} /> : null}
       {showRouteTrace && followUp ? <AssistantResponse source={source}>{followUp}</AssistantResponse> : null}
       {warnings.length > 0 ? <small className="session-warning">{warnings[0]}</small> : null}
-      <RunProposedActions run={run} onNavigate={navigate} />
+      <RunRenderedArtifacts run={run} />
+        <RunProposedActions run={run} onNavigate={navigate} />
     </>
   );
 });

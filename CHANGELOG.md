@@ -12,6 +12,32 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Added (2026-08-05)
+
+- **Generated images render in the chat.** Image generation wrote a real
+  PNG and then told you its file path — the one place in the app that
+  produced something visual and rendered it as prose. A run can now carry
+  `renderedArtifacts`, and the bubble paints them above the reply. The
+  file path stays in the sentence: the file is real, and telling you where
+  it went is not made redundant by also showing it to you.
+
+  Drawn as an `<img>` with a data URL. An `<img>` cannot execute script
+  whatever its bytes contain, so this phase needs none of the CSP and
+  sandbox work that HTML artifacts will. Bytes cross IPC rather than being
+  loaded as a `file://` src, because in dev the renderer is served over
+  http and Chromium refuses a `file://` subresource from an http origin —
+  a `file://` src would have worked packaged and failed silently every day
+  in development.
+
+  The IPC that serves them has its own narrow path guard
+  (`isGeneratedImagePath`): the two folders image generation actually
+  writes to, and nothing else. Deliberately not the document viewer's
+  guard, which answers a different question using workspace grants —
+  generated images land outside any workspace when no project folder is
+  selected, so reusing it would have meant widening it. Pinned in
+  `08-path-containment`, including that a source file, a `.env`, and the
+  secrets store in the same folders are all refused.
+
 ### Fixed (2026-08-05)
 
 - **Concurrent runs no longer overwrite each other's chat history.**

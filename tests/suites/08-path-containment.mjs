@@ -20,7 +20,7 @@
 import { fromBuild, section, check, summary } from "../harness.mjs";
 import { join, resolve, sep } from "node:path";
 
-const { isPathInside, sameResolvedPath } = await fromBuild("shared/intent-and-paths.js");
+const { isPathInside, sameResolvedPath, isGeneratedImagePath } = await fromBuild("shared/intent-and-paths.js");
 
 // An absolute root native to whichever OS is running the suite.
 const BASE = resolve(join(process.cwd(), "testroot"));
@@ -51,6 +51,41 @@ section("Case handling");
 // because it is what the shipped code does.
 check("different case is still inside", isPathInside(join(ROOT.toUpperCase(), "APP.JS"), ROOT), true);
 check("sameResolvedPath ignores case", sameResolvedPath(ROOT, ROOT.toUpperCase()), true);
+
+section("Only Metis's own generated images may be painted in the chat");
+{
+  // The renderer asks main for image bytes by absolute path. This is the rule
+  // that decides which paths are answerable, and it exists SEPARATELY from the
+  // document viewer's guard on purpose: generated images land outside any
+  // workspace when no project folder is selected, so reusing that guard would
+  // have meant widening it to cover userData.
+  const userDataImagesDir = join('C:', 'Users', 'x', 'AppData', 'Roaming', 'Metis', 'metis-store', 'generated-projects', 'images');
+  const workspaceImagesDir = join('C:', 'work', 'site', 'images');
+  const dirs = { userDataImagesDir, workspaceImagesDir };
+
+  check('a userData generated image is allowed', isGeneratedImagePath(join(userDataImagesDir, 'metis-image-1.png'), dirs), true);
+  check('a workspace generated image is allowed', isGeneratedImagePath(join(workspaceImagesDir, 'metis-image-2.png'), dirs), true);
+
+  // The refusals are the point of the guard.
+  check('a source file in the same workspace is refused', isGeneratedImagePath(join('C:', 'work', 'site', 'script.js'), dirs), false);
+  check('a key file is refused', isGeneratedImagePath(join('C:', 'work', 'site', '.env'), dirs), false);
+  check('the store itself is refused', isGeneratedImagePath(join('C:', 'Users', 'x', 'AppData', 'Roaming', 'Metis', 'metis-store', 'secrets.json'), dirs), false);
+  check('an arbitrary absolute path is refused', isGeneratedImagePath(join('C:', 'Windows', 'System32', 'config', 'SAM'), dirs), false);
+  check('empty input is refused', isGeneratedImagePath('', dirs), false);
+
+  // Same prefix-attack property the rest of this suite exists for: a sibling
+  // folder whose name merely starts with 'images' is not inside it.
+  check('a prefix-sharing sibling is refused', isGeneratedImagePath(join('C:', 'work', 'site', 'images-backup', 'x.png'), dirs), false);
+
+  // Traversal out of an allowed folder must not survive resolution.
+  check('traversal out of the allowed folder is refused', isGeneratedImagePath(join(workspaceImagesDir, '..', 'script.js'), dirs), false);
+
+  // With no project folder selected there is no workspace half at all, and the
+  // userData half must still work on its own.
+  const noWorkspace = { userDataImagesDir };
+  check('userData still works with no workspace', isGeneratedImagePath(join(userDataImagesDir, 'a.png'), noWorkspace), true);
+  check('a workspace path is refused when no workspace is selected', isGeneratedImagePath(join(workspaceImagesDir, 'a.png'), noWorkspace), false);
+}
 
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);

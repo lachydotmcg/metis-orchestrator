@@ -3942,6 +3942,46 @@ p {
   font-size: 0.88em;
 }
 
+/* Generated images, painted in the bubble instead of described as a file path. */
+.rendered-artifact-list {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+
+.rendered-artifact {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--canvas);
+}
+
+.rendered-artifact img {
+  display: block;
+  /* The bubble is the constraint, not the image: a 2048px generation must not
+     widen the conversation column. */
+  max-width: 100%;
+  height: auto;
+}
+
+.rendered-artifact figcaption {
+  padding: 7px 10px;
+  font-size: 0.82em;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+}
+
+/* Reserves height while the bytes come over IPC, so the message does not jump
+   when the image lands. */
+.rendered-artifact-loading {
+  min-height: 140px;
+}
+
+.rendered-artifact-failed figcaption {
+  border-top: 0;
+}
+
 /* Boxed code block with copy button. */
 .md-codeblock {
   position: relative;
