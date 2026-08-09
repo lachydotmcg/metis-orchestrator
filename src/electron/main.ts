@@ -5198,6 +5198,44 @@ async function writeConversations(conversations: ConversationRecord[]): Promise<
   await writeStoreValue("conversations", conversations.slice(0, 200));
 }
 
+/** Serialises conversation mutations and RE-READS inside the lock, the same
+ *  shape and for the same reason as mutateLoops.
+ *
+ *  Every writer here was read-modify-write against a snapshot taken before an
+ *  await. That is only a theoretical race while one turn runs at a time, and
+ *  phase 2A stopped that being true: a loop turn can spawn up to three helpers,
+ *  each of which is a full tracked run that appends to its own conversation
+ *  through this same store. Four concurrent writers, each holding a snapshot
+ *  from before its model call, and the slowest one wins — so a conversation
+ *  turn that was written and displayed simply is not there after a restart.
+ *
+ *  The mutator must be pure and synchronous. Anything slow inside the lock
+ *  (a model call, a file scan) serialises the whole app's chat history behind
+ *  it, which trades a rare lost turn for a guaranteed stall.
+ *
+ *  Process-local, exactly like mutateLoops: two Metis processes sharing one
+ *  store still race, and nothing here pretends otherwise. That is why the CLI
+ *  is given its own loop origin rather than sharing the app's. */
+let conversationMutationQueue: Promise<unknown> = Promise.resolve();
+
+function mutateConversations<T>(
+  mutator: (current: ConversationRecord[]) => { next: ConversationRecord[]; result: T }
+): Promise<T> {
+  const run = conversationMutationQueue.then(async () => {
+    const current = await readConversations();
+    const { next, result } = mutator(current);
+    await writeConversations(next);
+    return result;
+  });
+  // The chain must survive a failed mutation, or one throw wedges every later
+  // conversation write for the life of the process.
+  conversationMutationQueue = run.then(
+    () => undefined,
+    () => undefined
+  );
+  return run;
+}
+
 function conversationTitle(prompt: string): string {
   const cleaned = prompt
     .replace(/\s+/g, " ")
@@ -5400,10 +5438,13 @@ async function deleteProjectConversations(projectPath?: string): Promise<Convers
 }
 
 async function appendRunToConversation(run: SessionRun, prompt: string): Promise<string> {
-  const current = await readConversations();
-  let conversation = run.conversationId ? current.find((item) => item.id === run.conversationId) : undefined;
-  if (!conversation) {
-    conversation = {
+  // Serialised, because this is the one conversation writer that concurrent
+  // runs all reach: a loop turn and each of its up-to-three helpers append
+  // through here at once. Read-modify-write against a pre-await snapshot lost
+  // whichever turn finished first.
+  const { id, created } = await mutateConversations((current) => {
+    const existing = run.conversationId ? current.find((item) => item.id === run.conversationId) : undefined;
+    const conversation: ConversationRecord = existing ?? {
       id: run.conversationId ?? randomUUID(),
       projectPath: run.projectPath,
       title: conversationTitle(prompt),
@@ -5411,40 +5452,51 @@ async function appendRunToConversation(run: SessionRun, prompt: string): Promise
       updatedAt: run.completedAt,
       turns: []
     };
-    // Per-conversation resources (Lachy): anything attached on the new
-    // session page (the pending bucket) belongs to the conversation that
-    // first message just created. Fail-soft - resources are never
-    // run-critical.
+
+    const userTurn: ConversationTurnRecord = {
+      id: randomUUID(),
+      role: "user",
+      createdAt: run.createdAt,
+      content: prompt,
+      runId: run.id
+    };
+    const assistantTurn: ConversationTurnRecord = {
+      id: randomUUID(),
+      role: "assistant",
+      createdAt: run.completedAt,
+      content: run.assistantText,
+      runId: run.id,
+      run
+    };
+    const nextConversation: ConversationRecord = {
+      ...conversation,
+      projectPath: run.projectPath ?? conversation.projectPath,
+      updatedAt: run.completedAt,
+      turns: [...conversation.turns, userTurn, assistantTurn]
+    };
+    return {
+      next: [nextConversation, ...current.filter((item) => item.id !== nextConversation.id)],
+      result: { id: nextConversation.id, created: !existing }
+    };
+  });
+
+  // Per-conversation resources (Lachy): anything attached on the new session
+  // page (the pending bucket) belongs to the conversation that first message
+  // just created. Fail-soft — resources are never run-critical.
+  //
+  // Deliberately AFTER the lock rather than inside it. The mutator has to stay
+  // synchronous: an await in there serialises every conversation write in the
+  // app behind a filesystem call, which trades a rare lost turn for a reliable
+  // stall. The claim runs a moment later than it used to and now finds the
+  // conversation already persisted, which is if anything the safer order.
+  if (created) {
     try {
-      await claimPendingResources(conversation.id);
+      await claimPendingResources(id);
     } catch {
       /* best-effort */
     }
   }
-
-  const userTurn: ConversationTurnRecord = {
-    id: randomUUID(),
-    role: "user",
-    createdAt: run.createdAt,
-    content: prompt,
-    runId: run.id
-  };
-  const assistantTurn: ConversationTurnRecord = {
-    id: randomUUID(),
-    role: "assistant",
-    createdAt: run.completedAt,
-    content: run.assistantText,
-    runId: run.id,
-    run
-  };
-  const nextConversation: ConversationRecord = {
-    ...conversation,
-    projectPath: run.projectPath ?? conversation.projectPath,
-    updatedAt: run.completedAt,
-    turns: [...conversation.turns, userTurn, assistantTurn]
-  };
-  await writeConversations([nextConversation, ...current.filter((item) => item.id !== nextConversation.id)]);
-  return nextConversation.id;
+  return id;
 }
 
 /** A prompt too short/thin to summarise meaningfully ("hi", "test", "yo") —

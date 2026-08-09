@@ -12,6 +12,22 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Fixed (2026-08-05)
+
+- **Concurrent runs no longer overwrite each other's chat history.**
+  `appendRunToConversation` read the whole conversation list, awaited, then
+  wrote a list built from the snapshot it took before that await. With one
+  turn at a time that was theoretical; phase 2A ended that, since a loop
+  turn can spawn three helpers and each is a full tracked run appending
+  through the same store. Four writers, four stale snapshots, slowest wins,
+  and a turn you watched appear is gone after a restart. It now goes through
+  `mutateConversations`, which serialises and re-reads inside the lock —
+  the same shape as `mutateLoops`, which fixed this exact bug one store
+  over. Modelled in `14-conversation-races`, where the old shape kept 1 of
+  4 concurrent conversations and the new one keeps all 4. Nine lower-risk
+  writers (create, delete, archive, fork, rename, auto-title) are not yet
+  converted and are recorded in `docs/LIMITATIONS.md`.
+
 ### Security (2026-08-05)
 
 - **The renderer can no longer reach the `secrets` store key.**

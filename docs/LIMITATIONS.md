@@ -43,6 +43,17 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Safety and recovery
 
+- **Nine conversation writers are still read-modify-write.** Fixed 2026-08-05 for the one that
+  matters most: `appendRunToConversation` now goes through `mutateConversations`, which serialises
+  and re-reads inside the lock, so a loop turn and its up-to-three helpers can no longer overwrite
+  each other's turns. Modelled offline in `14-conversation-races`, where the old shape kept 1 of 4
+  concurrent conversations. The other nine writers — create, delete, archive, fork, rename,
+  auto-title — take the same pre-await snapshot and are not yet converted. They are far less
+  reachable, because each needs the user to act on two conversations at once, but "less reachable"
+  is not "safe".
+- **Serialised writes are process-local.** Two Metis processes sharing one store still race, for
+  conversations exactly as for loops. It is why a CLI loop carries its own origin and is never
+  resumed by the app.
 - **Undo is one deep.** Only the most recent generated write can be reverted from Settings. Older
   snapshot folders still exist on disk with their manifests, but there is no history browser.
 - **A revert never deletes files the run created.** Restoring content is safe and reversible;
@@ -73,12 +84,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 13 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 14 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
-  into the store, and the honesty of this documentation itself. They cover the
-  adversarially-important slices, not the breadth of `src/`.
+  into the store, the conversation-store race, and the honesty of this documentation itself. They
+  cover the adversarially-important slices, not the breadth of `src/`.
 - **The docs are checked against the code, but only where a claim is mechanical.** `12-doc-honesty`
   verifies that every `FLAG OFF` feature names a store key that really falls back to off, that
   `doctor` reports every boolean flag the app reads, that the not-built-yet table contains nothing
