@@ -43,14 +43,14 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Safety and recovery
 
-- **Nine conversation writers are still read-modify-write.** Fixed 2026-08-05 for the one that
-  matters most: `appendRunToConversation` now goes through `mutateConversations`, which serialises
-  and re-reads inside the lock, so a loop turn and its up-to-three helpers can no longer overwrite
-  each other's turns. Modelled offline in `14-conversation-races`, where the old shape kept 1 of 4
-  concurrent conversations. The other nine writers — create, delete, archive, fork, rename,
-  auto-title — take the same pre-await snapshot and are not yet converted. They are far less
-  reachable, because each needs the user to act on two conversations at once, but "less reachable"
-  is not "safe".
+- ~~**Conversation writers were read-modify-write.**~~ Fixed 2026-08-05: all ten now go through
+  `mutateConversations`, which serialises and re-reads inside the lock, so a loop turn and its
+  up-to-three helpers can no longer overwrite each other's turns. Modelled offline in
+  `14-conversation-races`, where the old shape kept 1 of 4 concurrent conversations. The
+  auto-titler was the worst of them: it re-read just before writing, which narrowed the window
+  without closing it, behind a model call that takes seconds. `writeConversations` now has exactly
+  one call site and the suite asserts that on the source, because the unsafe shape reads perfectly
+  naturally and the eleventh writer would otherwise be added the same way.
 - **Serialised writes are process-local.** Two Metis processes sharing one store still race, for
   conversations exactly as for loops. It is why a CLI loop carries its own origin and is never
   resumed by the app.

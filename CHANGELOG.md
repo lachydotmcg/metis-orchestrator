@@ -24,9 +24,14 @@ engine referenced below.
   `mutateConversations`, which serialises and re-reads inside the lock —
   the same shape as `mutateLoops`, which fixed this exact bug one store
   over. Modelled in `14-conversation-races`, where the old shape kept 1 of
-  4 concurrent conversations and the new one keeps all 4. Nine lower-risk
-  writers (create, delete, archive, fork, rename, auto-title) are not yet
-  converted and are recorded in `docs/LIMITATIONS.md`.
+  4 concurrent conversations and the new one keeps all 4. All ten writers
+  are converted — create, delete, archive, fork, rename, set-project,
+  delete-by-project and the auto-titler included. The auto-titler was the
+  worst of them: it re-read just before writing, which narrowed the window
+  without closing it, behind a model call that takes seconds.
+  `writeConversations` now has exactly one call site, and the suite asserts
+  that against the source, because the unsafe shape reads perfectly
+  naturally and the eleventh writer would otherwise be added the same way.
 
 ### Security (2026-08-05)
 

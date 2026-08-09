@@ -5254,17 +5254,20 @@ async function createConversation(projectPath?: string, firstPrompt?: string): P
     updatedAt: now,
     turns: []
   };
-  const current = await readConversations();
-  await writeConversations([conversation, ...current]);
+  await mutateConversations((current) => ({ next: [conversation, ...current], result: undefined }));
   return conversation;
 }
 
 async function deleteConversation(id: string): Promise<ConversationRecord[]> {
-  const current = await readConversations();
-  const conversation = current.find((item) => item.id === id);
-  const next = current.filter((item) => item.id !== id);
-  await writeConversations(next);
+  const { conversation, next } = await mutateConversations((current) => {
+    const found = current.find((item) => item.id === id);
+    const remaining = current.filter((item) => item.id !== id);
+    return { next: remaining, result: { conversation: found, next: remaining } };
+  });
 
+  // Session runs are a DIFFERENT store, so this stays outside the conversation
+  // lock: holding one store's lock across another store's read and write is how
+  // two locks become a deadlock the first time the other store wants this one.
   const deletedRunIds = new Set(conversation?.turns.map((turn) => turn.runId).filter(Boolean) ?? []);
   const runs = await readSessionRuns();
   await writeSessionRuns(runs.filter((run) => run.conversationId !== id && !deletedRunIds.has(run.id)));
@@ -5287,57 +5290,63 @@ async function deleteConversation(id: string): Promise<ConversationRecord[]> {
  *  per-conversation model memory: fork the same context onto a different
  *  model and compare (the renderer copies the model mapping). */
 async function forkConversation(id: string, uptoRunId?: string): Promise<ConversationRecord | null> {
-  const current = await readConversations();
-  const source = current.find((item) => item.id === id);
-  if (!source) return null;
-  let cut = source.turns.length;
-  if (uptoRunId) {
-    const index = source.turns.findIndex((turn) => turn.runId === uptoRunId);
-    if (index >= 0) cut = index + 1;
-  }
   const now = new Date().toISOString();
-  const fork: ConversationRecord = {
-    id: randomUUID(),
-    projectPath: source.projectPath,
-    title: `${source.title} (fork)`,
-    createdAt: now,
-    updatedAt: now,
-    turns: source.turns.slice(0, cut).map(({ runId: _dropped, ...turn }) => ({ ...turn, id: randomUUID() })),
-    // The fork title is derived and deliberate - never auto-retitled.
-    titleManual: true,
-    autoTitleAttempted: true
-  };
-  await writeConversations([fork, ...current]);
-  await appendAudit("info", "conversation.fork", `Forked conversation "${source.title}" (${fork.turns.length} turns).`, {
-    sourceId: id,
-    forkId: fork.id
+  const forked = await mutateConversations((current) => {
+    const source = current.find((item) => item.id === id);
+    // A no-op still has to return the list unchanged: the mutator's `next` is
+    // written unconditionally, so returning anything else here would persist it.
+    if (!source) return { next: current, result: null };
+    let cut = source.turns.length;
+    if (uptoRunId) {
+      const index = source.turns.findIndex((turn) => turn.runId === uptoRunId);
+      if (index >= 0) cut = index + 1;
+    }
+    const fork: ConversationRecord = {
+      id: randomUUID(),
+      projectPath: source.projectPath,
+      title: `${source.title} (fork)`,
+      createdAt: now,
+      updatedAt: now,
+      turns: source.turns.slice(0, cut).map(({ runId: _dropped, ...turn }) => ({ ...turn, id: randomUUID() })),
+      // The fork title is derived and deliberate - never auto-retitled.
+      titleManual: true,
+      autoTitleAttempted: true
+    };
+    return { next: [fork, ...current], result: { fork, sourceTitle: source.title } };
   });
-  return fork;
+  if (!forked) return null;
+  await appendAudit("info", "conversation.fork", `Forked conversation "${forked.sourceTitle}" (${forked.fork.turns.length} turns).`, {
+    sourceId: id,
+    forkId: forked.fork.id
+  });
+  return forked.fork;
 }
 
 async function renameConversation(id: string, title: string): Promise<ConversationRecord[]> {
   const trimmed = title.trim();
-  const current = await readConversations();
-  const conversation = current.find((item) => item.id === id);
-  if (!conversation || !trimmed) return current;
-
-  const next = current.map((item) => (item.id === id ? { ...item, title: trimmed, titleManual: true } : item));
-  await writeConversations(next);
-  await appendAudit("info", "conversation.rename", `Renamed conversation to "${trimmed}".`, { id });
+  const { changed, next } = await mutateConversations((current) => {
+    const conversation = current.find((item) => item.id === id);
+    if (!conversation || !trimmed) return { next: current, result: { changed: false, next: current } };
+    const updated = current.map((item) => (item.id === id ? { ...item, title: trimmed, titleManual: true } : item));
+    return { next: updated, result: { changed: true, next: updated } };
+  });
+  if (changed) await appendAudit("info", "conversation.rename", `Renamed conversation to "${trimmed}".`, { id });
   return next;
 }
 
 async function archiveConversation(id: string, archived: boolean): Promise<ConversationRecord[]> {
-  const current = await readConversations();
-  const conversation = current.find((item) => item.id === id);
-  if (!conversation) return current;
-
-  const next = current.map((item) => (item.id === id ? { ...item, archived } : item));
-  await writeConversations(next);
-  await appendAudit("info", "conversation.archive", `${archived ? "Archived" : "Unarchived"} conversation ${conversation.title}.`, {
-    id,
-    archived
+  const { title, next } = await mutateConversations((current) => {
+    const conversation = current.find((item) => item.id === id);
+    if (!conversation) return { next: current, result: { title: null as string | null, next: current } };
+    const updated = current.map((item) => (item.id === id ? { ...item, archived } : item));
+    return { next: updated, result: { title: conversation.title, next: updated } };
   });
+  if (title !== null) {
+    await appendAudit("info", "conversation.archive", `${archived ? "Archived" : "Unarchived"} conversation ${title}.`, {
+      id,
+      archived
+    });
+  }
   return next;
 }
 
@@ -5411,11 +5420,13 @@ function conversationProjectMatches(conversation: ConversationRecord, projectPat
 }
 
 async function deleteProjectConversations(projectPath?: string): Promise<ConversationRecord[]> {
-  const current = await readConversations();
-  const deleted = current.filter((conversation) => conversationProjectMatches(conversation, projectPath));
-  const next = current.filter((conversation) => !conversationProjectMatches(conversation, projectPath));
-  await writeConversations(next);
+  const { deleted, next } = await mutateConversations((current) => {
+    const removed = current.filter((conversation) => conversationProjectMatches(conversation, projectPath));
+    const kept = current.filter((conversation) => !conversationProjectMatches(conversation, projectPath));
+    return { next: kept, result: { deleted: removed, next: kept } };
+  });
 
+  // Session runs are a separate store, cleaned outside the conversation lock.
   const deletedConversationIds = new Set(deleted.map((conversation) => conversation.id));
   const deletedRunIds = new Set(deleted.flatMap((conversation) => conversation.turns.map((turn) => turn.runId).filter(Boolean)));
   const runs = await readSessionRuns();
@@ -5510,9 +5521,10 @@ function isTrivialTitlePrompt(prompt: string): boolean {
 /** Marks a conversation as "auto-title attempted" without changing its title
  *  — used for the trivial-prompt skip so we never re-attempt on later turns. */
 async function markAutoTitleAttempted(conversationId: string): Promise<void> {
-  const current = await readConversations();
-  const next = current.map((item) => (item.id === conversationId ? { ...item, autoTitleAttempted: true } : item));
-  await writeConversations(next);
+  await mutateConversations((current) => ({
+    next: current.map((item) => (item.id === conversationId ? { ...item, autoTitleAttempted: true } : item)),
+    result: undefined
+  }));
 }
 
 /** Normalises a raw local-model title reply into a clean, short, Title-Case-ish
@@ -5621,13 +5633,22 @@ async function maybeAutoTitleConversation(conversationId: string, firstPrompt: s
       (await generateLocalTitle(trimmedPrompt, assistantText));
     const finalTitle = generated ?? conversationTitle(trimmedPrompt);
 
-    // Re-read right before writing so a concurrent rename or new turn (the
-    // background model call can take a few seconds) never gets clobbered.
-    const latest = await readConversations();
-    const latestConversation = latest.find((item) => item.id === conversationId);
-    if (!latestConversation || latestConversation.titleManual || latestConversation.autoTitleAttempted) return;
-    const next = latest.map((item) => (item.id === conversationId ? { ...item, title: finalTitle, autoTitleAttempted: true } : item));
-    await writeConversations(next);
+    // The re-read and the write happen INSIDE the lock, which is what this
+    // originally wanted. It used to re-read just before writing, and that
+    // narrowed the window without closing it: a rename landing between the
+    // re-read and the write still lost. The titling model call takes seconds,
+    // so this is the widest window in the file and the likeliest of these to
+    // have actually bitten someone.
+    await mutateConversations((latest) => {
+      const latestConversation = latest.find((item) => item.id === conversationId);
+      if (!latestConversation || latestConversation.titleManual || latestConversation.autoTitleAttempted) {
+        return { next: latest, result: undefined };
+      }
+      return {
+        next: latest.map((item) => (item.id === conversationId ? { ...item, title: finalTitle, autoTitleAttempted: true } : item)),
+        result: undefined
+      };
+    });
   } catch {
     // Titling must never surface as a run failure — swallow everything.
   }
@@ -13830,9 +13851,10 @@ app.whenReady().then(async () => {
     return establishWritableWorkspace(conversation.projectPath);
   });
   ipcMain.handle("metis-conversations:set-project", async (_event, id: string, projectPath: string) => {
-    const current = await readConversations();
-    const next = current.map((item) => (item.id === id ? { ...item, projectPath } : item));
-    await writeConversations(next);
+    const next = await mutateConversations((current) => {
+      const updated = current.map((item) => (item.id === id ? { ...item, projectPath } : item));
+      return { next: updated, result: updated };
+    });
     return next.find((item) => item.id === id) ?? null;
   });
   ipcMain.handle("metis-files:read", (_event, path: string) => readMetisFile(path));

@@ -19,6 +19,8 @@
 //
 // Offline: no provider is called and no API key is read.
 
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { section, check, ok, summary } from "../harness.mjs";
 
 let store = [];
@@ -133,6 +135,30 @@ section("Ordering is FIFO, so a fast writer cannot overtake a queued one");
   ]);
   check("mutators ran in the order they were queued", order, ["a", "b", "c"]);
   check("and every one is in the result", turnsFor("x"), ["a", "b", "c"]);
+}
+
+section("Nothing writes the conversation store outside the lock");
+{
+  // The architectural guard, and the reason this suite can assert a property
+  // it cannot import. Ten writers each did their own read-modify-write; they
+  // were converted one at a time, and the eleventh would have been added the
+  // same way by whoever writes the next feature, because the old shape reads
+  // perfectly naturally. So the invariant is enforced on the source: exactly
+  // one call site, and it is the one inside mutateConversations.
+  const source = readFileSync(join(process.cwd(), "src", "electron", "main.ts"), "utf8");
+  const callSites = [...source.matchAll(/await writeConversations\(/g)].length;
+  check("writeConversations has exactly one call site", callSites, 1);
+
+  const mutator = source.indexOf("function mutateConversations<T>(");
+  ok("mutateConversations exists", mutator !== -1);
+  const only = source.indexOf("await writeConversations(");
+  ok("and the one call site is inside it", only > mutator && only - mutator < 400);
+
+  // Reads are deliberately NOT restricted. A stale read shows a slightly old
+  // list; it never destroys a turn, and forcing every reader through the queue
+  // would serialise the UI behind whatever write is in flight.
+  const reads = [...source.matchAll(/await readConversations\(\)/g)].length;
+  ok(`${reads} unlocked reads are allowed on purpose`, reads > 1);
 }
 
 const { passed, failed } = summary();
