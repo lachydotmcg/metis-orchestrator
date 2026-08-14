@@ -12,6 +12,24 @@ engine referenced below.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [1.2.0] - 2026-08-14
+
+The first release since `1.1.0` on 2026-07-20, and a large one: 58 commits
+that never reached anyone who installs Metis rather than building it.
+
+The through-line is loops that can be left alone. Before this, an
+unattended loop could not tell whether its own work succeeded, could not
+say that it was unsure, and — worst of the three — carried on as though
+answered when it hit a permission gate nobody was there to answer. All
+three are closed. A run now stops and says what it needed.
+
+The rest: watch and stop your loops from your phone, generated images and
+`svg` blocks render in the chat instead of printing a file path or raw
+markup, and a batch of security work that was latent rather than live but
+had to precede the artifact rendering rather than follow it.
+
 ### Added (2026-08-06)
 
 - **A chain step can see more than one hop back.** Up to three earlier

@@ -209,9 +209,18 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   and a real routed provider answer, end to end inside the packaged executable. The remaining
   narrower caveat: that run used the unpacked directory target, not the NSIS installer output,
   which shares the same asar/app layout but is not literally the installed artifact.
-- **The newest tag is `v1.1.0`, from 2026-07-20, and `main` is well ahead of it.** Loop step
-  chains, per-node depths and image generation are all on `main` and in no release, so installing
-  from a release gets you materially less than the README describes.
+- ~~**The newest tag is `v1.1.0`, and `main` is well ahead of it.**~~ Closed 2026-08-14 by cutting
+  `v1.2.0`, which carries the 58 commits that had accumulated since — loop chains, per-node depths,
+  image generation, in-chat artifacts, the phone surface and the loop feedback channel.
+- **Project files are sent to whichever provider answers, and that is the design.** An edit turn
+  reads up to 12 files from the selected folder and puts their contents in the prompt. It has to:
+  a model cannot change code it cannot see, and routing that work to a provider is the entire
+  product. The consequence is worth stating plainly rather than burying — **a credential sitting in
+  a project file goes with it.** `.env` is skipped, but by extension allowlist rather than policy,
+  so `config.json` or a key hardcoded in `script.js` is included. Metis does not scan file contents
+  for anything secret-shaped and does not warn. Decided 2026-08-14: this is a stated position, not
+  an unfinished feature. A heads-up when an outgoing file looks like it carries a key would be a
+  courtesy, and is not built.
 
 ## Narrower than the name suggests
 
