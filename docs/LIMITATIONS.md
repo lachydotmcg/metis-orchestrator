@@ -73,12 +73,50 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   in `resolvePermissionMode`, the choke point every session entry point shares. Latent rather than
   live — nothing untrusted reaches that IPC — but it had to precede the first HTTP route that can
   start a run rather than follow it.
-- **There is still no CSP.** Audited 2026-08-05: no meta tag, no `onHeadersReceived` header, nothing.
-  It is the last of the three renderer-trust preconditions still open, and the fiddliest, because
-  Vite's dev server needs inline styles and `eval` for HMR while a packaged build needs neither —
-  so the policy that is worth having in production is one that would break development every day
-  unless the two differ. Not a hole today for the same reason as the two below, and the same
-  precondition applies: it should land before any HTML artifact does.
+- **There is still no CSP**, and it is designed rather than shipped. Audited 2026-08-05: no meta
+  tag, no `onHeadersReceived` header, nothing. Last of the three renderer-trust preconditions, and
+  deliberately not guessed at, because a CSP fails in a way a typecheck cannot see — it looks
+  correct, ships, and then breaks the dev loop or a hidden feature the next time somebody opens it.
+
+  **Deliver it as a header via `session.defaultSession.webRequest.onHeadersReceived`, not a meta
+  tag in `index.html`.** The two environments need different policies and a meta tag cannot vary by
+  environment without editing the file that both builds share.
+
+  Packaged (`file://`), the strict one that is actually worth having:
+
+  ```
+  default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';
+  img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com;
+  frame-src 'self' http://127.0.0.1:*; base-uri 'none'; object-src 'none';
+  form-action 'none'
+  ```
+
+  Development additionally needs `'unsafe-eval'` in `script-src` and `ws://127.0.0.1:*` in
+  `connect-src`, because Vite's HMR client uses both. That is the whole reason the two differ, and
+  the reason a single policy would either break `npm run dev` every morning or be too loose to be
+  worth shipping.
+
+  Four constraints that each individually break a naive policy, three of them found by reading
+  rather than by guessing:
+
+  - `style-src` needs `'unsafe-inline'` in BOTH environments. React sets inline `style` attributes,
+    and the canvas positions nodes that way; this is not a dev-only concession.
+  - `img-src` needs `data:`. Generated images and SVG artifacts both render as `data:` URLs in an
+    `<img>`, which is the whole safety argument for how they are drawn.
+  - `frame-src` needs loopback with a wildcard port. The preview rail's iframe loads the
+    generated-project server on an ephemeral 127.0.0.1 port, so an exact port cannot be written
+    down in advance.
+  - `connect-src` needs `https://api.github.com`, and this is the one that would have caused a
+    silent regression. The Marketplace fetches GitHub repo metadata AND arbitrary `source_url`
+    values from registry entries (`App.tsx` ~12439, ~12471, ~12669). Marketplace is hidden in v1,
+    so a wrong policy here would pass every test, ship, and only fail on the day it is un-hidden.
+    Allowing arbitrary `source_url` is not compatible with a useful `connect-src`; the honest fix
+    is to move those fetches to the main process, where they belong anyway.
+
+  **Verification is the gate, not the writing.** It needs `npm run dev` actually running, HMR
+  confirmed working, and the renderer console confirmed free of CSP violations, with the preview
+  rail opened at least once. That needs a display and a person, so it waits for one rather than
+  being shipped on the strength of looking right.
 - ~~**No navigation guards.**~~ Fixed 2026-08-05: `will-navigate` refuses any top-level navigation
   that is not the app itself and hands an `http(s)` target to the OS browser instead;
   `will-frame-navigate` refuses subframe navigation to anything but the app, loopback (the preview
