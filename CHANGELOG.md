@@ -14,6 +14,29 @@ engine referenced below.
 
 ### Added (2026-08-05)
 
+- **Watch and stop your loops from a phone.** The gateway gained
+  `GET /v1/loops`, `GET /v1/loops/:id` and `POST /v1/loops/:id/stop`, plus a
+  small self-contained page it serves itself that polls them every ten
+  seconds and offers one Stop button per live loop. `stopLoop` is the same
+  function the tray and the desktop panel already call, so a phone stop and
+  a desktop stop are one write through one serialised mutation.
+
+  There is deliberately **no route that starts a run**. Starting one spends
+  money and carries a permission mode; it is the route that has to be
+  designed rather than added.
+
+  The bind stays `127.0.0.1` and does not move. Reach is `tailscale serve`'s
+  job — it also supplies the real certificate a phone needs, since service
+  workers and web push require a secure context and the localhost exemption
+  does not extend to a LAN IP. Serving the page from the gateway itself
+  keeps it same-origin, which matters because the gateway has no CORS
+  handling, no origin check and no rate limiting.
+
+  It polls rather than streams: a loop's own heartbeat is 60 seconds, so a
+  10-second poll is four times finer than the thing it watches, and polling
+  survives a locked screen and a wifi-to-cellular switch with no reconnect
+  protocol. Polling pauses while the tab is hidden.
+
 - **A ```svg fence is drawn instead of printed.** Ask for a chart and the
   reply renders it, with "Show code" one click away rather than replaced —
   the model wrote code, and hiding it would make an SVG the one kind of

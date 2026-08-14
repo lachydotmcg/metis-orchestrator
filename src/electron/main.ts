@@ -87,6 +87,7 @@ import type {
 } from "../shared/runtime-contracts.js";
 import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
+import { gatewayLoopsPage } from "./gateway-loops-page.js";
 import {
   LOOP_MAX_AGE_HOURS,
   LOOP_MAX_ITERATIONS_CEILING,
@@ -13708,7 +13709,15 @@ async function handleGatewayRequest(req: IncomingMessage, res: ServerResponse): 
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const token = await readOrCreateGatewayToken();
     const authHeader = req.headers.authorization ?? "";
-    const provided = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1] ?? "";
+    // A browser cannot attach an Authorization header to a URL you type or
+    // scan, so the page has one bootstrap route in: ?token=. Deliberately
+    // narrow — only the HTML page accepts it, never the JSON routes, and the
+    // page's first act is to move the token into sessionStorage and strip it
+    // from the address bar. A token in a URL lands in history and in any
+    // proxy log, which is survivable for a loopback service reached over a
+    // private tunnel and would not be for a public one.
+    const pageBootstrap = req.method === "GET" && (url.pathname === "/" || url.pathname === "/loops");
+    const provided = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1] ?? (pageBootstrap ? (url.searchParams.get("token") ?? "") : "");
     if (!gatewayTokenMatches(provided, token)) {
       writeGatewayJson(res, 401, gatewayErrorPayload("Missing or invalid bearer token.", "invalid_api_key"));
       return;
@@ -13721,6 +13730,52 @@ async function handleGatewayRequest(req: IncomingMessage, res: ServerResponse): 
       await handleGatewayChatCompletions(req, res);
       return;
     }
+
+    // Loops, read and stop only (docs/ROADMAP.md, watching a run from a phone).
+    // There is deliberately NO route that STARTS a run: starting one spends
+    // money and takes a permission mode, and the first such route is the one
+    // that has to be designed rather than added. Watching and stopping are
+    // both safe in the way that matters — one is a read, and the other can
+    // only ever reduce what the machine is doing.
+    if (req.method === "GET" && url.pathname === "/v1/loops") {
+      writeGatewayJson(res, 200, { object: "list", data: await listLoops() });
+      return;
+    }
+    const loopMatch = /^\/v1\/loops\/([\w-]+)$/.exec(url.pathname);
+    if (req.method === "GET" && loopMatch) {
+      const loop = (await listLoops()).find((item) => item.id === loopMatch[1]);
+      if (!loop) {
+        writeGatewayJson(res, 404, gatewayErrorPayload("No such loop.", "not_found"));
+        return;
+      }
+      writeGatewayJson(res, 200, loop);
+      return;
+    }
+    const stopMatch = /^\/v1\/loops\/([\w-]+)\/stop$/.exec(url.pathname);
+    if (req.method === "POST" && stopMatch) {
+      // Same stopLoop the tray and the panel call, so a phone stop and a
+      // desktop stop are the same write through the same serialised mutation.
+      const stopped = await stopLoop(stopMatch[1], "stopped from a paired device");
+      if (!stopped) {
+        writeGatewayJson(res, 404, gatewayErrorPayload("No such loop.", "not_found"));
+        return;
+      }
+      writeGatewayJson(res, 200, stopped);
+      return;
+    }
+
+    // The phone page itself, served BY the gateway so it is same-origin with
+    // the routes above. That sidesteps CORS entirely, which matters because
+    // the gateway has no CORS handling, no origin check and no rate limiting —
+    // a page served from anywhere else would need all three before it could
+    // fetch these routes at all.
+    if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/loops")) {
+      const token = await readOrCreateGatewayToken();
+      if (!res.headersSent) res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(gatewayLoopsPage(token));
+      return;
+    }
+
     writeGatewayJson(res, 404, gatewayErrorPayload(`Unknown endpoint: ${req.method} ${url.pathname}`, "not_found"));
   } catch (error) {
     writeGatewayJson(res, 500, gatewayErrorPayload(error instanceof Error ? error.message : String(error), "internal_error"));

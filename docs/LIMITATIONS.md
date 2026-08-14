@@ -83,6 +83,22 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   work — is the change that would make it matter, and these three should land with it rather than
   after it. Closed in the same audit: the generic store channel no longer reaches the `secrets`
   key (`13-store-key-guard`).
+- **The phone page is watch-and-stop only, and that is a boundary rather than a milestone.** The
+  gateway serves `/v1/loops`, `/v1/loops/:id` and `/v1/loops/:id/stop` plus a page that polls them.
+  There is deliberately no route that STARTS a run: starting one spends money and carries a
+  permission mode, so it is the route that has to be designed rather than added. Reading is safe,
+  and stopping can only ever reduce what the machine is doing.
+- **The page accepts its token from a query string.** A browser cannot attach an `Authorization`
+  header to a URL you type or scan, so `?token=` is the one bootstrap route in. Only the HTML page
+  accepts it, never the JSON routes, and the page moves it into `sessionStorage` and strips it from
+  the address bar on load. It still lands in browser history and would land in any proxy log, which
+  is survivable for a loopback service reached over a private tunnel and would not be for a public
+  one. A per-device pairing token with its own revoke would be the real fix.
+- **One token, total authority.** The same bearer that lists loops also unlocks
+  `/v1/chat/completions`, which spends real money. There are no scopes, no per-route gating, no
+  rate limiting, no origin check and no CORS handling. The phone page is served BY the gateway so
+  it is same-origin and needs none of those — but binding the gateway anywhere other than
+  `127.0.0.1` would need all of them first.
 - **`shell.openExternal` accepts any `https?` URL from the renderer.** Its only check is the
   protocol, so it is a working outbound channel for anything already running in the renderer. Same
   precondition as above, and the same reason it is written down rather than fixed: an allowlist
@@ -90,7 +106,7 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 15 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 16 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
