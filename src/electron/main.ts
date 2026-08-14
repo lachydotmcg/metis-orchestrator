@@ -1635,6 +1635,12 @@ async function promptForPermission(
   const id = randomUUID();
   const request: InRunPermissionRequest = { id, scope, target, detail };
   emitStream(stream, { kind: "permission_request", request });
+  // Nobody is watching, so do not spend five minutes finding that out. The
+  // verdict is the same "deny" an absent stream would have produced — the
+  // difference is that the ask was EMITTED first, so the caller knows a human
+  // was needed and can settle the run as blocked rather than carrying on as
+  // though permission had been considered and refused on its merits.
+  if (stream.unattended) return "deny";
   return new Promise<PermissionVerdict>((resolveVerdict) => {
     const timer = setTimeout(() => {
       pendingPermissionPrompts.delete(id);
@@ -1685,6 +1691,11 @@ async function promptUserQuestion(
   const question: UserQuestionRequest =
     questions && questions.length > 0 ? { id, text, options, questions } : { id, text, options };
   emitStream(stream, { kind: "user_question", question });
+  // Same reasoning as promptForPermission: the fallback is what an absent
+  // stream already produced, but emitting first means the tick can see that a
+  // question was asked and park instead of acting on a guess. timedOut stays
+  // false because nothing timed out — nobody was ever going to answer.
+  if (stream.unattended) return { answer: fallbackAnswer, answers: fallbackAnswers, timedOut: false };
   return new Promise((resolveAnswer) => {
     const timer = setTimeout(() => {
       pendingUserQuestions.delete(id);
@@ -4392,6 +4403,18 @@ function operationsForProject(project: ProjectToolResult): AgentOperation[] {
 
 type SessionStreamController = {
   emit: (event: SessionStreamEvent) => void;
+  /** True when nothing human is on the other end — a loop tick, not a window.
+   *
+   *  Without this a run has only two states, "has a stream" and "has none",
+   *  and both are wrong for a loop. No stream means an ask is silently
+   *  defaulted and the run carries on as though it had been answered. A normal
+   *  stream means the ask waits five minutes for a renderer that does not
+   *  exist, then defaults anyway.
+   *
+   *  Unattended is the third state: record the ask, do not wait, and let the
+   *  caller settle the run as `blocked` instead of pretending it got an
+   *  answer. */
+  unattended?: boolean;
 };
 
 function timelineText(content: string): SessionTimelineEvent {
@@ -11039,6 +11062,17 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
    *  work, falling back to the local one when the work path produced none. */
   let providerResultForDecision: ProviderInvokeResult | undefined;
   let turnEvidence: LoopEvidence[] = [];
+  // What the turn needed a human for. A loop has no window, so an ask that
+  // reaches here is one nobody can answer — the run parks rather than
+  // proceeding on the default (docs/ROADMAP.md, feedback channel face 2).
+  const turnAsks: string[] = [];
+  const loopAskRecorder: SessionStreamController = {
+    unattended: true,
+    emit: (event) => {
+      if (event.kind === "permission_request") turnAsks.push(`permission to ${event.request.scope} on ${event.request.target}`);
+      else if (event.kind === "user_question") turnAsks.push(event.question.text);
+    }
+  };
   try {
     const run = await runSessionTracked({
       prompt: composeWakePrompt(loaded),
@@ -11069,7 +11103,7 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       // createLoop is what guarantees the value is a real mode.
       permissionMode: loaded.permissionMode as PermissionMode,
       rawPromptStorage: "local-only"
-    });
+    }, loopAskRecorder);
     assistantText = run.assistantText ?? "";
     conversationId = run.conversationId ?? loaded.conversationId;
     answeringModel = run.providerResult?.model;
@@ -11155,6 +11189,23 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       id,
       iteration: index,
       error: runError
+    });
+  } else if (turnAsks.length) {
+    // An ask outranks whatever the model then said. It may well have gone on
+    // to answer "continue" — it does not know its permission was refused by
+    // absence rather than by judgement, and a loop that keeps going after
+    // being silently denied is the exact unattended failure this is for. The
+    // question is put in the reason so the panel, the tray and the phone all
+    // show what it needed rather than only that it stopped.
+    settled = {
+      ...advanced,
+      status: "blocked",
+      stoppedReason: `the loop needed you: ${turnAsks[0]}${turnAsks.length > 1 ? ` (and ${turnAsks.length - 1} more)` : ""}`
+    };
+    await appendAudit("warning", "loop.blocked", `Loop "${loopLabel(advanced)}" asked for something on iteration ${index} with nobody watching.`, {
+      id,
+      iteration: index,
+      asks: turnAsks.slice(0, 3)
     });
   } else if (!decision) {
     // The governing rule from loops.ts: continuing is an explicit act, so a

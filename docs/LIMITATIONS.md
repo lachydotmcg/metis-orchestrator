@@ -37,9 +37,17 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   collection — `AgentOperation` already carried `status`, `exitCode`, `stderr` and
   `consoleErrors`, and the tick read `assistantText` off the same object and dropped the rest.
   Narrow on purpose: an operation counts only if it CHECKED something, so a file write is not
-  evidence. **Still open:** a loop cannot ASK. Ticks run with no stream, so `promptForPermission`
-  returns `deny` and `promptUserQuestion` auto-answers the first option — that needs a pending
-  prompt registry, since the pending maps store only the resolver and never the request.
+  evidence.
+- ~~**A loop that needs a human is silently overruled.**~~ Fixed 2026-08-06: a tick now runs with
+  an `unattended` stream, so an ask is RECORDED rather than defaulted in silence, and the loop
+  settles `blocked` with the question in its reason. The verdict is the same one an absent stream
+  produced — the difference is that the loop stops instead of continuing as though permission had
+  been considered and refused on its merits. An ask outranks both the model's own verdict (it does
+  not know it was denied by absence) and silence (a turn that needed you and then went quiet should
+  say which). **Still narrower than it sounds:** the loop parks, it does not wait. Answering has to
+  happen on the desktop and the loop is restarted, because the pending maps still store only the
+  resolver and never the request, so nothing can enumerate what was asked. Answering a permission
+  prompt over HTTP is also a grant made remotely, which is a decision rather than a refactor.
 - **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
   are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
   is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the

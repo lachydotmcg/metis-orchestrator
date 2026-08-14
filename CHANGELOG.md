@@ -14,6 +14,30 @@ engine referenced below.
 
 ### Added (2026-08-06)
 
+- **A loop that needs you stops and tells you, instead of being silently
+  overruled.** The third face of the feedback channel. A tick used to run
+  with no stream at all, which meant `promptForPermission` returned
+  `deny` and `promptUserQuestion` answered its own question with the first
+  option — and the run then carried on as though it had been answered.
+
+  Ticks now run with an `unattended` stream. That is a third state
+  alongside "has a stream" and "has none", and it exists because both of
+  those are wrong for a loop: no stream defaults the ask silently, and a
+  normal stream waits five minutes for a renderer that does not exist and
+  then defaults anyway. Unattended records the ask, does not wait, and
+  lets the tick settle the loop `blocked` with the question in its reason.
+
+  An ask outranks the model's own verdict, because the model may well have
+  said "continue" — it does not know its permission was refused by absence
+  rather than on the merits. It also outranks silence, because a turn that
+  needed you and then went quiet should say which.
+
+  The loop parks; it does not wait. Answering still happens on the desktop
+  and the loop is restarted. Enumerating what was asked needs the pending
+  maps to carry the request rather than only the resolver, and answering a
+  permission prompt over HTTP is a grant made remotely — a decision rather
+  than a refactor, so both are recorded rather than guessed at.
+
 - **A loop can see whether its work actually worked, and can say it
   could not check.** Two of the three faces of the feedback channel
   designed in `docs/ROADMAP.md`.
