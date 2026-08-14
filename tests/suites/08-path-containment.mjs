@@ -20,7 +20,7 @@
 import { fromBuild, section, check, summary } from "../harness.mjs";
 import { join, resolve, sep } from "node:path";
 
-const { isPathInside, sameResolvedPath, isGeneratedImagePath } = await fromBuild("shared/intent-and-paths.js");
+const { isPathInside, sameResolvedPath, isGeneratedImagePath, isAppNavigationUrl, isLoopbackHttpUrl } = await fromBuild("shared/intent-and-paths.js");
 
 // An absolute root native to whichever OS is running the suite.
 const BASE = resolve(join(process.cwd(), "testroot"));
@@ -85,6 +85,33 @@ section("Only Metis's own generated images may be painted in the chat");
   const noWorkspace = { userDataImagesDir };
   check('userData still works with no workspace', isGeneratedImagePath(join(userDataImagesDir, 'a.png'), noWorkspace), true);
   check('a workspace path is refused when no workspace is selected', isGeneratedImagePath(join(workspaceImagesDir, 'a.png'), noWorkspace), false);
+}
+
+
+section("Navigation guards: only the app itself may drive the top-level window");
+{
+  const dev = "http://127.0.0.1:5177";
+  check("the packaged renderer", isAppNavigationUrl("file:///C:/app/dist/index.html", undefined), true);
+  check("the dev server", isAppNavigationUrl("http://127.0.0.1:5177/index.html", dev), true);
+  check("a different port on the same host is NOT the app", isAppNavigationUrl("http://127.0.0.1:9999/", dev), false);
+  check("an outside site", isAppNavigationUrl("https://evil.example/", dev), false);
+  check("the dev server when none is configured", isAppNavigationUrl("http://127.0.0.1:5177/", undefined), false);
+  check("garbage", isAppNavigationUrl("not a url", dev), false);
+  check("empty", isAppNavigationUrl("", dev), false);
+}
+
+section("Subframes may reach the loopback preview server, and nothing else");
+{
+  check("the preview server on an ephemeral port", isLoopbackHttpUrl("http://127.0.0.1:52341/index.html"), true);
+  check("localhost", isLoopbackHttpUrl("http://localhost:8080/"), true);
+  // The prefix attack this whole suite exists for, in hostname form: a domain
+  // that merely STARTS with the loopback address is not loopback.
+  check("a lookalike hostname is refused", isLoopbackHttpUrl("http://127.0.0.1.evil.example/"), false);
+  check("a subdomain lookalike is refused", isLoopbackHttpUrl("http://localhost.evil.example/"), false);
+  check("a public host", isLoopbackHttpUrl("https://example.com/"), false);
+  check("a file url", isLoopbackHttpUrl("file:///C:/x.html"), false);
+  check("a data url", isLoopbackHttpUrl("data:text/html,hi"), false);
+  check("empty", isLoopbackHttpUrl(""), false);
 }
 
 const { passed, failed } = summary();

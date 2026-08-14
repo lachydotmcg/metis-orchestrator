@@ -118,6 +118,41 @@ export function isPathInside(child: string, parent: string): boolean {
   return childResolved.toLowerCase().startsWith(parentWithSep.toLowerCase()) || childResolved.toLowerCase().startsWith(`${parentResolved.toLowerCase()}/`);
 }
 
+/** Whether a URL is the app itself: the Vite dev server in development, or the
+ *  packaged `file://` renderer. Anything else navigating the TOP-LEVEL window
+ *  is a navigation away from Metis, which is never something Metis wants.
+ *
+ *  Takes the dev server URL as an argument rather than reading process.env, so
+ *  the rule is testable without one. */
+export function isAppNavigationUrl(rawUrl: string, devServerUrl?: string): boolean {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  if (rawUrl.startsWith("file://")) return true;
+  if (!devServerUrl) return false;
+  try {
+    return new URL(rawUrl).origin === new URL(devServerUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+/** Loopback HTTP — what the generated-project preview server serves on an
+ *  ephemeral port. SUBFRAMES may go here, because the preview rail's iframe
+ *  legitimately does; the top-level window may not.
+ *
+ *  Hostname-exact rather than a prefix test: "127.0.0.1.evil.com" starts with
+ *  the loopback address as a string and is not remotely loopback. Same class
+ *  of bug as the prefix attack isPathInside exists for. */
+export function isLoopbackHttpUrl(rawUrl: string): boolean {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false;
+    return url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "[::1]" || url.hostname === "::1";
+  } catch {
+    return false;
+  }
+}
+
 /** Whether the renderer may ask for this path to be painted as an image.
  *
  *  Only files Metis itself generated qualify, and there are exactly two places

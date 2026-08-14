@@ -125,7 +125,9 @@ import {
   clampPermissionMode,
   isBuildQuestionGuard,
   isEditIntent,
+  isAppNavigationUrl,
   isGeneratedImagePath,
+  isLoopbackHttpUrl,
   isPathInside,
   sameResolvedPath
 } from "../shared/intent-and-paths.js";
@@ -13113,6 +13115,115 @@ let mainWindow: BrowserWindow | null = null;
  *  with `show: false` so a headless start lives in the tray until the tray's
  *  "Open Metis" item (openOrFocusMainWindow's show()/focus()) reveals it —
  *  everything else (renderer load, IPC, close-to-tray) is identical. */
+/** Refuses IPC that did not come from a top-level frame of one of our own
+ *  windows. Electron's security checklist item 17: "All Web Frames can in
+ *  theory send IPC messages to the main process, including iframes."
+ *
+ *  Installed by MONKEY-PATCHING ipcMain.handle and ipcMain.on once, before any
+ *  handler registers, rather than by editing ~100 call sites. That is a
+ *  deliberate trade. Wrapping each handler by hand would mean 100 chances to
+ *  forget one, and the hundred-and-first — written months from now by someone
+ *  who never read this comment — would be unguarded by default. Here the
+ *  default is guarded and there is nothing to remember.
+ *
+ *  The rule is narrow on purpose: reject SUBFRAMES, accept any main frame.
+ *  Every window in this app is one we created (main, quick-ask, the offscreen
+ *  rasteriser, the headless preview verifier), and they legitimately load
+ *  three different kinds of URL — the dev server over http, the packaged
+ *  renderer over file://, and a data: URL for quick-ask, whose origin is
+ *  "null". An origin allowlist across those three is a great deal of surface
+ *  for no additional safety, because the thing actually worth excluding is the
+ *  preview iframe, and that is excluded by being a subframe.
+ *
+ *  Nothing reaches this today: the preview iframe has no preload, and
+ *  nodeIntegrationInSubFrames defaults to false, so a subframe has no
+ *  ipcRenderer to call in the first place. This is the belt to that
+ *  suspenders — the guarantee stops depending on a default staying default. */
+function installIpcSenderGuard(): void {
+  const senderIsMainFrame = (event: { senderFrame?: Electron.WebFrameMain | null }): boolean => {
+    const frame = event.senderFrame;
+    // A destroyed frame reports nothing useful; treat it as untrusted rather
+    // than crashing on property access.
+    if (!frame) return false;
+    try {
+      return frame.parent === null;
+    } catch {
+      return false;
+    }
+  };
+
+  const originalHandle = ipcMain.handle.bind(ipcMain);
+  ipcMain.handle = ((channel: string, listener: (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => unknown) => {
+    return originalHandle(channel, (event: Electron.IpcMainInvokeEvent, ...args: unknown[]) => {
+      if (!senderIsMainFrame(event)) {
+        void appendAudit("warning", "ipc.sender.refused", `Refused ${channel} from a subframe.`, { channel });
+        throw new Error("This channel is not callable from a subframe.");
+      }
+      return listener(event, ...args);
+    });
+  }) as typeof ipcMain.handle;
+
+  const originalOn = ipcMain.on.bind(ipcMain);
+  ipcMain.on = ((channel: string, listener: (event: Electron.IpcMainEvent, ...args: unknown[]) => void) => {
+    return originalOn(channel, (event: Electron.IpcMainEvent, ...args: unknown[]) => {
+      if (!senderIsMainFrame(event)) {
+        void appendAudit("warning", "ipc.sender.refused", `Refused ${channel} from a subframe.`, { channel });
+        return;
+      }
+      listener(event, ...args);
+    });
+  }) as typeof ipcMain.on;
+}
+
+/** Origins that ARE the app: the Vite dev server in development, and the
+ *  packaged `file://` renderer. Anything else navigating the app window is a
+ *  navigation away from Metis, which is never something Metis wants. */
+function isAppOrigin(rawUrl: string): boolean {
+  return isAppNavigationUrl(rawUrl, process.env.VITE_DEV_SERVER_URL);
+}
+
+/** Navigation guards, per Electron's security checklist items 13 and 14.
+ *
+ *  Nothing reaches these today — the chat strips model-authored HTML, so no
+ *  untrusted markup runs in the renderer to trigger a navigation. They are the
+ *  standing precondition made explicit, ahead of any HTML-artifact work.
+ *
+ *  Three separate holes, three separate handlers, because they are genuinely
+ *  different events and blocking one does not block the others:
+ *
+ *  - `will-navigate` is the TOP-LEVEL window being sent somewhere. Always
+ *    wrong: the renderer navigates by React state, never by URL. An http(s)
+ *    target is handed to the OS browser instead of being dropped silently, so
+ *    a link that somehow gets here still does the useful thing.
+ *  - `will-frame-navigate` covers SUBFRAMES, which the top-level guard does
+ *    not. This one must stay permissive about loopback, because the preview
+ *    rail's iframe legitimately loads the generated-project server on an
+ *    ephemeral 127.0.0.1 port. Blocking that would break a shipped feature.
+ *  - `setWindowOpenHandler` covers window.open and target="_blank". There is
+ *    exactly one such link in the app (the repo link in Settings), so this
+ *    denies the new window and routes http(s) to the OS browser — which is
+ *    what that link already meant. */
+function applyNavigationGuards(win: BrowserWindow): void {
+  win.webContents.on("will-navigate", (event, url) => {
+    if (isAppOrigin(url)) return;
+    event.preventDefault();
+    void appendAudit("warning", "window.navigation.blocked", "Blocked a top-level navigation away from the app window.", { url: url.slice(0, 300) });
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+  });
+
+  win.webContents.on("will-frame-navigate", (event) => {
+    const url = event.url;
+    if (isAppOrigin(url) || isLoopbackHttpUrl(url) || url.startsWith("about:") || url.startsWith("data:")) return;
+    event.preventDefault();
+    void appendAudit("warning", "window.frame-navigation.blocked", "Blocked a subframe navigation to an outside origin.", { url: url.slice(0, 300) });
+  });
+
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) void shell.openExternal(url);
+    return { action: "deny" };
+  });
+}
+
 async function createWindow(options?: { startHidden?: boolean }): Promise<void> {
   const appIcon = resolveAppIcon();
   const win = new BrowserWindow({
@@ -13132,6 +13243,7 @@ async function createWindow(options?: { startHidden?: boolean }): Promise<void> 
     }
   });
   mainWindow = win;
+  applyNavigationGuards(win);
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
   });
@@ -13903,6 +14015,8 @@ app.whenReady().then(async () => {
     app.exit(code);
     return;
   }
+
+  installIpcSenderGuard();
 
   ipcMain.handle("metis-policy:get-sample-decision", () => sampleDecision);
   ipcMain.handle("metis-policy:get-status", (_event, profilePath?: string) => getPolicyStatus(profilePath));

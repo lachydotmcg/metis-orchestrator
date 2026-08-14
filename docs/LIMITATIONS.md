@@ -73,16 +73,33 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   in `resolvePermissionMode`, the choke point every session entry point shares. Latent rather than
   live — nothing untrusted reaches that IPC — but it had to precede the first HTTP route that can
   start a run rather than follow it.
-- **The renderer is trusted, and three things depend on it staying that way.** Audited 2026-08-05.
-  There is no CSP anywhere, no navigation guard (`setWindowOpenHandler`, `will-navigate`), and
-  none of the ~100 `ipcMain` handlers validates its sender — the ten `event.sender` uses all send
-  replies rather than checking origin. `contextIsolation` is on and `nodeIntegration` off, so this
-  is not a hole today: the chat renders through react-markdown with no `rehype-raw`, so
+- **There is still no CSP.** Audited 2026-08-05: no meta tag, no `onHeadersReceived` header, nothing.
+  It is the last of the three renderer-trust preconditions still open, and the fiddliest, because
+  Vite's dev server needs inline styles and `eval` for HMR while a packaged build needs neither —
+  so the policy that is worth having in production is one that would break development every day
+  unless the two differ. Not a hole today for the same reason as the two below, and the same
+  precondition applies: it should land before any HTML artifact does.
+- ~~**No navigation guards.**~~ Fixed 2026-08-05: `will-navigate` refuses any top-level navigation
+  that is not the app itself and hands an `http(s)` target to the OS browser instead;
+  `will-frame-navigate` refuses subframe navigation to anything but the app, loopback (the preview
+  rail's generated-project server), `about:` or `data:`; and `setWindowOpenHandler` denies every
+  new window, routing `http(s)` outward — which is what the one `target="_blank"` link in the app
+  already meant. The URL rules are pure and pinned in `08-path-containment`, including that
+  `127.0.0.1.evil.example` is not loopback.
+- ~~**No IPC sender validation.**~~ Fixed 2026-08-05: `ipcMain.handle` and `ipcMain.on` are wrapped
+  once at startup so every channel refuses a sender that is not a top-level frame. Done by patching
+  the registration rather than editing ~100 call sites, so the default is guarded and the
+  hundred-and-first handler inherits it. The rule is deliberately "reject subframes" rather than an
+  origin allowlist: our own windows legitimately load three different URL kinds (dev server over
+  http, packaged renderer over `file://`, quick-ask over `data:` whose origin is `null`), and the
+  thing worth excluding is the preview iframe, which is excluded by being a subframe. Nothing
+  reached it before — a subframe has no preload and `nodeIntegrationInSubFrames` is false — so this
+  stops the guarantee depending on a default staying default.
+- **The renderer is still trusted, and the CSP is what is left.** `contextIsolation` is on and
+  `nodeIntegration` off, and the chat renders through react-markdown with no `rehype-raw`, so
   model-authored HTML is stripped rather than executed and nothing untrusted runs in that origin.
-  It is a standing precondition, not a guarantee. Rendering model-authored markup — the artifacts
-  work — is the change that would make it matter, and these three should land with it rather than
-  after it. Closed in the same audit: the generic store channel no longer reaches the `secrets`
-  key (`13-store-key-guard`).
+  Closed in the same audit: the generic store channel no longer reaches the `secrets` key
+  (`13-store-key-guard`).
 - **The phone page is watch-and-stop only, and that is a boundary rather than a milestone.** The
   gateway serves `/v1/loops`, `/v1/loops/:id` and `/v1/loops/:id/stop` plus a page that polls them.
   There is deliberately no route that STARTS a run: starting one spends money and carries a

@@ -111,6 +111,34 @@ engine referenced below.
 
 ### Security (2026-08-05)
 
+- **Navigation guards and IPC sender validation**, two of the three
+  renderer-trust preconditions recorded in `docs/LIMITATIONS.md`.
+
+  `will-navigate` refuses any top-level navigation that is not the app
+  itself and hands an `http(s)` target to the OS browser instead.
+  `will-frame-navigate` refuses subframe navigation to anything but the
+  app, loopback, `about:` or `data:` — loopback stays allowed because the
+  preview rail's iframe legitimately loads the generated-project server on
+  an ephemeral port, and blocking it would break a shipped feature.
+  `setWindowOpenHandler` denies every new window and routes `http(s)`
+  outward, which is what the app's one `target="_blank"` link already
+  meant.
+
+  Sender validation wraps `ipcMain.handle` and `ipcMain.on` once at
+  startup rather than editing ~100 call sites, so the default is guarded
+  and the hundred-and-first handler inherits it. The rule is "reject
+  subframes" rather than an origin allowlist: our own windows legitimately
+  load three kinds of URL — dev server over http, packaged renderer over
+  `file://`, quick-ask over `data:` whose origin is `null` — and the thing
+  actually worth excluding is the preview iframe, which a subframe check
+  already excludes.
+
+  Neither was reachable: a subframe has no preload and
+  `nodeIntegrationInSubFrames` is false. This stops the guarantee
+  depending on a default staying default. The CSP is still open, and is
+  the fiddly one — Vite's dev server needs inline styles and `eval` for
+  HMR while a packaged build needs neither.
+
 - **The renderer can no longer reach the `secrets` store key.**
   `metis-store:get` forwarded any key to `readStoreValue` with only a
   character check, and provider API keys live at that key —
