@@ -118,6 +118,24 @@ below came out of that, in his priority order.
   the model a follow-link tool. Small models measurably over-rely on whatever was retrieved first
   rather than retrieving again — they do not ask. A design whose correctness depends on a 7B
   choosing to call a tool fails quietly.
+- **What eight competitors are doing** — reviewed in
+  [`docs/COMPETITIVE_SWEEP.md`](COMPETITIVE_SWEEP.md). Antigravity, Hermes, OpenClaw, Claude Code,
+  Codex, Cursor, Cline/Roo and the local-model ecosystem, judged on identity fit, demo value and
+  build cost, then checked against this repo before ranking.
+
+  The convergence is the finding: all eight now ship a compressed CHECKABLE OBJECT rather than a
+  log, because generation stopped being the bottleneck and review became it. Metis records
+  everything needed to print a better one than any of them — it is the only product in the set
+  where different models did different pieces — and discards it when a run ends.
+
+  One structural gap confirmed by grep rather than assumed: there is no escalation path anywhere.
+  `pickDepthRung` chooses once, up front, and never revisits. **Depths is a guess with no
+  correction.** The proposed fix is a think-token ceiling per rung whose overrun promotes the turn,
+  which turns routing from a prediction into a control loop and is the only finding of 57 that
+  does so.
+
+  Also worth reading for the DO NOT BUILD list, which is as useful as the shortlist, and for four
+  things the sweep says Metis already does better than the products reviewed.
 ### Wanted, not yet designed
 
 - **Broader automated tests.** The repo now has offline suites (`npm test`, tests/suites/, run on
