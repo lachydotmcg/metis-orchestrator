@@ -31,6 +31,15 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 - ~~**No token ceiling.**~~ Shipped 2026-07-24 (`0d48f27`): `/loop --budget 200k` sums the ledger's
   per-loop attribution before and after every turn and settles the loop at `exhausted` with both
   numbers in the reason.
+- ~~**A loop cannot check its own work.**~~ Partly fixed 2026-08-06: a turn's operations now become
+  `evidence` on its iteration record and are rendered into the next wake prompt, so a loop can
+  react to an exit code rather than to its own prose about what it did. It needed no new
+  collection — `AgentOperation` already carried `status`, `exitCode`, `stderr` and
+  `consoleErrors`, and the tick read `assistantText` off the same object and dropped the rest.
+  Narrow on purpose: an operation counts only if it CHECKED something, so a file write is not
+  evidence. **Still open:** a loop cannot ASK. Ticks run with no stream, so `promptForPermission`
+  returns `deny` and `promptUserQuestion` auto-answers the first option — that needs a pending
+  prompt registry, since the pending maps store only the resolver and never the request.
 - **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
   are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
   is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the

@@ -17,7 +17,7 @@
 
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
-const { captureArtifact, latestArtifact, helpersForWakePrompt, summariseTurn, composeWakePrompt, LOOP_ARTIFACT_LIMIT } =
+const { captureArtifact, latestArtifact, helpersForWakePrompt, summariseTurn, composeWakePrompt, LOOP_ARTIFACT_LIMIT, evidenceFromOperations, trimToTail, extractLoopDecision, LOOP_EVIDENCE_MAX } =
   await fromBuild("electron/loops.js");
 
 const CODE_REPLY = 'Here is the draft.\n\n```js\nfunction add(a, b) {\n  return a + b;\n}\n```\n\nLet me know.';
@@ -131,6 +131,82 @@ section("The wake prompt carries the artifact, and the step still leads");
   const firstTurn = { id: "l3", goal: "g", status: "sleeping", iterations: 0, maxIterations: 8, steps: ["draft", "review"], stepIndex: 0, history: [] };
   ok("turn one has no artifact block", !composeWakePrompt(firstTurn).includes("previous step produced"));
 }
+
+section("Evidence: only operations that actually CHECKED something");
+{
+  const ops = [
+    { label: "Wrote index.html", status: "complete" },
+    { label: "Ran npm test", status: "complete", exitCode: 0 },
+    { label: "Ran npm run build", status: "error", exitCode: 1, stderr: "TS2304: Cannot find name 'x'." },
+    { label: "Checked the preview", status: "warning", consoleErrors: ["Uncaught TypeError: y is not a function"] }
+  ];
+  const evidence = evidenceFromOperations(ops);
+  // A file write reports that something HAPPENED, not that it worked. Counting
+  // it would let a loop "verify" itself by writing a file.
+  check("a file write is not evidence", evidence.length, 3);
+  ok("a passing command is", evidence.some((e) => e.label.includes("npm test") && e.status === "complete"));
+  ok("its exit code travels", evidence.find((e) => e.label.includes("npm test")).exitCode === 0);
+  ok("a failing command is", evidence.some((e) => e.status === "error" && e.exitCode === 1));
+  ok("and carries why it failed", evidence.find((e) => e.status === "error").detail.includes("TS2304"));
+  ok("a browser check with console errors is", evidence.some((e) => e.label.includes("preview")));
+  ok("and carries the console error", evidence.find((e) => e.label.includes("preview")).detail.includes("TypeError"));
+  // A passing command needs no detail — the exit code says everything.
+  check("a passing command carries no noise", evidence.find((e) => e.label.includes("npm test")).detail, undefined);
+}
+check("no operations", evidenceFromOperations([]), []);
+check("undefined", evidenceFromOperations(undefined), []);
+{
+  const many = Array.from({ length: 20 }, (_, i) => ({ label: `cmd ${i}`, status: "complete", exitCode: 0 }));
+  check("evidence is bounded", evidenceFromOperations(many).length, LOOP_EVIDENCE_MAX);
+}
+
+section("Failure detail keeps the END, where the error is");
+{
+  // The opposite of captureArtifact's middle-trim, and deliberately so: a stack
+  // trace's useful line is the last one, so keeping the head keeps the part
+  // that says nothing.
+  const trace = `${"boilerplate\n".repeat(200)}Error: the thing that actually broke`;
+  const trimmed = trimToTail(trace, 120);
+  ok("the real error survives", trimmed.includes("the thing that actually broke"));
+  ok("it is bounded", trimmed.length <= 121);
+  ok("it marks the cut", trimmed.startsWith("…"));
+  check("short text is untouched", trimToTail("brief", 120), "brief");
+}
+
+section("Evidence reaches the next turn's prompt");
+{
+  const withEvidence = {
+    id: "l4", goal: "get the tests passing", status: "sleeping", iterations: 1, maxIterations: 8,
+    history: [{ index: 1, at: "2026-08-06T00:00:00Z", summary: "tried a fix", decision: "continue",
+      evidence: [{ label: "Ran npm test", status: "error", exitCode: 1, detail: "3 failing" }] }]
+  };
+  const prompt = composeWakePrompt(withEvidence);
+  ok("the check is named", prompt.includes("Ran npm test"));
+  ok("the outcome is there", prompt.includes("error"));
+  ok("the exit code is there", prompt.includes("exit 1"));
+  ok("and why", prompt.includes("3 failing"));
+  // The goal must still lead — evidence is scaffolding, same rule as the
+  // artifact block.
+  ok("the goal still leads", prompt.startsWith("get the tests passing"));
+}
+{
+  const noEvidence = { id: "l5", goal: "g", status: "sleeping", iterations: 1, maxIterations: 8, history: [turn(1, "x")] };
+  ok("a turn that checked nothing adds no block", !composeWakePrompt(noEvidence).includes("last turn checked"));
+}
+
+section('The third verdict: "blocked" is a stop that does not claim success');
+{
+  const blocked = extractLoopDecision('```metis-loop\n{"decision":"blocked","reason":"cannot verify without the dev server"}\n```');
+  check("it parses", blocked.decision, "blocked");
+  check("the reason survives", blocked.reason, "cannot verify without the dev server");
+  // Blocked settles the loop, so it drops spawn and delay exactly as stop does:
+  // a loop that cannot proceed must not leave helpers running behind it.
+  const withSpawn = extractLoopDecision('```metis-loop\n{"decision":"blocked","reason":"stuck","spawn":[{"name":"a","task":"b"}],"delaySeconds":300}\n```');
+  check("spawn is dropped", withSpawn.spawn, undefined);
+  check("delay is dropped", withSpawn.delaySeconds, undefined);
+}
+// The governing rule is unchanged: anything unrecognised still stops the loop.
+check("an invented verdict is still refused", extractLoopDecision('```metis-loop\n{"decision":"maybe"}\n```'), null);
 
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);

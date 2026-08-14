@@ -12,6 +12,40 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Added (2026-08-06)
+
+- **A loop can see whether its work actually worked, and can say it
+  could not check.** Two of the three faces of the feedback channel
+  designed in `docs/ROADMAP.md`.
+
+  A turn's operations now become `evidence` on its iteration record and
+  are rendered into the next wake prompt, directly above the decision
+  block — so the loop's own results are the last thing it reads before
+  choosing. This needed no new collection: `AgentOperation` already
+  carried `status`, `exitCode`, `stderr` and `consoleErrors`, and the tick
+  was reading `assistantText` off the very same object and dropping the
+  rest. The rule for what counts is narrow — an operation must have
+  CHECKED something, so a command's exit code and a browser check's
+  console errors qualify and a file write does not. Counting file writes
+  would let a loop "verify" itself by writing a file. Failure detail trims
+  from the FRONT, the opposite of the artifact's middle-trim, because a
+  stack trace's useful line is its last.
+
+  The decision block gains a third verdict, `blocked`, settling the loop
+  at its own status rather than `stopped`. Stopping reads as success and
+  continuing burns turns against a wall; neither is honest when a run
+  cannot verify its result or needs a decision only the user can give. An
+  agent that cannot distinguish *done* from *unverifiable* will always
+  choose done. Blocked loops surface on the phone page — the one status
+  most worth carrying in your pocket, and the one a live-only filter would
+  have hidden.
+
+  Suite 01 caught two real problems while this was written: the new
+  instruction contained the word "make", which steers routing and is
+  banned from the wake prompt for that reason, and it pushed the prompt
+  past the 600-character bound that keeps the goal dominant. The third
+  verdict now shares a line with the second rather than adding one.
+
 ### Changed (2026-08-06)
 
 - **The fenced blocks a model may emit are declared in one place.** Four

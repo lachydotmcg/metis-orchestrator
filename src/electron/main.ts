@@ -96,6 +96,7 @@ import {
   LOOP_MIN_DELAY_SECONDS,
   captureArtifact,
   composeWakePrompt,
+  evidenceFromOperations,
   currentLoopStep,
   decideLoopContinuation,
   assessLoopCapability,
@@ -103,6 +104,7 @@ import {
   latestArtifact,
   loopTerminalReason,
   summariseTurn,
+  type LoopEvidence,
   type LoopIterationRecord,
   type LoopRecord,
   type LoopSpawnRequest,
@@ -11035,6 +11037,7 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   /** Passed to the decision call so it uses the same model that just did the
    *  work, falling back to the local one when the work path produced none. */
   let providerResultForDecision: ProviderInvokeResult | undefined;
+  let turnEvidence: LoopEvidence[] = [];
   try {
     const run = await runSessionTracked({
       prompt: composeWakePrompt(loaded),
@@ -11070,6 +11073,9 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     conversationId = run.conversationId ?? loaded.conversationId;
     answeringModel = run.providerResult?.model;
     providerResultForDecision = run.providerResult;
+    // The feedback channel. These were always on the run; the tick just never
+    // looked at them (docs/ROADMAP.md, the loop feedback channel design note).
+    turnEvidence = evidenceFromOperations(run.operations ?? []);
   } catch (error) {
     runError = error instanceof Error ? error.message : String(error);
     runCancelled = isCancellationError(error);
@@ -11111,7 +11117,8 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // Only a chain carries work between steps; a plain goal loop keeps one
     // conversation and already has its own thread. Storing it either way would
     // put a copy of every turn in the loop record for no reader.
-    artifact: positionNow ? captureArtifact(assistantText) : undefined
+    artifact: positionNow ? captureArtifact(assistantText) : undefined,
+    evidence: turnEvidence.length ? turnEvidence : undefined
   };
 
   const finishedAt = new Date();
@@ -11177,6 +11184,22 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       id,
       iteration: index,
       model: answeringModel
+    });
+  } else if (decision.decision === "blocked") {
+    // A stop that does not claim success. Its own status because the panel,
+    // the tray and the phone page all read status to decide what to show, and
+    // "stopped" would tell the user this finished when it did not. This is the
+    // verdict that lets a loop decline to guess (docs/ROADMAP.md, the feedback
+    // channel design note): without it the only answers both assert an outcome.
+    settled = {
+      ...advanced,
+      status: "blocked",
+      stoppedReason: `the loop cannot proceed without you: ${decision.reason ?? "no reason given"}`
+    };
+    await appendAudit("warning", "loop.blocked", `Loop "${loopLabel(advanced)}" blocked on iteration ${index} and is waiting for you.`, {
+      id,
+      iteration: index,
+      reason: decision.reason
     });
   } else if (decision.decision === "stop") {
     settled = {

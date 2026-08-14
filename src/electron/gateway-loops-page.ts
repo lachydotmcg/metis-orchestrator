@@ -54,6 +54,8 @@ export function gatewayLoopsPage(token: string): string {
   .meta { font-size:0.8rem; color:var(--muted); display:flex; flex-wrap:wrap; gap:4px 12px; }
   .badge { display:inline-block; font-size:0.72rem; padding:2px 8px; border-radius:99px; border:1px solid var(--line); }
   .running .badge, .sleeping .badge { border-color:var(--accent); color:var(--accent); }
+  .blocked { border-color:var(--danger); }
+  .blocked .badge { border-color:var(--danger); color:var(--danger); }
   .summary { font-size:0.82rem; color:var(--muted); margin-top:8px; padding-top:8px; border-top:1px solid var(--line); overflow-wrap:anywhere; }
   /* 44px min target: this is the one destructive control on the page and it
      is being tapped with a thumb, often in a hurry. */
@@ -108,9 +110,13 @@ export function gatewayLoopsPage(token: string): string {
   }
 
   function render(loops) {
-    // Only loops that can still do something. A finished loop on a phone is
-    // just noise, and the desktop panel is where history belongs.
-    var live = loops.filter(function (l) { return l.status === "running" || l.status === "sleeping"; });
+    // Loops that can still do something, PLUS blocked ones. A finished loop on
+    // a phone is noise and the desktop panel is where history belongs — but a
+    // blocked loop is the single most important thing this page can show you,
+    // because it is a run that stopped without finishing and is waiting on a
+    // decision only you can make. Filtering to live-only would have hidden
+    // exactly the case worth carrying in your pocket.
+    var live = loops.filter(function (l) { return l.status === "running" || l.status === "sleeping" || l.status === "blocked"; });
     empty.hidden = live.length > 0;
     list.textContent = "";
     live.forEach(function (loop) {
@@ -147,6 +153,18 @@ export function gatewayLoopsPage(token: string): string {
         summary.textContent = last.error ? "failed: " + last.error : last.summary;
         card.appendChild(summary);
       }
+
+      if (loop.status === 'blocked' && loop.stoppedReason) {
+        var why = document.createElement('div');
+        why.className = 'summary';
+        why.textContent = loop.stoppedReason;
+        card.appendChild(why);
+      }
+
+      // A blocked loop is already settled, so Stop would be a button that does
+      // nothing. It is the one card here with no action, which is honest: the
+      // action it needs is on the desktop.
+      if (loop.status === 'blocked') { list.appendChild(card); return; }
 
       var stop = document.createElement("button");
       stop.textContent = busy[loop.id] ? "stopping…" : "Stop";

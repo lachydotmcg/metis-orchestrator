@@ -43,7 +43,7 @@ export const LOOP_MAX_DELAY_SECONDS = 3600;
  *  loop whose every turn is a slow build. */
 export const LOOP_MAX_AGE_HOURS = 12;
 
-export type LoopStatus = "sleeping" | "running" | "stopped" | "exhausted" | "failed";
+export type LoopStatus = "sleeping" | "running" | "stopped" | "exhausted" | "failed" | "blocked";
 
 /** How many helpers one turn may ask for. Three is enough to parallelise a
  *  real job; more is a model misunderstanding its goal, the same reasoning as
@@ -104,15 +104,86 @@ export interface LoopSpawnRequest {
   context?: string;
 }
 
+/** One checkable outcome from a turn: what ran, and whether it worked. */
+export interface LoopEvidence {
+  label: string;
+  status: "complete" | "warning" | "error";
+  exitCode?: number;
+  /** The tail of stderr on a failure, trimmed from the FRONT. Opposite to
+   *  captureArtifact's middle-trim, and for the same reason applied to a
+   *  different shape: a stack trace's useful line is the last one, so keeping
+   *  the head would keep the part that says nothing. */
+  detail?: string;
+}
+
+/** How much failure output travels forward. Small on purpose: this is replayed
+ *  into a prompt, and a 200-line stack trace crowds out the goal. */
+export const LOOP_EVIDENCE_DETAIL_LIMIT = 400;
+
+/** How many operations count as evidence in one turn. */
+export const LOOP_EVIDENCE_MAX = 6;
+
+/** Turns a turn's operations into evidence the next turn can act on.
+ *
+ *  The rule is deliberately narrow: an operation counts only if it CHECKED
+ *  something. A command has an exit code, and a browser check collects console
+ *  errors; both can fail and say so. A file write cannot — it reports that
+ *  something happened, not that it worked, and treating it as evidence would
+ *  let a loop "verify" itself by writing a file.
+ *
+ *  Kept pure and shaped around the fields AgentOperation already has, so it can
+ *  be tested without a run. */
+export function evidenceFromOperations(
+  operations: ReadonlyArray<{
+    label?: string;
+    status?: string;
+    exitCode?: number;
+    stderr?: string;
+    consoleErrors?: string[];
+  }>
+): LoopEvidence[] {
+  if (!Array.isArray(operations)) return [];
+  const evidence: LoopEvidence[] = [];
+  for (const operation of operations) {
+    const checked = typeof operation?.exitCode === "number" || (Array.isArray(operation?.consoleErrors) && operation.consoleErrors.length > 0);
+    if (!checked) continue;
+    const status = operation.status === "error" || operation.status === "warning" ? operation.status : "complete";
+    const failureText = status === "complete" ? "" : [operation.stderr ?? "", ...(operation.consoleErrors ?? [])].join("\n").trim();
+    evidence.push({
+      label: (operation.label ?? "(unnamed step)").slice(0, 120),
+      status,
+      ...(typeof operation.exitCode === "number" ? { exitCode: operation.exitCode } : {}),
+      ...(failureText ? { detail: trimToTail(failureText, LOOP_EVIDENCE_DETAIL_LIMIT) } : {})
+    });
+    if (evidence.length >= LOOP_EVIDENCE_MAX) break;
+  }
+  return evidence;
+}
+
+/** Keeps the END of a string. See LoopEvidence.detail for why. */
+export function trimToTail(text: string, limit: number): string {
+  const cleaned = (text ?? "").trim();
+  if (cleaned.length <= limit) return cleaned;
+  return `…${cleaned.slice(cleaned.length - limit + 1)}`;
+}
+
 export interface LoopIterationRecord {
   index: number;
   at: string;
   /** Compact summary of what that turn actually did, replayed on later
    *  wakeups so an iteration can see its own history rather than repeating it. */
   summary: string;
-  decision: "continue" | "stop" | "silent";
+  decision: "continue" | "stop" | "silent" | "blocked";
   reason?: string;
   error?: string;
+  /** What the turn's operations actually PROVED, carried into the next turn's
+   *  prompt so the loop can react to an outcome rather than to its own prose.
+   *
+   *  This is the whole feedback channel and it needed no new collection: an
+   *  AgentOperation already carries status, exitCode, stdout, stderr and
+   *  consoleErrors, and runSessionTracked already returns them on the run. The
+   *  tick simply read assistantText off that same object and dropped the rest. */
+  evidence?: LoopEvidence[];
   /** What the turn actually PRODUCED, kept whole enough to be worked on — code
    *  fences intact, unlike `summary`, which collapses them to "(code)".
    *
@@ -210,7 +281,7 @@ export function currentLoopStep(loop: LoopRecord): CurrentLoopStep | null {
 }
 
 export interface LoopDecision {
-  decision: "continue" | "stop";
+  decision: "continue" | "stop" | "blocked";
   delaySeconds?: number;
   reason?: string;
   /** Helpers the turn asked to run before its next wake (phase 2). Only ever
@@ -240,7 +311,19 @@ export function loopDecisionPromptBlock(): string {
     '{ "decision": "continue", "delaySeconds": 900, "reason": "why you need another turn" }',
     "```",
     "",
-    `Use "stop" instead of "continue" once the goal is met or once another turn cannot help. delaySeconds is clamped to ${LOOP_MIN_DELAY_SECONDS}-${LOOP_MAX_DELAY_SECONDS}.`,
+    // Three verdicts on one line rather than two lines, because suite 01 bounds
+    // the whole wake prompt at 600 characters so the GOAL stays the dominant
+    // signal and scaffolding never crowds it out. The third verdict had to earn
+    // its place by making the sentence tighter, not longer.
+    //
+    // "blocked" is phrased as a permission, not a warning: the failure being
+    // designed out is a model guessing in order to look finished, because
+    // without somewhere to put "I could not check this" both available answers
+    // assert an outcome. Wording also avoids build/make/create/write, which the
+    // same suite enforces — this block rides on every wake prompt and those
+    // words steer routing, the hazard that once turned a counting loop into a
+    // rewrite.
+    `Use "stop" once the goal is met, or "blocked" if you cannot verify the result or need the user to decide. delaySeconds is clamped to ${LOOP_MIN_DELAY_SECONDS}-${LOOP_MAX_DELAY_SECONDS}.`,
     // Phase 2 helpers. One line, kept SHORT and neutral (no build/make/create
     // — see the routing-hazard note above; the wake prompt has a length bound
     // in suite 01 so the goal stays the dominant signal), continue-only.
@@ -265,8 +348,12 @@ export function extractLoopDecision(text: string): LoopDecision | null {
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
     const record = parsed as Record<string, unknown>;
     const decision = record.decision;
-    if (decision !== "continue" && decision !== "stop") return null;
+    if (decision !== "continue" && decision !== "stop" && decision !== "blocked") return null;
     const reason = typeof record.reason === "string" && record.reason.trim() ? record.reason.trim() : undefined;
+    // "blocked" is a stop that does not claim success. It settles the loop the
+    // same way, so it drops spawn and delay exactly as "stop" does — a loop
+    // that cannot proceed must not also leave helpers running behind it.
+    if (decision === "blocked") return { decision, reason };
     // Spawn is DROPPED on a stop rather than honoured: "run helpers and also
     // stop" is a contradiction, and the resolution rule is the same one the
     // whole parser follows — the conservative reading wins.
@@ -587,6 +674,20 @@ export function composeWakePrompt(loop: LoopRecord): string {
   const artifact = step ? latestArtifact(loop) : "";
   if (artifact) {
     lines.push("(What the previous step produced, to work from:", artifact, ")", "");
+  }
+
+  // What the last turn's commands and checks actually PROVED. Sits below the
+  // artifact and directly above the protocol block, so it is the last thing
+  // read before the decision is asked for — the loop's own evidence should be
+  // freshest when it chooses continue, stop or blocked.
+  const evidence = loop.history[loop.history.length - 1]?.evidence ?? [];
+  if (evidence.length) {
+    lines.push("(What the last turn checked:");
+    for (const item of evidence) {
+      const code = typeof item.exitCode === "number" ? ` (exit ${item.exitCode})` : "";
+      lines.push(`- ${item.label}: ${item.status}${code}${item.detail ? ` — ${item.detail}` : ""}`);
+    }
+    lines.push(")", "");
   }
 
   lines.push(loopDecisionPromptBlock());
