@@ -1989,10 +1989,30 @@ async function resolveActiveProjectWorkspace(requestedPath?: string, resourceKey
  *  `permissionMode` and falling back to the old three-level `permissionLevel`
  *  for back-compat (docs/FABLE_PLANS.md section 24): restricted -> ask,
  *  standard -> auto, trusted -> auto. Defaults to "auto" (previous behavior). */
-function resolvePermissionMode(input: Pick<SessionRunInput, "permissionMode" | "permissionLevel">): PermissionMode {
-  if (input.permissionMode) return input.permissionMode;
-  if (input.permissionLevel === "restricted") return "ask";
-  return "auto";
+/** The mode a run actually gets, clamped to the owner's configured ceiling.
+ *
+ *  The clamp used to live only in createLoop, which meant the ceiling bound
+ *  loops and nothing else: `permissionMode` arrives from the RENDERER on
+ *  SessionRunInput, resolvePermissionMode returned it verbatim, and
+ *  gatePermission short-circuits on "bypass" for every scope including
+ *  process.spawn and filesystem.write. So a caller that could reach
+ *  metis-session:run could run in bypass on a machine whose owner
+ *  deliberately sits in "ask".
+ *
+ *  Nothing untrusted can reach that IPC today — contextIsolation is on and
+ *  the chat strips model-authored HTML — so this was latent rather than live.
+ *  It is fixed here rather than later because the fix has to precede the
+ *  first HTTP route that can start a run, not follow it: on the far side of
+ *  that route, `{"permissionMode":"bypass"}` is remote arbitrary write and
+ *  execute. Ceilings belong at the choke point every entry point shares. */
+async function resolvePermissionMode(input: Pick<SessionRunInput, "permissionMode" | "permissionLevel">): Promise<PermissionMode> {
+  const ceiling = await readStoreValue<PermissionMode>("permissionMode", "auto");
+  const requested: PermissionMode = input.permissionMode
+    ? input.permissionMode
+    : input.permissionLevel === "restricted"
+      ? "ask"
+      : "auto";
+  return clampPermissionMode(requested, ceiling);
 }
 
 /** Whether an existing grant covers this scope+target (+projectPath when
@@ -9146,7 +9166,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     return run;
   }
 
-  const permissionMode = resolvePermissionMode(input);
+  const permissionMode = await resolvePermissionMode(input);
 
   const createdAt = new Date().toISOString();
   const conversationId = input.conversationId ?? randomUUID();

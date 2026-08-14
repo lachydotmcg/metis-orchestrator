@@ -67,6 +67,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 - **Key encryption depends on the OS.** `safeStorage` where the platform provides it, base64 on
   disk where it does not. The app shows you which one is in use rather than implying encryption it
   does not have.
+- ~~**The permission ceiling bound loops and nothing else.**~~ Fixed 2026-08-05: `clampPermissionMode`
+  was applied only in `createLoop`, so `resolvePermissionMode` handed the renderer's requested mode
+  straight to `gatePermission`, which short-circuits on `bypass` for every scope. The clamp now sits
+  in `resolvePermissionMode`, the choke point every session entry point shares. Latent rather than
+  live — nothing untrusted reaches that IPC — but it had to precede the first HTTP route that can
+  start a run rather than follow it.
 - **The renderer is trusted, and three things depend on it staying that way.** Audited 2026-08-05.
   There is no CSP anywhere, no navigation guard (`setWindowOpenHandler`, `will-navigate`), and
   none of the ~100 `ipcMain` handlers validates its sender — the ten `event.sender` uses all send
