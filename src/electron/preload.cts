@@ -158,6 +158,9 @@ contextBridge.exposeInMainWorld("metisProviders", {
 });
 
 contextBridge.exposeInMainWorld("metisRegistry", {
+  // Outbound network for the Marketplace, allowlisted in main. The renderer
+  // deliberately does no fetching of its own — see fetchRegistryUrl.
+  fetchUrl: (url: string) => ipcRenderer.invoke("metis-registry:fetch", url) as Promise<{ ok: boolean; status?: number; body?: string; error?: string }>,
   list: () => ipcRenderer.invoke("metis-registry:list"),
   refresh: (sourceUrl?: string) => ipcRenderer.invoke("metis-registry:refresh", sourceUrl),
   listInstalled: () => ipcRenderer.invoke("metis-registry:list-installed"),

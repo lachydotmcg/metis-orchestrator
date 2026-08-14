@@ -173,6 +173,7 @@ declare global {
       invoke: (input: ProviderInvokeInput) => Promise<ProviderInvokeResult>;
     };
     metisRegistry?: {
+      fetchUrl: (url: string) => Promise<{ ok: boolean; status?: number; body?: string; error?: string }>;
       list: () => Promise<RegistryState>;
       refresh: (sourceUrl?: string) => Promise<RegistryState>;
       listInstalled: () => Promise<RegistryPackage[]>;

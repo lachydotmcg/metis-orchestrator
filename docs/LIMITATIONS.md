@@ -95,7 +95,7 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
   ```
   default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline';
-  img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com;
+  img-src 'self' data:; font-src 'self'; connect-src 'self' http://127.0.0.1:*;
   frame-src 'self' http://127.0.0.1:*; base-uri 'none'; object-src 'none';
   form-action 'none'
   ```
@@ -115,12 +115,13 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   - `frame-src` needs loopback with a wildcard port. The preview rail's iframe loads the
     generated-project server on an ephemeral 127.0.0.1 port, so an exact port cannot be written
     down in advance.
-  - `connect-src` needs `https://api.github.com`, and this is the one that would have caused a
-    silent regression. The Marketplace fetches GitHub repo metadata AND arbitrary `source_url`
-    values from registry entries (`App.tsx` ~12439, ~12471, ~12669). Marketplace is hidden in v1,
-    so a wrong policy here would pass every test, ship, and only fail on the day it is un-hidden.
-    Allowing arbitrary `source_url` is not compatible with a useful `connect-src`; the honest fix
-    is to move those fetches to the main process, where they belong anyway.
+  - ~~`connect-src` needs `https://api.github.com`.~~ **Unblocked 2026-08-06.** This was the
+    constraint that made a useful `connect-src` impossible: the Marketplace fetched GitHub metadata
+    and arbitrary `source_url` values from registry entries, in the renderer. Those moved to main
+    behind an allowlist (`isRegistryFetchUrl`), so the renderer now makes exactly one outbound
+    request of its own — a `HEAD` to the loopback preview server. `connect-src 'self'
+    http://127.0.0.1:*` is therefore now sufficient, and the packaged policy above can drop
+    `https://api.github.com` entirely.
 
   **Verification is the gate, not the writing.** It needs `npm run dev` actually running, HMR
   confirmed working, and the renderer console confirmed free of CSP violations, with the preview

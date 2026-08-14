@@ -131,6 +131,7 @@ import {
   isAppNavigationUrl,
   isGeneratedImagePath,
   isLoopbackHttpUrl,
+  isRegistryFetchUrl,
   isPathInside,
   sameResolvedPath
 } from "../shared/intent-and-paths.js";
@@ -13141,6 +13142,40 @@ let mainWindow: BrowserWindow | null = null;
  *  with `show: false` so a headless start lives in the tray until the tray's
  *  "Open Metis" item (openOrFocusMainWindow's show()/focus()) reveals it —
  *  everything else (renderer load, IPC, close-to-tray) is identical. */
+/** Fetches a Marketplace URL on the renderer's behalf, from main.
+ *
+ *  The Marketplace used to call `fetch()` in the RENDERER against
+ *  `api.github.com` and against whatever `source_url` a registry entry named.
+ *  Two reasons that had to move, and the second is what forced it now: outbound
+ *  network belongs in main, where it is auditable and where every other network
+ *  call in this app already lives; and a renderer that can fetch arbitrary hosts
+ *  cannot have a meaningful `connect-src`, which made the CSP designed in
+ *  docs/LIMITATIONS.md unbuildable while this stood.
+ *
+ *  Returns text rather than parsed JSON. Two of the three call sites want raw
+ *  text (a README, a preset payload they parse themselves with their own error
+ *  message), and a fetcher that guessed at the shape would have to be told the
+ *  shape by every caller anyway.
+ *
+ *  Never throws: a Marketplace that cannot reach GitHub should hide a stats row,
+ *  not surface an unhandled rejection. */
+async function fetchRegistryUrl(url: string): Promise<{ ok: boolean; status?: number; body?: string; error?: string }> {
+  if (!isRegistryFetchUrl(url)) {
+    await appendAudit("warning", "registry.fetch.refused", "Refused a registry fetch to a host that is not on the allowlist.", { url: String(url).slice(0, 200) });
+    return { ok: false, error: "That host is not one Metis fetches registry content from." };
+  }
+  try {
+    const response = await fetch(url, { redirect: "follow" });
+    const body = await response.text();
+    // A non-2xx is reported rather than thrown: GitHub answers 403 when rate
+    // limited and 404 for a private repo, and both are ordinary outcomes the
+    // Marketplace already knows how to render.
+    return { ok: response.ok, status: response.status, body };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 /** Refuses IPC that did not come from a top-level frame of one of our own
  *  windows. Electron's security checklist item 17: "All Web Frames can in
  *  theory send IPC messages to the main process, including iframes."
@@ -14194,6 +14229,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-providers:list", () => listProviders());
   ipcMain.handle("metis-providers:health-check", (_event, provider: ProviderKey) => healthCheckProvider(provider));
   ipcMain.handle("metis-providers:invoke", (_event, input: ProviderInvokeInput) => invokeProvider(input));
+  ipcMain.handle("metis-registry:fetch", (_event, url: string) => fetchRegistryUrl(url));
   ipcMain.handle("metis-registry:list", () => listRegistry());
   ipcMain.handle("metis-registry:refresh", async (_event, sourceUrl?: string) => {
     const [registry] = await Promise.all([refreshRegistry(sourceUrl), refreshModelCatalog(sourceUrl)]);

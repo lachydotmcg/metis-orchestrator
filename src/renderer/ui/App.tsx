@@ -12436,9 +12436,14 @@ function parseGithubRepoRef(sourceUrl: string): GithubRepoRef | null {
  *  and rate-limiting (403/404) by returning null — the detail view simply hides the stats row. */
 async function fetchGithubRepoStats(ref: GithubRepoRef): Promise<GithubRepoStats | null> {
   try {
-    const response = await fetch(`https://api.github.com/repos/${ref.owner}/${ref.repo}`);
-    if (!response.ok) return null;
-    const data = (await response.json()) as { stargazers_count?: number; forks_count?: number; pushed_at?: string; html_url?: string };
+    // Fetched by MAIN, not here. The renderer does no outbound network of its
+    // own: it is where untrusted model output would land the day artifacts
+    // render markup, and a renderer that can reach arbitrary hosts cannot have
+    // a useful connect-src — see the CSP design in docs/LIMITATIONS.md.
+    if (!window.metisRegistry?.fetchUrl) return null;
+    const response = await window.metisRegistry.fetchUrl(`https://api.github.com/repos/${ref.owner}/${ref.repo}`);
+    if (!response.ok || !response.body) return null;
+    const data = JSON.parse(response.body) as { stargazers_count?: number; forks_count?: number; pushed_at?: string; html_url?: string };
     return {
       stars: data.stargazers_count ?? 0,
       forks: data.forks_count ?? 0,
@@ -12468,9 +12473,9 @@ async function applyMarketplacePreset(item: RegistryPackage, allPackages: Regist
   }
   let raw: string;
   try {
-    const response = await fetch(item.source_url);
-    if (!response.ok) throw new Error(`fetch failed (${response.status})`);
-    raw = await response.text();
+    const response = await window.metisRegistry.fetchUrl(item.source_url);
+    if (!response.ok || !response.body) throw new Error(response.error ?? `fetch failed (${response.status ?? "no response"})`);
+    raw = response.body;
   } catch (error) {
     return { ok: false, message: `Could not fetch the preset payload: ${error instanceof Error ? error.message : String(error)}`, installedSkills: [], missingSkills: [] };
   }
@@ -12666,9 +12671,10 @@ function MarketplaceWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => voi
     }
     if (!(id in readmeCache)) {
       if (selectedPackage.source_url) {
-        fetch(selectedPackage.source_url)
-          .then((response) => (response.ok ? response.text() : null))
-          .then((text) => setReadmeCache((current) => ({ ...current, [id]: text })))
+        void (window.metisRegistry?.fetchUrl
+          ? window.metisRegistry.fetchUrl(selectedPackage.source_url)
+          : Promise.resolve({ ok: false as const, body: undefined }))
+          .then((response) => setReadmeCache((current) => ({ ...current, [id]: response.ok ? (response.body ?? null) : null })))
           .catch(() => setReadmeCache((current) => ({ ...current, [id]: null })));
       } else {
         setReadmeCache((current) => ({ ...current, [id]: null }));

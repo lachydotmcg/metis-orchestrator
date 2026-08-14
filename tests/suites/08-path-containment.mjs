@@ -20,7 +20,7 @@
 import { fromBuild, section, check, summary } from "../harness.mjs";
 import { join, resolve, sep } from "node:path";
 
-const { isPathInside, sameResolvedPath, isGeneratedImagePath, isAppNavigationUrl, isLoopbackHttpUrl } = await fromBuild("shared/intent-and-paths.js");
+const { isPathInside, sameResolvedPath, isGeneratedImagePath, isAppNavigationUrl, isLoopbackHttpUrl, isRegistryFetchUrl } = await fromBuild("shared/intent-and-paths.js");
 
 // An absolute root native to whichever OS is running the suite.
 const BASE = resolve(join(process.cwd(), "testroot"));
@@ -112,6 +112,32 @@ section("Subframes may reach the loopback preview server, and nothing else");
   check("a file url", isLoopbackHttpUrl("file:///C:/x.html"), false);
   check("a data url", isLoopbackHttpUrl("data:text/html,hi"), false);
   check("empty", isLoopbackHttpUrl(""), false);
+}
+
+
+section("Registry fetches are allowlisted, and happen in main");
+{
+  // The Marketplace used to fetch package source_url values straight from the
+  // renderer, which meant it could reach any host a registry entry named. That
+  // also made a useful connect-src impossible, so the CSP was unbuildable
+  // while it stood.
+  check("github api", isRegistryFetchUrl("https://api.github.com/repos/a/b"), true);
+  check("raw content", isRegistryFetchUrl("https://raw.githubusercontent.com/a/b/main/x.json"), true);
+  check("github itself", isRegistryFetchUrl("https://github.com/a/b"), true);
+
+  // The refusals are the point.
+  check("an arbitrary host", isRegistryFetchUrl("https://evil.example/payload.json"), false);
+  // Same prefix-attack shape as the rest of this suite, at hostname level.
+  check("a lookalike host", isRegistryFetchUrl("https://api.github.com.evil.example/x"), false);
+  check("a subdomain of an allowed host", isRegistryFetchUrl("https://evil.api.github.com/x"), false);
+  // http is refused outright: a registry entry naming one is a mistake or a
+  // downgrade attempt.
+  check("plain http is refused", isRegistryFetchUrl("http://api.github.com/repos/a/b"), false);
+  check("a file url", isRegistryFetchUrl("file:///C:/x.json"), false);
+  check("a data url", isRegistryFetchUrl("data:application/json,{}"), false);
+  check("loopback is not a registry host", isRegistryFetchUrl("http://127.0.0.1:8080/x"), false);
+  check("empty", isRegistryFetchUrl(""), false);
+  check("garbage", isRegistryFetchUrl("not a url"), false);
 }
 
 const { passed, failed } = summary();

@@ -118,6 +118,34 @@ export function isPathInside(child: string, parent: string): boolean {
   return childResolved.toLowerCase().startsWith(parentWithSep.toLowerCase()) || childResolved.toLowerCase().startsWith(`${parentResolved.toLowerCase()}/`);
 }
 
+/** Hosts the Marketplace may fetch from. Exact hostnames, never suffix matches:
+ *  "github.com.evil.example" ends with nothing useful but STARTS with the real
+ *  thing under a naive check, which is the same prefix-attack shape isPathInside
+ *  exists for, one layer up. */
+export const REGISTRY_FETCH_HOSTS: readonly string[] = ["api.github.com", "raw.githubusercontent.com", "github.com", "objects.githubusercontent.com"];
+
+/** Whether the app may fetch this registry URL on the renderer's behalf.
+ *
+ *  The Marketplace used to `fetch()` package `source_url` values straight from
+ *  the renderer, which meant the renderer could reach any host a registry entry
+ *  named. Two problems with that, and the second is the one that forced this:
+ *  outbound network belongs in main where it can be audited, and a renderer
+ *  that fetches arbitrary URLs cannot have a meaningful `connect-src` — so the
+ *  CSP designed in docs/LIMITATIONS.md was unbuildable while this stood.
+ *
+ *  HTTPS only. A registry entry naming an `http:` URL is either a mistake or
+ *  someone hoping the app will downgrade for them. */
+export function isRegistryFetchUrl(rawUrl: string): boolean {
+  if (!rawUrl || typeof rawUrl !== "string") return false;
+  try {
+    const url = new URL(rawUrl);
+    if (url.protocol !== "https:") return false;
+    return REGISTRY_FETCH_HOSTS.includes(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
 /** Whether a URL is the app itself: the Vite dev server in development, or the
  *  packaged `file://` renderer. Anything else navigating the TOP-LEVEL window
  *  is a navigation away from Metis, which is never something Metis wants.
