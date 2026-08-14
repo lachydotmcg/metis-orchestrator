@@ -99,6 +99,25 @@ below came out of that, in his priority order.
   guidance about what you are typing belongs where you are typing, as ghost text,
   not as a strip that pushes the composer around.
 
+- **Memory and links, for a small-model reader** — designed in
+  [`docs/MEMORY_AND_LINKS.md`](MEMORY_AND_LINKS.md). Lachy asked for memory optimised for
+  Hermes-class local models and for Obsidian-style links that an LLM actually reads. Research
+  inverted the obvious plan: at 7B and below, retrieval is net NEGATIVE (−2.9 points expected
+  accuracy), a 7B uses a perfect oracle passage only ~15% of the time, and injected context
+  destroys 42–57% of answers the model already knew. The bottleneck is utilization, not retrieval
+  quality, so the lever is how little and how clean rather than how clever.
+
+  The highest-value item falls out of architecture Metis already has: **Depths already judges how
+  hard a turn is and picks the model — that same signal should govern how much retrieved context
+  the model gets.** Rich for a frontier model, little or none for a local 8B. Nobody else can
+  build it because everyone else has one reader. It also means `knowledgeBankEnabled`, which
+  defaults to true, is a net loss when a small local model answers — it should be a per-tier
+  policy rather than a global switch.
+
+  Second finding, equally counterintuitive: default to one-hop PRE-EXPANSION rather than giving
+  the model a follow-link tool. Small models measurably over-rely on whatever was retrieved first
+  rather than retrieving again — they do not ask. A design whose correctness depends on a 7B
+  choosing to call a tool fails quietly.
 ### Wanted, not yet designed
 
 - **Broader automated tests.** The repo now has offline suites (`npm test`, tests/suites/, run on
