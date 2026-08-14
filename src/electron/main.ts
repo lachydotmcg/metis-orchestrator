@@ -11153,6 +11153,9 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // conversation and already has its own thread. Storing it either way would
     // put a copy of every turn in the loop record for no reader.
     artifact: positionNow ? captureArtifact(assistantText) : undefined,
+    // Which step produced it, so a later step can tell the draft from the
+    // critique rather than guessing at three unlabelled blobs.
+    step: positionNow?.kind === "single" ? positionNow.text : undefined,
     evidence: turnEvidence.length ? turnEvidence : undefined
   };
 

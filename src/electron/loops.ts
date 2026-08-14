@@ -194,6 +194,11 @@ export interface LoopIterationRecord {
    *  large. A chain whose steps cannot hand each other work is just a list of
    *  unrelated prompts sharing a timer. */
   artifact?: string;
+  /** Which chain step this turn ran, when the loop has one. Stored so an
+   *  artifact can be ATTRIBUTED: a synthesise step handed three unlabelled
+   *  blobs has to guess which is the draft and which is the critique, and
+   *  guessing is what carrying them forward was meant to stop. */
+  step?: string;
 }
 
 export interface LoopRecord {
@@ -671,9 +676,16 @@ export function composeWakePrompt(loop: LoopRecord): string {
   // text alone), never on this string, so a draft full of code cannot turn
   // "review it" into a build. Only for a chain — a plain goal loop already
   // carries its own thread in one conversation and has nothing to hand across.
-  const artifact = step ? latestArtifact(loop) : "";
-  if (artifact) {
-    lines.push("(What the previous step produced, to work from:", artifact, ")", "");
+  // Earlier steps' output, oldest first. Only on a chain: a plain goal loop
+  // keeps one conversation and already has its own thread to read.
+  const artifacts = step ? artifactsForWakePrompt(loop) : [];
+  if (artifacts.length) {
+    lines.push(artifacts.length > 1 ? "(What earlier steps produced, oldest first, to work from:" : "(What the previous step produced, to work from:");
+    for (const item of artifacts) {
+      if (item.step) lines.push(`--- from "${item.step}" ---`);
+      lines.push(item.text);
+    }
+    lines.push(")", "");
   }
 
   // What the last turn's commands and checks actually PROVED. Sits below the
@@ -735,6 +747,50 @@ export function latestArtifact(loop: LoopRecord): string {
     if (candidate) return candidate;
   }
   return "";
+}
+
+/** How many earlier steps' outputs a turn can see, and the total they may
+ *  occupy. Both bounds matter for different reasons: the count keeps the prompt
+ *  readable, and the budget keeps a chain of long artifacts from growing its own
+ *  prompt every cycle until --budget stops the loop. */
+export const LOOP_ARTIFACT_HISTORY = 3;
+export const LOOP_ARTIFACT_TOTAL_BUDGET = 6000;
+
+/** The earlier steps' outputs a turn should be able to work from.
+ *
+ *  One hop was wrong for the shape chains are actually written in. A
+ *  `plan -> draft -> review -> synthesise` chain has a final step whose whole
+ *  job is to combine things, and it could only see the review — not the draft
+ *  being reviewed. Two steps that both produced work handed only the later one
+ *  forward, so the earlier was silently discarded.
+ *
+ *  Newest-first while selecting, because the most recent output is the most
+ *  likely to matter and should survive the budget; oldest-first when returned,
+ *  because a synthesise step reading them chronologically is reading the story
+ *  in order.
+ *
+ *  Labelled by the step that produced each one. Without labels a synthesise
+ *  step gets three unattributed blobs and has to guess which is the draft and
+ *  which is the critique, which is exactly the guessing this exists to stop. */
+export function artifactsForWakePrompt(
+  loop: LoopRecord,
+  maxCount = LOOP_ARTIFACT_HISTORY,
+  maxTotal = LOOP_ARTIFACT_TOTAL_BUDGET
+): Array<{ step?: string; text: string }> {
+  const picked: Array<{ step?: string; text: string }> = [];
+  let spent = 0;
+  for (let i = loop.history.length - 1; i >= 0 && picked.length < maxCount; i -= 1) {
+    const entry = loop.history[i];
+    const text = entry?.artifact;
+    if (!text) continue;
+    // A partial artifact would be a lie about what the earlier step produced,
+    // so an over-budget one is skipped whole rather than truncated. Keep
+    // scanning: an older, shorter artifact may still fit.
+    if (spent + text.length > maxTotal) continue;
+    spent += text.length;
+    picked.push({ step: entry.step, text });
+  }
+  return picked.reverse();
 }
 
 /** Which helpers a wake prompt should show.

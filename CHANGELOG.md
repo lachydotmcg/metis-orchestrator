@@ -14,6 +14,24 @@ engine referenced below.
 
 ### Added (2026-08-06)
 
+- **A chain step can see more than one hop back.** Up to three earlier
+  steps' outputs, oldest first, each labelled with the step that produced
+  it, within a 6000-character total budget.
+
+  One hop was wrong for the shape chains are actually written in.
+  `plan -> draft -> review -> synthesise` has a final step whose entire job
+  is combining, and it could see only the review — never the draft that
+  review was of. Two steps that both produced work handed only the later
+  one forward and the earlier was silently discarded.
+
+  Labels matter as much as the count: three unattributed blobs leave a
+  synthesise step guessing which is the draft and which is the critique,
+  which is the guessing carrying them forward was meant to stop. Newest
+  survives the budget, because the most recent output is the most likely to
+  matter; oldest renders first, because reading them in order is reading
+  the story in order. An over-budget artifact is skipped whole rather than
+  truncated — half an artifact misrepresents what the step produced.
+
 - **A loop that needs you stops and tells you, instead of being silently
   overruled.** The third face of the feedback channel. A tick used to run
   with no stream at all, which meant `promptForPermission` returned

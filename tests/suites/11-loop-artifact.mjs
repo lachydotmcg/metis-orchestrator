@@ -17,7 +17,7 @@
 
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
-const { captureArtifact, latestArtifact, helpersForWakePrompt, summariseTurn, composeWakePrompt, LOOP_ARTIFACT_LIMIT, evidenceFromOperations, trimToTail, extractLoopDecision, LOOP_EVIDENCE_MAX } =
+const { captureArtifact, latestArtifact, helpersForWakePrompt, summariseTurn, composeWakePrompt, LOOP_ARTIFACT_LIMIT, evidenceFromOperations, trimToTail, extractLoopDecision, LOOP_EVIDENCE_MAX, artifactsForWakePrompt, LOOP_ARTIFACT_HISTORY, LOOP_ARTIFACT_TOTAL_BUDGET } =
   await fromBuild("electron/loops.js");
 
 const CODE_REPLY = 'Here is the draft.\n\n```js\nfunction add(a, b) {\n  return a + b;\n}\n```\n\nLet me know.';
@@ -207,6 +207,49 @@ section('The third verdict: "blocked" is a stop that does not claim success');
 }
 // The governing rule is unchanged: anything unrecognised still stops the loop.
 check("an invented verdict is still refused", extractLoopDecision('```metis-loop\n{"decision":"maybe"}\n```'), null);
+
+
+section("Artifacts reach further back than one hop");
+{
+  // The failure this fixes: plan -> draft -> review -> synthesise, where the
+  // final step whose whole job is combining could see only the review, never
+  // the draft it was a review OF.
+  const chain = { history: [
+    { index: 1, at: "t1", summary: "s", decision: "continue", artifact: "THE-PLAN", step: "plan" },
+    { index: 2, at: "t2", summary: "s", decision: "continue", artifact: "THE-DRAFT", step: "draft" },
+    { index: 3, at: "t3", summary: "s", decision: "continue", artifact: "THE-REVIEW", step: "review" }
+  ] };
+  const picked = artifactsForWakePrompt(chain);
+  check("three hops are carried", picked.length, 3);
+  // Oldest first: a synthesise step reading them in order is reading the story
+  // in order.
+  check("oldest first", picked.map((p) => p.text), ["THE-PLAN", "THE-DRAFT", "THE-REVIEW"]);
+  check("each is attributed", picked.map((p) => p.step), ["plan", "draft", "review"]);
+}
+
+section("Bounded by count and by total size");
+{
+  const many = { history: Array.from({ length: 10 }, (_, i) => ({ index: i, at: "t", summary: "s", decision: "continue", artifact: "a" + i, step: "step" + i })) };
+  check("count is capped", artifactsForWakePrompt(many).length, LOOP_ARTIFACT_HISTORY);
+  // Newest survives the cap, because the most recent output is the most likely
+  // to matter.
+  ok("the newest is kept", artifactsForWakePrompt(many).some((p) => p.text === "a9"));
+  ok("the oldest is dropped", !artifactsForWakePrompt(many).some((p) => p.text === "a0"));
+}
+{
+  const huge = "x".repeat(LOOP_ARTIFACT_TOTAL_BUDGET);
+  const overBudget = { history: [
+    { index: 1, at: "t", summary: "s", decision: "continue", artifact: "SMALL-OLD", step: "a" },
+    { index: 2, at: "t", summary: "s", decision: "continue", artifact: huge, step: "b" }
+  ] };
+  const picked = artifactsForWakePrompt(overBudget);
+  // An over-budget artifact is skipped WHOLE rather than truncated: half an
+  // artifact is a lie about what the earlier step produced. Scanning continues,
+  // so a smaller older one still fits.
+  ok("the huge one fits alone", picked.some((p) => p.text === huge));
+  ok("and the small one is skipped for budget", !picked.some((p) => p.text === "SMALL-OLD"));
+}
+check("no history", artifactsForWakePrompt({ history: [] }), []);
 
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);

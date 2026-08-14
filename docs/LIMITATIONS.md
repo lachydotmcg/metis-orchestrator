@@ -20,10 +20,15 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 - ~~**The helper digest is not scoped to the group that produced it.**~~ Fixed 2026-07-25: helpers
   launched as group members carry the group's `startedAt`, and the wake prompt shows the newest
   group whole plus any ungrouped helpers, rather than a flat lifetime tail.
-- **An artifact is one hop, and only the last one.** A step sees what the step before it produced,
-  not everything the chain has made. A synthesise step at the end of a long chain cannot reach
-  back past its immediate predecessor, and two steps that both produce work hand only the later
-  one forward.
+- ~~**An artifact is one hop, and only the last one.**~~ Fixed 2026-08-06: a turn now sees up to
+  three earlier steps' outputs, oldest first and each labelled with the step that produced it,
+  within a 6000-character total budget. One hop was wrong for the shape chains are written in:
+  `plan -> draft -> review -> synthesise` has a final step whose whole job is combining, and it
+  could see only the review, never the draft it was a review of. An over-budget artifact is skipped
+  whole rather than truncated, because half an artifact misrepresents what the step produced.
+  **Still bounded, on purpose:** three hops, not the whole chain. A step cannot ask for a specific
+  earlier step's output — that needs grammar, and the count is the cheap version that covers the
+  shape people actually write.
 - **A step chain is a ring with no branches.** `stepIndex` only ever advances `(i + 1) % len`, so
   there is no conditional edge, no jump to an earlier step, and no terminal step. A chain cannot
   express "if this fails, go back and try again", and the only verdict the model gets to steer with
