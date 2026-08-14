@@ -39,6 +39,66 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
   visible surface that is not the hidden Routines view.
 - **Un-hiding Gallery and Graph View** (both built, `HIDDEN`).
 
+### From the first real use of v1.2.0 (Lachy, 2026-08-14)
+
+He ran the app and used the features rather than reading about them. Everything
+below came out of that, in his priority order.
+
+- **Flowchart loops v2** — full graphs, variables, and describing a loop in English
+  rather than learning a grammar. Designed in [`docs/FLOWCHART_LOOPS_V2.md`](FLOWCHART_LOOPS_V2.md).
+  His words: *"I wanted to be able to design full on flowcharts like what I sent
+  you, advanced ones with variables too, and even be able to ask the ai to do it
+  for me by just telling it the kind of loop I want."* Three asks, buildable in
+  three pieces; the first (named variables plus one conditional gate) is the one
+  that makes the rest composable.
+
+- **A running loop is invisible in the chat it came from.** This is the sharpest
+  of the lot and it is a product bug rather than a missing feature. He started a
+  loop from the composer, and the loop then ran with no trace in the conversation
+  — it exists in Settings > Privacy & Data, in the tray, and on the phone page,
+  but not where he started it. He expected: *"it should be like I'm chatting with
+  the model each time it's activated, except it's essentially working without a
+  prompt."*
+
+  That is the right model and the current design fights it. A loop turn IS a
+  conversation turn — it runs through `runSessionTracked`, produces a
+  `SessionRun`, and appends to a conversation. It just appends to the loop's OWN
+  conversation, invisible unless you go looking. Options, cheapest first: append
+  loop turns to the conversation the loop was started from, marked as
+  loop-authored so they read as "Metis working" rather than as replies; or keep
+  the separate conversation but surface a live card in the originating thread
+  that expands into it. The first is closer to what he described. Either way the
+  composer's confirmation message ("watch or stop it in Settings > Privacy &
+  Data") stops being the only breadcrumb.
+
+- **Pairing the phone is two pieces of string, and should be one.** Today you
+  copy a token out of Settings and construct
+  `http://127.0.0.1:11500/?token=<token>` by hand. His note: *"you're giving me
+  the access token and the localhost as separate pieces?"* Correct — it should be
+  one scannable thing. A QR code in Settings encoding the whole URL, which is
+  also the point at which a per-device token with its own revoke becomes worth
+  building (see the pairing note in LIMITATIONS). Add a copy-the-link button for
+  the case where the phone is not to hand.
+
+- **The phone surface shows loops and nothing else.** *"Why not replicate Metis
+  through there completely as it is as an application?"* The honest answer is
+  scope rather than principle: watch-and-stop needed three routes wrapping
+  functions that already shipped, and everything else needs new ones. Reaching
+  full parity means the ~13 IPC handlers a phone client needs, an event fan-out
+  hub with replay so a late-connecting phone catches up, and a pending-prompt
+  registry so a question can be answered remotely — which is a permission grant
+  made over a network, and a decision rather than a refactor. Worth writing up as
+  its own staged plan before any of it is built. Note the desktop renderer cannot
+  be reused: `App.tsx` is ~18k lines with one export and 284 direct calls to the
+  Electron preload bridge across 29 namespaces.
+
+- **Composer hints belong inside the prompt box, not above it.** *"The
+  recommendations for when you're using /loop or whatever should be inside the
+  prompt box not above it."* This is the same correction he made about
+  suggestions earlier in the project's life, which is a sign the rule is general:
+  guidance about what you are typing belongs where you are typing, as ghost text,
+  not as a strip that pushes the composer around.
+
 ### Wanted, not yet designed
 
 - **Broader automated tests.** The repo now has offline suites (`npm test`, tests/suites/, run on

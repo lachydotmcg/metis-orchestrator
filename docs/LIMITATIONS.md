@@ -190,6 +190,19 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
   into the store, the conversation-store race, the SVG render gate, and the honesty of this
   documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+- **An SVG only renders when the model labels the fence `svg`.** Found in first live use,
+  2026-08-14: Qwen3 8B answered a chart request with a correct, complete SVG inside a ` ```xml `
+  fence, and it printed as code. `MARKDOWN_COMPONENTS` tests `fenceLanguage(children) === "svg"`
+  and nothing else, so the gate never ran. The markup passes `isRenderableSvg` — only the label was
+  different.
+
+  This is the worst shape of bug for this app specifically. Ask Claude and you get ` ```svg ` and
+  it works; ask a local 7B and you get ` ```xml ` and it does not — so the feature appears to work
+  and silently depends on which model answered, in a product whose whole argument is that you route
+  across models. The fix is to gate on CONTENT, not on the label: try `isRenderableSvg` whenever the
+  fence language is `svg`, `xml`, `html` or absent. The completeness gate is already the real
+  safety check, and it was doing nothing here because the label filtered the block out before it
+  was consulted.
 - **Nothing in the artifact path is verified in a running app.** The SVG gate and the generated-image
   contract are pinned offline, and the renderer wiring is typechecked, but no recorded run shows a
   chart actually drawn in a bubble. It is `SHIPPED`, not `VERIFIED`, and for the usual reason: the
