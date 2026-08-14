@@ -25,6 +25,7 @@
  */
 
 import { formatStepChain, type LoopStepPosition } from "../shared/loop-command.js";
+import { findBlock } from "../shared/model-blocks.js";
 
 /** Hard ceiling on iterations, even if a caller asks for more. A loop that
  *  needs 50 turns is a loop that has misunderstood its goal. */
@@ -251,13 +252,14 @@ export function loopDecisionPromptBlock(): string {
 /** Parses the trailing ```metis-loop block. Returns null for anything it is
  *  not certain about, which the caller treats as stop. Never throws. */
 export function extractLoopDecision(text: string): LoopDecision | null {
-  if (typeof text !== "string" || !text.includes("metis-loop")) return null;
   try {
     // Last block wins: a model that reasons out loud may show an example
-    // earlier in its reply, and the decision is the one it ends on.
-    const matches = [...text.matchAll(/```metis-loop\s*([\s\S]*?)```/g)];
-    if (!matches.length) return null;
-    const raw = matches[matches.length - 1][1].trim();
+    // earlier in its reply, and the decision is the one it ends on. That
+    // policy is declared on the registry entry rather than encoded in a regex
+    // here, so it is findable next to the other block types.
+    const found = findBlock(text, "metis-loop");
+    if (!found) return null;
+    const raw = found.payload;
     if (!raw) return null;
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;

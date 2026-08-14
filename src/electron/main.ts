@@ -85,6 +85,7 @@ import type {
   UserProfile,
   GatewayStatus
 } from "../shared/runtime-contracts.js";
+import { findBlock, stripBlock } from "../shared/model-blocks.js";
 import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
@@ -8629,14 +8630,16 @@ function validateManagerAction(candidate: unknown): ManagerAction | null {
  *  block just yields the reply untouched and `actions: undefined`. */
 function extractManagerActions(reply: string): { reply: string; actions?: ManagerAction[] } {
   try {
-    const match = reply.match(/```metis-actions\s*([\s\S]*?)```\s*$/);
-    if (!match) return { reply };
-    const jsonText = match[1].trim();
-    const parsed = JSON.parse(jsonText);
+    // "trailing" selection and strip:true are declared on the registry entry,
+    // not encoded here — the two policies that made this parser differ from
+    // the metis-loop one are now visible side by side instead of only being
+    // discoverable by reading both regexes.
+    const found = findBlock(reply, "metis-actions");
+    if (!found) return { reply };
+    const parsed = JSON.parse(found.payload);
     if (!Array.isArray(parsed)) return { reply };
     const actions = parsed.map(validateManagerAction).filter((action): action is ManagerAction => action !== null);
-    const stripped = reply.slice(0, match.index).trimEnd();
-    return { reply: stripped, actions: actions.length ? actions : undefined };
+    return { reply: stripBlock(reply, "metis-actions"), actions: actions.length ? actions : undefined };
   } catch {
     return { reply };
   }

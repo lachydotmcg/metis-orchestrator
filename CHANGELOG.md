@@ -12,6 +12,40 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Changed (2026-08-06)
+
+- **The fenced blocks a model may emit are declared in one place.** Four
+  parsers had grown independently around the same shape — match a fence,
+  parse the payload, validate it, turn it into something that is not prose
+  — and each had picked its own selection and stripping policy along the
+  way. Those differences are load-bearing: `metis-loop` takes the LAST
+  block because a model reasoning out loud may show an example first, and
+  `metis-actions` is anchored to the END of the reply and removed from the
+  visible text. Neither is arbitrary and neither was findable without
+  reading both regexes.
+
+  `src/shared/model-blocks.ts` now declares each type's tag, selection,
+  whether it is stripped, and — the field that is the point of the
+  exercise — its **render boundary**: what the block is allowed to become.
+  SVG becomes an `<img>` data URL, which cannot execute script whatever
+  the markup contains. HTML would need the iframe and origin work that is
+  not built. Making that a required field means the next block type cannot
+  be added without someone deciding.
+
+  Fences, never XML: Claude.ai can use `<antArtifact>` because one model is
+  trained to emit it, whereas Metis routes across seven providers and
+  Ollama and its own argument is that trivial work stays on a local 7B —
+  which will not reliably emit well-formed XML but will emit a fenced
+  block. `extractManagerActions` had already chosen a fence for that
+  reason.
+
+  Behaviour is unchanged, and that was verified rather than asserted: the
+  suites that already covered the two migrated parsers passed without a
+  single edit. `extractGeneratedFilesFromText` is deliberately NOT
+  migrated — it matches every fence regardless of tag and infers filenames,
+  which is a file extractor rather than a block protocol, and forcing it
+  onto the registry would have made both worse.
+
 ### Added (2026-08-05)
 
 - **Watch and stop your loops from a phone.** The gateway gained
