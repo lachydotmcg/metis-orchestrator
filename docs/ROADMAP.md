@@ -103,9 +103,55 @@ hidden is marked, because "un-hide it" and "build it" are very different amounts
   is a bigger gap than the missing conditional edges — an unverified loop with branches just
   reaches the wrong step faster. It also overlaps the gate idea in the flowchart research: a gate
   needs a verdict, and a command's exit code is a far better verdict than a model's opinion of its
-  own output. Pieces that already exist: the conservative command runner, `AgentOperation` records
-  with status, and the decision block's parser. What is missing is a channel from an operation's
-  outcome into the next turn's prompt, and a rule for which operations count.
+  own output.
+
+  **Design note, 2026-08-06.** Written before implementing, because the shape of this decides
+  whether unattended runs are trustworthy, and because reading the code changed what the fix is.
+
+  *The evidence is not missing. It is collected and then thrown away.* `AgentOperation` already
+  carries `status` (`complete` / `warning` / `error`), `exitCode`, `command`, `stdout`, `stderr`
+  and `consoleErrors`, and every command a run executes produces one. `runSessionTracked` returns
+  them on the `SessionRun`. `fireLoopTickInner` reads `run.assistantText` and
+  `run.providerResult` from that same object and never looks at `run.operations`. So this is not a
+  new subsystem: it is a field that already exists failing to reach a prompt that already exists.
+
+  **Three faces, one channel.** Each was found separately and they are the same hole:
+
+  1. *A loop cannot verify.* Evidence exists on the record and is discarded, per above.
+  2. *A loop cannot ask.* Loop ticks call `runSessionTracked` with no stream, so
+     `promptForPermission` returns `"deny"` and `promptUserQuestion` auto-answers the first option.
+     A loop that needs a human is silently overruled rather than parked.
+  3. *A loop cannot decline to act.* The decision layer asks continue-or-stop. There is no verdict
+     for "I could not check this, so I am not going to guess", which is precisely the judgement an
+     unattended run most needs. An agent that cannot distinguish *done* from *unverifiable* will
+     always choose done.
+
+  **The design.**
+
+  *Evidence into the next turn.* Extend `LoopIterationRecord` with an `evidence` array derived
+  from `run.operations`: kind, label, status, exit code, and a short tail of stderr when the status
+  is not `complete`. Rendered into `composeWakePrompt` under its own heading, below the artifact
+  and above the protocol block. The rule for what counts is deliberately narrow: **operations with
+  an exit code**, plus browser checks that captured console errors. A file write is not evidence —
+  it says something happened, not that it worked. Cap the stderr tail hard; the failing lines are
+  at the end, so trim from the front, which is the opposite of the artifact's middle-trim and for
+  the same reason (keep the part that carries the signal).
+
+  *A third verdict.* The decision block gains `blocked`, alongside `continue` and `stop`. It
+  settles the loop at a new `blocked` status with a reason, rather than stopping (which reads as
+  success) or continuing (which burns turns on a wall). This is the smallest change that makes
+  face 3 expressible, and it composes with the flowchart gate idea: a gate needs a verdict, and
+  now there are three.
+
+  *Asking is a separate, later phase.* It needs a stream threaded into loop ticks, plus a pending
+  prompt registry — today `pendingPermissionPrompts` and `pendingUserQuestions` store only the
+  resolver callback, never the request, so nothing can enumerate what is being asked. Note the
+  surface now exists: the phone page added 2026-08-05 already polls loop state, and a pending
+  question is the same shape as a Stop button. Do faces 1 and 3 first; they need no new plumbing.
+
+  **What this deliberately does not do.** It does not let a loop decide which commands to run —
+  that is the run-command tool, still last on this roadmap for the same reason. Evidence is read
+  from operations the existing conservative runner already produced.
 - **Learned routing.** Metis already keeps a private local log of how you actually use it. Nothing
   reads it back into a routing decision yet, and doing so without making routing unpredictable is
   the hard part.
