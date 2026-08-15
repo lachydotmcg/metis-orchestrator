@@ -106,12 +106,24 @@ below came out of that, in his priority order.
   be reused: `App.tsx` is ~18k lines with one export and 284 direct calls to the
   Electron preload bridge across 29 namespaces.
 
-- **Composer hints belong inside the prompt box, not above it.** *"The
-  recommendations for when you're using /loop or whatever should be inside the
-  prompt box not above it."* This is the same correction he made about
-  suggestions earlier in the project's life, which is a sign the rule is general:
-  guidance about what you are typing belongs where you are typing, as ghost text,
-  not as a strip that pushes the composer around.
+- ~~**Composer hints belong inside the prompt box, not above it.**~~ **Fixed
+  2026-08-15.** *"The recommendations for when you're using /loop or whatever
+  should be inside the prompt box not above it."* This was the same correction
+  he made about suggestions earlier in the project's life, which is a sign the
+  rule is general: guidance about what you are typing belongs where you are
+  typing, not in a strip that pushes the composer around.
+
+  The `/loop` breakdown now sits along the bottom of the input itself, with the
+  textarea padded to clear it, so what you type flows above an annotation
+  instead of under a banner. What actually made it read as a separate element
+  was not its position in the DOM — it was already inside `.composer-box` — but
+  its own accent fill and border. Those are gone; the only separation left is a
+  hairline rule, and it does not take clicks, because it is annotation rather
+  than a control.
+
+  Not literal inline ghost text continuing the sentence: that needs a mirrored
+  measurer to know where the caret is, and this hint is five labelled segments
+  rather than one completion. Bottom-of-the-box is where five segments fit.
 
 - **Memory and links, for a small-model reader** — designed in
   [`docs/MEMORY_AND_LINKS.md`](MEMORY_AND_LINKS.md). Lachy asked for memory optimised for

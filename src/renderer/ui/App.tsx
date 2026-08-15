@@ -5900,29 +5900,6 @@ function SessionComposer({
       {showOrchestrationChip ? (
         <span className="composer-suggestion-chip composer-orchestration-chip">Build pipeline will run</span>
       ) : null}
-      {loopCommand.isLoopCommand ? (
-        <div className="composer-loop-hint" role="status">
-          {chainDrafting ? (
-            <span className="composer-loop-lede">
-              <Loader2 size={11} className="spin" /> Asking a model to draft the chain — it lands here for review
-            </span>
-          ) : attachmentNotice ? (
-            <span className="composer-loop-error">{attachmentNotice}</span>
-          ) : loopCommand.error ? (
-            <span className="composer-loop-error">{loopCommand.error}</span>
-          ) : (
-            <>
-              <span className="composer-loop-lede">Runs on its own until it decides to stop</span>
-              {loopHint.map((segment) => (
-                <span key={segment.meaning} className={segment.typed ? "composer-loop-seg typed" : "composer-loop-seg"}>
-                  <b>{segment.label}</b>
-                  <i>{segment.meaning}</i>
-                </span>
-              ))}
-            </>
-          )}
-        </div>
-      ) : null}
       {slashExportBusy || (slashExportResult && !slashExportResult.cancelled) ? (
         <div className="composer-slash-note" role="status">
           {slashExportBusy ? (
@@ -5949,7 +5926,13 @@ function SessionComposer({
           ))}
         </div>
       ) : null}
-      <div className="composer-input-wrap">
+      {/* The /loop hint lives INSIDE the input, not in a bordered strip above
+          it (Lachy, from the first real use of v1.2.0: "the recommendations for
+          when you're using /loop or whatever should be inside the prompt box
+          not above it"). It sits along the bottom of the input area with the
+          textarea padded to clear it, so what you type flows above an
+          annotation rather than under a banner. */}
+      <div className={loopCommand.isLoopCommand ? "composer-input-wrap has-loop-hint" : "composer-input-wrap"}>
         <textarea
           value={prompt}
           rows={3}
@@ -5992,6 +5975,29 @@ function SessionComposer({
             }
           }}
         />
+        {loopCommand.isLoopCommand ? (
+          <div className="composer-loop-hint" role="status">
+            {chainDrafting ? (
+              <span className="composer-loop-lede">
+                <Loader2 size={11} className="spin" /> Asking a model to draft the chain — it lands here for review
+              </span>
+            ) : attachmentNotice ? (
+              <span className="composer-loop-error">{attachmentNotice}</span>
+            ) : loopCommand.error ? (
+              <span className="composer-loop-error">{loopCommand.error}</span>
+            ) : (
+              <>
+                <span className="composer-loop-lede">Runs on its own until it decides to stop</span>
+                {loopHint.map((segment) => (
+                  <span key={segment.meaning} className={segment.typed ? "composer-loop-seg typed" : "composer-loop-seg"}>
+                    <b>{segment.label}</b>
+                    <i>{segment.meaning}</i>
+                  </span>
+                ))}
+              </>
+            )}
+          </div>
+        ) : null}
         {templatePopoverVisible ? (
           <>
             <div className="resource-backdrop" onClick={() => setTemplateDismissed(true)} />

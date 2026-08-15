@@ -261,6 +261,39 @@ section("The changelog has not fallen behind the code");
   }
 }
 
+section("The /loop hint is inside the input, not stacked above it");
+{
+  // A claim FEATURES.md and the changelog both make, and one nothing else can
+  // check: the offline suites have no DOM, and the browser preview cannot reach
+  // the composer because navigation is gated behind the benchmark wizard.
+  //
+  // So the invariant is enforced on the source, the same way 14 enforces the
+  // conversation lock. It came from real use — "the recommendations for when
+  // you're using /loop or whatever should be inside the prompt box not above
+  // it" — and it is exactly the kind of thing a later refactor moves back out
+  // by accident, because a sibling above the textarea is where a hint reads as
+  // natural to write.
+  const app = read("src/renderer/ui/App.tsx");
+  const wrap = app.indexOf('className={loopCommand.isLoopCommand ? "composer-input-wrap has-loop-hint"');
+  const hint = app.indexOf('<div className="composer-loop-hint"');
+  const textarea = app.indexOf("<textarea", wrap);
+  ok("the input wrap flags the hint", wrap !== -1);
+  ok("the hint renders after the wrap opens", hint > wrap);
+  ok("and after the textarea, so it sits below what you type", hint > textarea);
+
+  const css = read("src/renderer/styles.css");
+  const ruleStart = css.indexOf(".composer-loop-hint {");
+  const rule = css.slice(ruleStart, css.indexOf("}", ruleStart));
+  ok("it is positioned inside the input", /position:\s*absolute/.test(rule) && /bottom:\s*0/.test(rule));
+  // A fill and a full border are what made it read as a separate banner
+  // sitting on the composer rather than as the input annotating itself. A
+  // hairline `border-top` is allowed and is the whole separation it gets.
+  ok("with no fill and no full border of its own", !/^\s*(background|border):/m.test(rule));
+  // Clicks belong to the textarea underneath — it is annotation, not a control.
+  ok("and it does not swallow clicks", /pointer-events:\s*none/.test(rule));
+  ok("the textarea is padded to clear it", /\.composer-input-wrap\.has-loop-hint textarea\s*\{[^}]*padding-bottom/.test(css));
+}
+
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

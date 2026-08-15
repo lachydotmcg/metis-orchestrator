@@ -14606,17 +14606,36 @@ a:focus-visible,
    segment by segment, and re-renders every keystroke. Typed segments read
    bright, applied defaults read muted, so you can see at a glance which parts
    you have actually set and which are just what happens if you say nothing. --- */
+/* The /loop hint, INSIDE the input rather than in a bordered strip above it
+   (Lachy: "the recommendations ... should be inside the prompt box not above
+   it"). Absolutely positioned along the bottom of .composer-input-wrap, with
+   the textarea padded to clear it.
+
+   No border and no fill on purpose. Its own box was what made it read as a
+   separate banner stacked on the composer; what it should read as is the
+   input annotating itself, so the only separation is a hairline rule and the
+   type is quieter than what you are writing. Right inset clears the send
+   button, which the composer box parks at bottom: 10px. */
 .composer-loop-hint {
+  position: absolute;
+  right: 52px;
+  bottom: 0;
+  left: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 6px 10px;
-  margin: 0 0 8px;
-  padding: 8px 10px;
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
-  border-radius: 9px;
+  gap: 4px 10px;
+  padding: 6px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
   font-size: 11.5px;
+  /* Clicks belong to the textarea underneath: this is annotation, not a
+     control, and swallowing a click here would put the caret nowhere. */
+  pointer-events: none;
+}
+
+/* Only while the hint is showing, so an ordinary prompt keeps the full box. */
+.composer-input-wrap.has-loop-hint textarea {
+  padding-bottom: 30px;
 }
 .composer-loop-lede {
   color: var(--accent);

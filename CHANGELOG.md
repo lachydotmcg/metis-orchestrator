@@ -14,6 +14,23 @@ engine referenced below.
 
 ### Changed (2026-08-15)
 
+- **The `/loop` hint is inside the prompt box now, not stacked on top of it.**
+  *"The recommendations for when you're using /loop or whatever should be
+  inside the prompt box not above it."* It sits along the bottom of the input,
+  with the textarea padded to clear it, so what you type flows above an
+  annotation rather than under a banner.
+
+  The interesting part is that its DOM position was never the problem — it was
+  already inside the composer box. What made it read as a separate element
+  stacked on the composer was that it had its own accent fill and its own
+  border. Those are gone. The only separation left is a hairline rule, and it
+  no longer takes clicks, because it is annotation rather than a control and
+  swallowing a click there would put the caret nowhere.
+
+  Not literal inline ghost text continuing your sentence: that needs a mirrored
+  measurer to find the caret, and this hint is five labelled segments rather
+  than one completion.
+
 - **The knowledge bank now gives each model as much as it can actually use.**
   Retrieval used to hand every reader the same four chunks. It is now an amount
   chosen from the model about to read it: one chunk over a much stricter match
