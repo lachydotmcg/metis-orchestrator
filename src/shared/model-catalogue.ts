@@ -156,6 +156,30 @@ export function costLabel(
   return cost >= 0.01 ? `${prefix}$${cost.toFixed(2)}` : `${prefix}<$0.01`;
 }
 
+/** Which picker brand a locally-installed Ollama tag belongs under.
+ *
+ *  Every Ollama entry used to land on the Qwen brand, because that was the
+ *  picker's only local bucket. That is right for `qwen3:8b` and simply wrong
+ *  for `llama3.1:8b`, which is not a Qwen model in any sense — and with the
+ *  live catalogue fetching whatever the user actually has pulled
+ *  (fetchLiveCatalogModels), the wrong half of that mapping stopped being
+ *  hypothetical.
+ *
+ *  Vendor-branded tags keep their vendor. Everything else gets the generic
+ *  local brand, which is never wrong — the alternative is inventing a brand per
+ *  vendor and mislabelling whatever the list misses.
+ *
+ *  Matched on the tag PREFIX before the colon, so `qwen3-coder:30b` and
+ *  `qwen2.5:7b` both read as Qwen while a model merely mentioning a vendor
+ *  later in its name does not. */
+export function localBrandForTag(tag: string): "qwen" | "glm" | "deepseek" | "ollama" {
+  const name = (typeof tag === "string" ? tag : "").trim().toLowerCase().split(":")[0];
+  if (name.startsWith("qwen") || name.startsWith("qwq")) return "qwen";
+  if (name.startsWith("glm") || name.startsWith("chatglm")) return "glm";
+  if (name.startsWith("deepseek")) return "deepseek";
+  return "ollama";
+}
+
 /** The providers a live fetch can populate, so callers do not guess. */
 export const LIVE_CATALOG_SOURCES: ReadonlyArray<{ provider: ProviderKey; url: string; needsAuth: boolean }> = [
   { provider: "openrouter", url: "https://openrouter.ai/api/v1/models", needsAuth: false },

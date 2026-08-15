@@ -165,7 +165,7 @@ import type { LoopRecord } from "../../electron/loops";
 // promise something different from what the command will actually do.
 import { describeLoopCommand, formatLoopDuration, formatStepChain, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
 import { fenceMayBeSvg, isRenderableSvg, svgDataUrl } from "../../shared/svg-artifact";
-import { costLabel, routePricing } from "../../shared/model-catalogue";
+import { costLabel, localBrandForTag, routePricing } from "../../shared/model-catalogue";
 import { DEFAULT_THINK_TOKEN_CEILING } from "../../shared/think-budget";
 import { RUNG_LEDGER_NOTE, rungLabel } from "../../shared/rung-ledger";
 import { RETRIEVAL_OVERRIDE_CHOICES, RETRIEVAL_OVERRIDE_DEFAULT, type RetrievalOverride } from "../../shared/retrieval-policy";
@@ -239,6 +239,12 @@ type ProviderId =
   | "grok"
   | "deepseek"
   | "glm"
+  // The generic local brand. Every other id here names a VENDOR, which left the
+  // models with no vendor of their own — Llama, Gemma, Phi, Mistral, Moondream,
+  // LLaVA and both embedding models — unable to be expressed as a ModelRef at
+  // all, and therefore unpickable, even though the Benchmark recommends and
+  // installs them (docs/MODEL_CATALOGUE.md, "an ollama brand key").
+  | "ollama"
   | "nvidia"
   | "groq"
   | "openrouter";
@@ -766,6 +772,11 @@ const PROVIDERS: Record<ProviderId, { label: string; logo: string; tier: "cloud"
   grok: { label: "Grok", logo: "assets/providers/grok.png", tier: "cloud" },
   deepseek: { label: "DeepSeek", logo: "assets/providers/deepseek.png", tier: "cloud" },
   glm: { label: "GLM", logo: "assets/providers/glm.png", tier: "local" },
+  // "Local" rather than "Ollama": the user picked these models, not a runtime,
+  // and the group holds models from six different vendors. Reuses the
+  // auto-router glyph for the same reason the gateway brands below do — there
+  // is no one logo for "whatever you have pulled".
+  ollama: { label: "Local", logo: "assets/providers/autorouter.png", tier: "local" },
   // No brand logo assets exist yet for these two free-tier pool providers
   // (docs/FABLE_PLANS.md §19) — reuse the auto-router glyph as a safe generic
   // fallback rather than a broken <img>.
@@ -792,6 +803,7 @@ const PROVIDER_CONNECTIONS: Record<ProviderId, ProviderKey> = {
   grok: "openrouter",
   deepseek: "deepseek",
   glm: "ollama",
+  ollama: "ollama",
   nvidia: "nvidia",
   groq: "groq",
   openrouter: "openrouter"
@@ -818,8 +830,12 @@ function latencyDotTone(ttftMs: number): "fast" | "medium" | "slow" {
 
 /** Maps the live registry's `catalog/models.json` provider naming (ProviderKey,
  *  e.g. "anthropic") onto the renderer's brand-style ids (e.g. "claude") used
- *  by the model picker. Ollama-tier catalog entries all land on "qwen" since
- *  that's the picker's default local brand bucket. */
+ *  by the model picker.
+ *
+ *  Ollama's fallback is the generic local brand. It used to be "qwen", the
+ *  picker's only local bucket at the time, which filed `llama3.1:8b` under a
+ *  vendor it has nothing to do with — see catalogBrandFor, which reads the tag
+ *  instead and only falls back to this table when there is no tag to read. */
 const CATALOG_PROVIDER_TO_BRAND: Record<ProviderKey, ProviderId> = {
   anthropic: "claude",
   openai: "openai",
@@ -828,8 +844,17 @@ const CATALOG_PROVIDER_TO_BRAND: Record<ProviderKey, ProviderId> = {
   openrouter: "grok",
   nvidia: "nvidia",
   groq: "groq",
-  ollama: "qwen"
+  ollama: "ollama"
 };
+
+/** The brand a catalog entry belongs under. Identical to
+ *  CATALOG_PROVIDER_TO_BRAND for every cloud provider; for Ollama it reads the
+ *  TAG, because "which local vendor is this" is a fact about the tag and not
+ *  about the runtime serving it. */
+function catalogBrandFor(provider: ProviderKey, id?: string): ProviderId {
+  if (provider === "ollama" && id) return localBrandForTag(id);
+  return CATALOG_PROVIDER_TO_BRAND[provider];
+}
 
 /** Same mapping but for displaying ROUTE providers (gateway pickers, the
  *  via-Provider suffix): an OpenRouter route must read "OpenRouter", not
@@ -893,7 +918,29 @@ const MODEL_LIBRARY: ModelRef[] = [
   { provider: "qwen", model: "Qwen3.7 Plus" },
   { provider: "qwen", model: "Qwen3 4B" },
   { provider: "glm", model: "GLM-5.2" },
-  { provider: "glm", model: "GLM-4.7" }
+  { provider: "glm", model: "GLM-4.7" },
+  // Local models with no vendor brand of their own. Every one of these already
+  // existed in LOCAL_MODELS with a real ollamaTag — the Benchmark recommends
+  // them and installs them on request — and none could be PICKED, because a
+  // ModelRef needs a ProviderId and there was no id that fit. A local-first app
+  // that installs a model for you and then will not let you choose it.
+  //
+  // Names must match LOCAL_MODELS exactly: localOllamaTagFor looks the tag up
+  // by name, and a library entry that resolves to no tag is worse than absent —
+  // depthStageRefFor returns null for it, so pinning it to a depth rung writes
+  // nothing and the level looks configured while doing nothing. Suite 25 pins
+  // that every local library entry resolves.
+  { provider: "ollama", model: "Llama 3.1 8B" },
+  { provider: "ollama", model: "Llama 4 Scout 109B MoE" },
+  { provider: "ollama", model: "Gemma 3 12B" },
+  { provider: "ollama", model: "Gemma 3 27B" },
+  { provider: "ollama", model: "Phi-4 14B" },
+  { provider: "ollama", model: "Phi-4 Mini 3.8B" },
+  { provider: "ollama", model: "Mistral Small 24B" },
+  { provider: "ollama", model: "Moondream 2" },
+  { provider: "ollama", model: "LLaVA 13B" },
+  { provider: "ollama", model: "Nomic Embed Text" },
+  { provider: "ollama", model: "MxBai Embed Large" }
 ];
 
 // Persisted via useAppStoreState("modelPresets", ...) — empty until Lachy
@@ -4019,7 +4066,7 @@ function NewSessionWorkspace({
 
   // Remote catalog entries mapped onto the picker's ModelRef shape and brand ids.
   const remoteModelRefs = useMemo(
-    () => remoteModelCatalog.map((entry): ModelRef => ({ provider: CATALOG_PROVIDER_TO_BRAND[entry.provider], model: entry.name })),
+    () => remoteModelCatalog.map((entry): ModelRef => ({ provider: catalogBrandFor(entry.provider, entry.id), model: entry.name })),
     [remoteModelCatalog]
   );
 

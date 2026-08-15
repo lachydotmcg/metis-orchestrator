@@ -194,6 +194,8 @@ At call time, the explicit preference list is tried first in exactly the order y
 
 NVIDIA NIM and Groq are both OpenAI-chat-schema-compatible, so they slot into the same call path with a different base URL. OpenRouter works the same way, which means an OpenRouter subscription you already pay for can carry the models you already have access to.
 
+The Library has a **Local** brand alongside the vendor ones, which is where models with no vendor of their own live — Llama, Gemma, Phi, Mistral, Moondream, LLaVA and the embedding models. Until 2026-08-16 they had no brand and therefore could not be picked at all, despite the Benchmark recommending and installing them: every brand id named a vendor, and these have none. A locally-pulled model is filed by reading its **tag**, so `qwen3:8b` shows under Qwen and `llama3.1:8b` shows under Local, rather than everything from Ollama landing under whichever vendor happened to be the app's only local bucket.
+
 **Honest limit:** the older Settings-level "default gateways" map is deprecated. Nothing in the renderer writes to it anymore. It survives only as a last-resort lookup for a value you may still have on disk from before the rework.
 </details>
 

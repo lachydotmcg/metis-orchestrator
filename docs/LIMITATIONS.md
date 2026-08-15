@@ -277,12 +277,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 24 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 25 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
   into the store, the conversation-store race, the SVG render gate, the live model-catalogue
-  mappers, the loop walkthrough, the think-token ceiling, the per-reader retrieval policy, the loop gate and named outputs, the loops push channel, the rung ledger, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+  mappers, the loop walkthrough, the think-token ceiling, the per-reader retrieval policy, the loop gate and named outputs, the loops push channel, the rung ledger, the local model brand, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
 - ~~**An SVG only renders when the model labels the fence `svg`.**~~ Fixed 2026-08-14. Found in
   first live use: Qwen3 8B answered a chart request with a correct, complete SVG inside an
   ```xml fence and it printed as code, because the renderer tested the LABEL and never reached

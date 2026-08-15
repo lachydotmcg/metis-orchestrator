@@ -161,13 +161,30 @@ both providers' current line-ups.
 
 ## Not adopted, and why
 
-- **An `ollama` brand key** for local models in the library. Worth doing —
-  GPT-OSS 20B, Qwen3.5 9B, Qwen3-Coder 30B and EmbeddingGemma all belong in a
-  local-first app's library — but the brand enum has no local key, and filing
-  them under `openai` would route them at `api.openai.com` where `gpt-oss-*`
-  does not support Chat Completions at all. That is a guaranteed failure, so the
-  brand change has to come first. Left as a deliberate follow-up rather than
-  smuggled into a catalogue refresh.
+- ~~**An `ollama` brand key** for local models in the library.~~ **Built
+  2026-08-16**, and the gap was larger than this entry described. It framed the
+  problem as four models that could not be *added* — GPT-OSS 20B, Qwen3.5 9B,
+  Qwen3-Coder 30B, EmbeddingGemma — with the enum as the blocker. The enum was
+  the blocker for something already shipping: **eleven models the Benchmark
+  recommends and installs in one click could not be picked**, because every
+  brand id named a vendor and Llama, Gemma, Phi, Mistral, Moondream, LLaVA and
+  both embedding models have no vendor of their own. They sat in `LOCAL_MODELS`
+  with real `ollamaTag`s, installable, and unusable from the composer.
+
+  The `ollama` brand is labelled **"Local"** rather than "Ollama", because the
+  group holds models from six vendors and the user picked a model, not a
+  runtime. Two follow-on fixes came with it: the live catalogue now brands an
+  Ollama entry by reading its **tag** (`localBrandForTag`) instead of filing
+  everything under Qwen, which was right for `qwen3:8b` and wrong for
+  `llama3.1:8b`; and suite 25 enforces that every local library entry resolves
+  to a real tag, because one that does not is worse than absent —
+  `depthStageRefFor` returns null for it, so pinning it to a depth rung writes
+  nothing and the level reads as configured.
+
+  **The four models this entry originally wanted are still not added.** A
+  `LOCAL_MODELS` row carries VRAM, quantisation and tokens-per-second, and
+  inventing those numbers to fill a table is the failure mode this whole
+  document exists to prevent. They need a hardware pass, not a brand.
 - **`claude-mythos-5`** — invitation-only. A user without access gets exactly
   the not-found failure this document exists to prevent.
 - **`gpt-5.3-codex`** — Responses API only, would 400 on Metis's

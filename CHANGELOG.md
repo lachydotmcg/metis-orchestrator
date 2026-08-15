@@ -70,6 +70,36 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **The models Metis installs for you can now be picked.** The Library gains a
+  **Local** brand, and eleven models move into it: Llama 3.1 8B, Llama 4 Scout,
+  Gemma 3 12B and 27B, Phi-4 and Phi-4 Mini, Mistral Small 24B, Moondream 2,
+  LLaVA 13B, Nomic Embed Text and MxBai Embed Large.
+
+  Every brand id in the picker named a *vendor* — qwen, claude, glm, deepseek —
+  so a model with no vendor of its own could not be expressed as a `ModelRef` at
+  all. All eleven were already in `LOCAL_MODELS` with real Ollama tags,
+  recommended by the Benchmark and installable in one click, and then unpickable
+  in the composer. A local-first app that installs a model for you and will not
+  let you choose it.
+
+  It is labelled **Local** rather than Ollama: the group holds models from six
+  vendors, and you picked a model, not a runtime.
+
+  Two fixes came with it. A locally-pulled model is now filed by reading its
+  **tag**, so `qwen3:8b` shows under Qwen and `llama3.1:8b` shows under Local —
+  before, everything from Ollama landed under Qwen, which was right for half of
+  them and wrong for the rest, and the live catalogue made the wrong half real.
+  And suite 25 enforces that every local Library entry resolves to an actual
+  tag, because one that does not is *worse* than absent: `depthStageRefFor`
+  returns null for it, so pinning it to a depth rung writes nothing while the
+  level reads as configured. Ornith 1.0 35B has no tag and is deliberately left
+  out for exactly that reason.
+
+  The four models the design note originally wanted here (GPT-OSS 20B, Qwen3.5
+  9B, Qwen3-Coder 30B, EmbeddingGemma) are still not added. A `LOCAL_MODELS` row
+  carries VRAM, quantisation and tokens per second, and inventing those numbers
+  to fill a table is the failure this catalogue work exists to prevent.
+
 - **Every answer says which rung produced it, and Usage totals them up.** A
   small badge on each run's route line names the Depths rung, and Settings >
   Usage gains a "What each rung served" table: runs, tokens, and the turns
