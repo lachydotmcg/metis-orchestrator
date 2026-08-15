@@ -875,6 +875,33 @@ export function composeWakePrompt(loop: LoopRecord): string {
   return lines.join("\n");
 }
 
+/** What a parallel instance is told about the others
+ *  (docs/FLOWCHART_LOOPS_V2.md piece 2).
+ *
+ *  The debate literature is blunt that N identical reviewers performs about
+ *  like one reviewer at N times the price, and until now `review x3` sent
+ *  three helpers a byte-identical prompt with byte-identical context. This is
+ *  the cheapest correction that does not require inventing subject matter.
+ *
+ *  It deliberately does NOT assign topics. Generic angles — "check
+ *  correctness", "check clarity" — read well against a step called "review"
+ *  and are nonsense against "research competitors", and a chain step is free
+ *  text that Metis has no way to classify. Putting invented subject matter
+ *  into somebody's step is the same failure as inventing a savings figure: it
+ *  demos well and is silently wrong half the time.
+ *
+ *  What it says instead is only true things: how many of you there are, which
+ *  one you are, and that a first-pass reading is already covered. That targets
+ *  the measured failure (identical outputs) without pretending to know what
+ *  the step is about. */
+export function parallelInstanceBrief(index: number, total: number): string {
+  return [
+    `You are instance ${index} of ${total} working on this at the same time, independently.`,
+    "The others are looking at exactly the same material, so the obvious first reading is already covered.",
+    "Spend your turn on what a first pass would miss, and say plainly if you find nothing the others would not."
+  ].join(" ");
+}
+
 /** How much of a named variable travels into a prompt. Same budget as one
  *  artifact, for the same reason: this IS an artifact, given a name. */
 export const LOOP_VARIABLE_LIMIT = 3000;

@@ -123,6 +123,45 @@ const STEP_VARIABLE_DECLARATION = /(?:^|\s)as\s+\$([a-z][a-z0-9_]*)\s*$/i;
 /** Every "$name" reference in a step. */
 const STEP_VARIABLE_REFERENCE = /\$([a-z][a-z0-9_]*)/gi;
 
+/** A trailing "x3" role fan-out on a step (docs/FLOWCHART_LOOPS_V2.md piece 2). */
+const STEP_FANOUT = /\s+x(\d+)\s*$/i;
+
+/** Expands "review x3" into three DISTINCTLY NAMED members.
+ *
+ *  The names matter more than the sugar. Three members called "review" work
+ *  today — the group's completion check counts agents inside a time window
+ *  rather than matching identities — but every surface that shows them (the
+ *  panel, the audit log, the helper digest replayed into the next wake prompt)
+ *  then shows the same word three times, and a digest that cannot tell its own
+ *  reviewers apart is a digest the next step cannot reason about.
+ *
+ *  Returns null when there is no fan-out to expand, so callers can tell "not a
+ *  fan-out" from "a fan-out of one". */
+export function expandStepFanout(step: string): { members: string[]; count: number } | null {
+  const match = STEP_FANOUT.exec(step ?? "");
+  if (!match) return null;
+  const count = Number.parseInt(match[1], 10);
+  if (!Number.isFinite(count) || count < 1) return null;
+  const base = (step ?? "").replace(STEP_FANOUT, "").trim();
+  if (!base) return null;
+  // A fan-out of one is a single step, not a group of one: a group launches
+  // helpers and waits, which for one member is strictly more machinery than
+  // running it inline.
+  if (count === 1) return { members: [base], count: 1 };
+  return { members: Array.from({ length: count }, (_, index) => `${base} ${index + 1}of${count}`), count };
+}
+
+/** The suffix a fan-out member carries, or null. Lets the runtime tell a
+ *  parallel instance from an ordinary step without re-parsing the chain. */
+export function fanoutMemberPosition(step: string): { index: number; total: number } | null {
+  const match = /\s(\d+)of(\d+)\s*$/.exec(step ?? "");
+  if (!match) return null;
+  const index = Number.parseInt(match[1], 10);
+  const total = Number.parseInt(match[2], 10);
+  if (!Number.isFinite(index) || !Number.isFinite(total) || index < 1 || total < 1 || index > total) return null;
+  return { index, total };
+}
+
 /** The name a step declares with a trailing "as $name", or null.
  *
  *  Naming makes explicit what the artifact channel already carries positionally:
@@ -178,6 +217,12 @@ export const LOOP_COMMAND_MAX_STEPS = 8;
  *  not ask for more helpers than that. */
 export const LOOP_COMMAND_MAX_GROUP = 3;
 
+/** Mirrors LOOP_MAX_SPAWNED_TOTAL in electron/loops.ts. Duplicated rather than
+ *  imported because this module is shared with the renderer and loops.ts is
+ *  main-only — and the hint that spends this number has to be able to say it
+ *  before anything runs. Suite 22 asserts the two stay equal. */
+export const LOOP_COMMAND_MAX_HELPERS_TOTAL = 9;
+
 /** Parses a step chain: "read -> plan -> research & review -> implement".
  *  "&" binds tighter than "->" and produces a parallel group at that
  *  position. Parentheses (multi-step branches) are recognised and refused
@@ -193,9 +238,29 @@ export function parseStepChain(raw: string): { steps?: LoopStepPosition[]; error
   const positions: LoopStepPosition[] = [];
   let flatCount = 0;
   for (const rawPosition of text.split("->")) {
-    const members = rawPosition.split("&").map((step) => step.replace(/\s+/g, " ").trim());
+    let members = rawPosition.split("&").map((step) => step.replace(/\s+/g, " ").trim());
     if (members.some((step) => !step)) {
       return { error: 'The chain has an empty step — check for a doubled or trailing "->" or "&".' };
+    }
+    // "review x3" is one written step that becomes three run steps
+    // (docs/FLOWCHART_LOOPS_V2.md piece 2). Expanded HERE so every cap below
+    // counts what will actually run — a fan-out that slipped past the group
+    // ceiling would be refused at launch instead, hours later and unattended.
+    if (members.length === 1) {
+      const fanout = expandStepFanout(members[0]);
+      if (fanout) {
+        if (fanout.count > LOOP_COMMAND_MAX_GROUP) {
+          return {
+            error: `"x${fanout.count}" is over the ${LOOP_COMMAND_MAX_GROUP}-way limit — each instance runs as its own helper, and one turn may not start more than that.`
+          };
+        }
+        members = fanout.members;
+      }
+    } else if (members.some((step) => expandStepFanout(step))) {
+      // Expanding inside a group would multiply two ceilings together, and the
+      // result is bounded by the group cap anyway — so it is refused with the
+      // equivalent spelling rather than silently truncated.
+      return { error: 'Use "x3" on its own, not inside a "&" group — write "review x3" rather than "review x2 & summarise".' };
     }
     if (members.length > LOOP_COMMAND_MAX_GROUP) {
       return { error: `A parallel group is capped at ${LOOP_COMMAND_MAX_GROUP} steps — each one runs as its own helper, and one turn may not start more than that.` };
@@ -562,6 +627,19 @@ export function describeLoopCommand(parse: LoopCommandParse): LoopCommandHintSeg
       meaning: truncate(formatStepChain(parts.steps), 60),
       typed: true
     });
+    // A parallel group spends the loop's helper allowance, and running out
+    // settles the loop `exhausted` rather than degrading. Saying how many
+    // cycles it buys turns that from a surprise hours later into a number you
+    // can see before pressing enter.
+    const groupSize = parts.steps.reduce((widest, position) => Math.max(widest, Array.isArray(position) ? position.length : 0), 0);
+    if (groupSize > 1) {
+      const cycles = Math.floor(LOOP_COMMAND_MAX_HELPERS_TOTAL / groupSize);
+      segments.push({
+        label: `${groupSize} in parallel`,
+        meaning: `${cycles} cycle${cycles === 1 ? "" : "s"} before the ${LOOP_COMMAND_MAX_HELPERS_TOTAL}-helper allowance runs out`,
+        typed: true
+      });
+    }
   }
 
   if (parts.gate && parts.steps) {

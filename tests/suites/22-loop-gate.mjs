@@ -19,9 +19,9 @@
 
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
-const { parseLoopCommand, parseStepChain, parseGateSpec, stepInstruction, stepVariableName, stepVariableRefs, describeLoopCommand, LOOP_COMMAND_MAX_GATE_ATTEMPTS } =
+const { parseLoopCommand, parseStepChain, parseGateSpec, stepInstruction, stepVariableName, stepVariableRefs, describeLoopCommand, expandStepFanout, fanoutMemberPosition, LOOP_COMMAND_MAX_GATE_ATTEMPTS, LOOP_COMMAND_MAX_HELPERS_TOTAL } =
   await fromBuild("shared/loop-command.js");
-const { extractGateVerdict, gateAppliesToTurn, nextStepIndex, gatePromptFor, composeWakePrompt } = await fromBuild("electron/loops.js");
+const { extractGateVerdict, gateAppliesToTurn, nextStepIndex, gatePromptFor, composeWakePrompt, parallelInstanceBrief, LOOP_MAX_SPAWNED_TOTAL } = await fromBuild("electron/loops.js");
 
 section("A step can name what it produces");
 {
@@ -104,6 +104,75 @@ section("The command accepts the gate in either order");
   const hint = describeLoopCommand(parseLoopCommand('/loop --steps "plan -> draft -> synthesise" --gate "synthesise fails -> draft"'));
   ok("the composer explains the gate", hint.some((segment) => segment.label.includes("gate on")));
   ok("and where a fail goes", hint.some((segment) => segment.meaning.includes("back to")));
+}
+
+section("Role fan-out: one written step, N run steps");
+{
+  const { steps } = parseStepChain("draft -> review x3 -> synthesise");
+  check("the chain still has three positions", steps.length, 3);
+  // DISTINCT NAMES. Three members called "review" work — the group's
+  // completion check counts agents in a time window rather than matching
+  // identities — but the panel, the audit log and the helper digest replayed
+  // into the next wake prompt would all show the same word three times, and a
+  // digest that cannot tell its own reviewers apart is one the next step
+  // cannot reason about.
+  check("the fan-out expands, distinctly", steps[1], ["review 1of3", "review 2of3", "review 3of3"]);
+  check("a plain step is untouched", steps[0], "draft");
+  // Bounded by the same ceiling as a "&" group, and caught in the composer
+  // rather than at launch — a fan-out refused hours later, unattended, is the
+  // failure this parse-time check exists to prevent.
+  ok("over the group cap is refused", /over the 3-way limit/.test(parseStepChain("draft -> review x4").error ?? ""));
+  // Multiplying two ceilings together is refused with the equivalent spelling
+  // rather than silently truncated.
+  ok("a fan-out inside a group is refused", /on its own/.test(parseStepChain("draft -> review x2 & summarise").error ?? ""));
+  // A fan-out of one is a step, not a group of one: a group launches helpers
+  // and waits, which for one member is strictly more machinery than running
+  // it inline.
+  check("x1 stays a single step", parseStepChain("draft -> review x1").steps[1], "review");
+  check("x0 is not a fan-out", expandStepFanout("review x0"), null);
+  check("a bare count with no step is not a fan-out", expandStepFanout("x3"), null);
+  check("a step merely containing x3 is untouched", expandStepFanout("check the x3 config"), null);
+}
+
+section("A parallel instance is told the others exist, and nothing invented");
+{
+  check("the suffix is readable back", fanoutMemberPosition("review 2of3"), { index: 2, total: 3 });
+  check("an ordinary step has no position", fanoutMemberPosition("review"), null);
+  check("a nonsense position is refused", fanoutMemberPosition("review 5of3"), null);
+
+  const brief = parallelInstanceBrief(2, 3);
+  ok("it says which one you are", brief.includes("instance 2 of 3"));
+  ok("and that the others are on the same material", /same material/.test(brief));
+  ok("and that a first reading is already covered", /first pass would miss/.test(brief));
+  // THE REFUSAL. Generic angles read well against "review" and are nonsense
+  // against "research competitors", and a chain step is free text Metis has no
+  // way to classify. Inventing subject matter for somebody's step is the same
+  // failure as inventing a savings figure — it demos well and is silently
+  // wrong half the time.
+  ok("it invents no subject matter", !/correctness|clarity|completeness|security|performance|style/i.test(brief));
+  // Saying nothing new is a permitted outcome. Three instances forced to
+  // differ will manufacture disagreement.
+  ok("finding nothing is an allowed answer", /nothing the others would not/.test(brief));
+}
+
+section("The helper allowance is stated before the loop runs, not after");
+{
+  // Running out settles the loop `exhausted` rather than degrading, so the
+  // number belongs in the composer where it can still change a mind.
+  const hint = describeLoopCommand(parseLoopCommand('/loop --steps "draft -> review x3 -> synthesise"'));
+  const parallel = hint.find((segment) => segment.label === "3 in parallel");
+  ok("the fan-out width is shown", Boolean(parallel));
+  ok("with the cycles it buys", /3 cycles before the 9-helper allowance/.test(parallel?.meaning ?? ""));
+  // A chain with no group says nothing about helpers, because it uses none.
+  ok("a plain chain makes no such claim", !describeLoopCommand(parseLoopCommand('/loop --steps "a -> b"')).some((segment) => segment.label.includes("parallel")));
+}
+
+section("The duplicated helper ceiling has not drifted");
+{
+  // shared/loop-command.ts cannot import electron/loops.ts (renderer vs main),
+  // so the number the hint spends is a copy. A copy that drifts turns the
+  // composer's promise into a lie without failing anything else.
+  check("the shared copy matches the real cap", LOOP_COMMAND_MAX_HELPERS_TOTAL, LOOP_MAX_SPAWNED_TOTAL);
 }
 
 section("Reading a verdict");

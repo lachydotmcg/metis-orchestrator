@@ -135,6 +135,48 @@ This forces a decision on `LOOP_MAX_SPAWNED_TOTAL = 9`. Either raise it, or
 derive it from `--turns × group size`, and make `--budget` mandatory when `xN` is
 used.
 
+### Built, 2026-08-16 — the fan-out half
+
+`expandStepFanout` / `fanoutMemberPosition` in `shared/loop-command.ts`,
+`parallelInstanceBrief` in `electron/loops.ts`, and a composer segment saying
+how many cycles the allowance buys. Suite 22 grew from 62 to 83 checks.
+
+**The cap needed no decision.** The arithmetic works out: 9 helpers ÷ 3 per
+cycle = 3 cycles, and a `draft -> review x3 -> synthesise` chain reaches its
+group on turns 2, 5 and 8 — so the default 8-turn cap runs out at the same time
+the helper allowance does. Raising the ceiling would loosen an unattended-spend
+guard to buy cycles the turn cap already refuses; making `--budget` mandatory
+would tax a bounded three-helper group for a risk it does not carry. What was
+actually missing was that the number is invisible until you hit it, so the
+composer now says *"3 in parallel · 3 cycles before the 9-helper allowance runs
+out"* before you press enter.
+
+**Distinct names are not what fixes the completion match.** The note assumed
+identical member names were ambiguous; they are not. `runLoopGroupTick` counts
+agents started inside the group's time window rather than matching identities,
+so `review & review & review` has always completed correctly. Names matter for a
+different reason and it is worth being precise about which: the panel, the audit
+log and the **helper digest replayed into the next wake prompt** all showed the
+same word three times, and a digest that cannot tell its own reviewers apart is
+one the next step cannot reason about.
+
+**No invented angles.** The note says to give each instance a different angle,
+and the debate literature it cites is right that N identical reviewers performs
+like one at N× the price. But a chain step is free text: "check correctness /
+clarity / completeness" reads well against `review` and is nonsense against
+`research competitors`, and Metis has no way to classify which it is. Putting
+invented subject matter into somebody's step is the same failure as inventing a
+savings figure — it demos well and is silently wrong half the time. Each
+instance is told only true things instead: how many of you there are, which one
+you are, that the obvious first reading is already covered, and that finding
+nothing the others would not is an acceptable answer. Forcing three instances to
+differ manufactures disagreement.
+
+**Not built: the AI writing the loop.** `draftLoopStepChain` still proposes the
+narrower grammar it always did. Widening it is straightforward; the part that
+is not is the confirm-before-run surface this note calls "the whole safety
+story", and that is a real screen rather than a prompt edit.
+
 **The AI writes the loop.** This is the ask most likely to be *used*, because
 nobody wants to learn a grammar to try a feature once.
 

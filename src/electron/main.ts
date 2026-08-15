@@ -119,6 +119,7 @@ import {
   loopTerminalReason,
   loopTurnLabel,
   nextStepIndex,
+  parallelInstanceBrief,
   summariseTurn,
   type LoopEvidence,
   type LoopIterationRecord,
@@ -137,6 +138,7 @@ import {
   countChainSteps,
   formatStepChain,
   parseStepChain,
+  fanoutMemberPosition,
   stepVariableName,
   type LoopGate,
   type LoopStepPosition
@@ -12139,7 +12141,17 @@ async function runLoopGroupTick(id: string, loaded: LoopRecord, members: string[
     const handoff = latestArtifact(settled);
     launchLoopWorkers(
       settled,
-      members.map((member) => ({ name: member.slice(0, 40), task: member, context: handoff || undefined })),
+      members.map((member) => {
+        // A fan-out member ("review 2of3") is told the others exist, so three
+        // helpers on identical material do not produce three identical
+        // readings — the one failure the debate literature actually names.
+        // Rides in `context`, never in `task`, because routing classifies from
+        // the task text and this is scaffolding (see LoopSpawnRequest.context).
+        const position = fanoutMemberPosition(member);
+        const brief = position ? parallelInstanceBrief(position.index, position.total) : null;
+        const context = [brief, handoff || null].filter(Boolean).join("\n\n");
+        return { name: member.slice(0, 40), task: member, context: context || undefined };
+      }),
       startedAt
     );
     return settled;

@@ -70,6 +70,39 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **`review x3` fans a step into three parallel instances that are not clones.**
+  One written step becomes three run steps, named `review 1of3` upward, and each
+  is told it is one of three working on the same material at the same time.
+
+  `review & review & review` has always worked; three *identical* prompts is the
+  waste. The debate literature the design note cites is blunt that N identical
+  reviewers performs about like one reviewer at N times the price, and until now
+  every member of a group got a byte-identical prompt with byte-identical
+  context.
+
+  **No invented angles.** The note says to give each instance a different angle,
+  and that is where this stops following it. A chain step is free text: "check
+  correctness / clarity / completeness" reads well against `review` and is
+  nonsense against `research competitors`, and nothing in Metis can tell which
+  it is. Putting invented subject matter into someone's step is the same failure
+  as inventing a savings figure — it demos well and is silently wrong half the
+  time. Each instance is told only true things instead: how many of you there
+  are, which one you are, that the obvious first reading is covered, and that
+  finding nothing the others would not is an acceptable answer. Three instances
+  forced to differ will manufacture disagreement.
+
+  Two corrections to the note, both in the doc now. Distinct names are **not**
+  what fixes the completion match — `runLoopGroupTick` counts agents inside the
+  group's time window rather than matching identities, so identical names always
+  completed correctly. They matter because the panel, the audit log and the
+  helper digest replayed into the next wake prompt all showed the same word
+  three times, and a digest that cannot tell its own reviewers apart is one the
+  next step cannot reason about. And the 9-helper ceiling **needed no decision**:
+  9 ÷ 3 is 3 cycles, and a three-position chain reaches its group on turns 2, 5
+  and 8, so the default turn cap runs out at the same moment. What was missing
+  was that the number is invisible until you hit it, so the composer now says
+  "3 in parallel · 3 cycles before the 9-helper allowance runs out".
+
 - **Metis remembers your other conversations.** Alongside project files, a chat
   turn can now bring back what you worked out in a different thread, labelled
   as earlier and separate rather than folded in with the current exchange.
