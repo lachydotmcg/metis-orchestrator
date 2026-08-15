@@ -29,6 +29,29 @@
  *  megabyte-long base64 string per message. */
 export const SVG_ARTIFACT_MAX_CHARS = 512_000;
 
+/** Fence labels worth TRYING as an SVG. Not a whitelist of things that will
+ *  render — `isRenderableSvg` decides that — just of labels worth looking under.
+ *
+ *  This exists because of a real bug shipped in v1.2.0. The renderer tested for
+ *  the label `svg` and nothing else, so when Qwen3 8B answered a chart request
+ *  with a complete, correct SVG document inside an ```xml fence, it printed as
+ *  code. The markup passed every check; the label filtered it out before any
+ *  check ran.
+ *
+ *  That is the worst shape of bug for this app in particular. Ask Claude and you
+ *  get ```svg and it works; ask a local 7B and you get ```xml and it does not —
+ *  so the feature silently depends on WHICH MODEL ANSWERED, in a product whose
+ *  entire argument is that you route across models.
+ *
+ *  So: gate on content, not on the label. An empty label counts, because plenty
+ *  of models emit a bare fence. Anything not on this list stays code without
+ *  being parsed, which keeps the cost of a wrong guess at zero. */
+export function fenceMayBeSvg(language: string): boolean {
+  if (typeof language !== "string") return false;
+  const normalised = language.trim().toLowerCase();
+  return normalised === "" || normalised === "svg" || normalised === "xml" || normalised === "html" || normalised === "markup";
+}
+
 /** Strips the things that may legally precede or follow a root <svg> element:
  *  an XML declaration, a doctype, comments, and whitespace. Everything else is
  *  content, and content outside the root means this is not a single drawable

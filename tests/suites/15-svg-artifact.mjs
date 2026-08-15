@@ -19,7 +19,7 @@
 
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
-const { isRenderableSvg, svgDataUrl, SVG_ARTIFACT_MAX_CHARS } = await fromBuild("shared/svg-artifact.js");
+const { isRenderableSvg, svgDataUrl, SVG_ARTIFACT_MAX_CHARS, fenceMayBeSvg } = await fromBuild("shared/svg-artifact.js");
 
 const CHART = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 50"><rect width="80" height="40" fill="teal"/></svg>';
 
@@ -83,6 +83,40 @@ section("Script is NOT stripped, because <img> is the boundary");
   ok("markup containing a script tag is still structurally valid", isRenderableSvg(withScript));
   const encode = (value) => Buffer.from(value, "utf8").toString("base64");
   ok("and it is passed through unmodified", Buffer.from(svgDataUrl(withScript, encode).split(",")[1], "base64").toString("utf8") === withScript);
+}
+
+
+section("The fence LABEL must not decide whether an SVG renders");
+{
+  // The v1.2.0 bug, reproduced. Qwen3 8B answered a chart request with this
+  // exact shape: correct, complete SVG inside an xml fence. The old code
+  // tested for the label "svg" and nothing else, so it printed as code.
+  const QWEN_REPLY = '<svg width="300" height="200" xmlns="http://www.w3.org/2000/svg"><rect x="50" y="133" width="30" height="66" fill="blue"/></svg>';
+  ok("the markup itself was always fine", isRenderableSvg(QWEN_REPLY));
+  ok("an xml fence is now looked under", fenceMayBeSvg("xml"));
+  ok("and so is svg", fenceMayBeSvg("svg"));
+  ok("and html", fenceMayBeSvg("html"));
+  // A bare fence is common from small models and must not be skipped.
+  ok("a bare fence is looked under", fenceMayBeSvg(""));
+  ok("case and whitespace do not matter", fenceMayBeSvg("  XML "));
+}
+
+section("But an unrelated label is still skipped without parsing");
+{
+  // Keeps the cost of a wrong guess at zero: these never reach isRenderableSvg.
+  for (const lang of ["js", "ts", "python", "json", "bash", "css", "metis-loop", "metis-actions"]) {
+    ok(`${lang} is not looked under`, !fenceMayBeSvg(lang));
+  }
+  ok("non-string input", !fenceMayBeSvg(undefined));
+}
+
+section("Content still decides, so a wrong label cannot force a render");
+{
+  // fenceMayBeSvg only says "worth looking". An xml fence holding actual XML
+  // must still print as code.
+  ok("an xml fence is looked under", fenceMayBeSvg("xml"));
+  ok("but real XML does not render", !isRenderableSvg("<note><to>Tove</to></note>"));
+  ok("nor does an HTML page containing an svg", !isRenderableSvg('<html><body><svg viewBox="0 0 1 1"><rect/></svg></body></html>'));
 }
 
 const { passed, failed } = summary();

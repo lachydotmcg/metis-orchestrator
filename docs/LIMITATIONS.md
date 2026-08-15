@@ -199,19 +199,17 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
   into the store, the conversation-store race, the SVG render gate, and the honesty of this
   documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
-- **An SVG only renders when the model labels the fence `svg`.** Found in first live use,
-  2026-08-14: Qwen3 8B answered a chart request with a correct, complete SVG inside a ` ```xml `
-  fence, and it printed as code. `MARKDOWN_COMPONENTS` tests `fenceLanguage(children) === "svg"`
-  and nothing else, so the gate never ran. The markup passes `isRenderableSvg` — only the label was
-  different.
+- ~~**An SVG only renders when the model labels the fence `svg`.**~~ Fixed 2026-08-14. Found in
+  first live use: Qwen3 8B answered a chart request with a correct, complete SVG inside an
+  ```xml fence and it printed as code, because the renderer tested the LABEL and never reached
+  the content check. The gate is now `fenceMayBeSvg` — svg, xml, html, markup, or a bare fence
+  are all looked under, and `isRenderableSvg` still decides. Pinned in `15-svg-artifact` with the
+  exact Qwen output that failed.
 
-  This is the worst shape of bug for this app specifically. Ask Claude and you get ` ```svg ` and
-  it works; ask a local 7B and you get ` ```xml ` and it does not — so the feature appears to work
-  and silently depends on which model answered, in a product whose whole argument is that you route
-  across models. The fix is to gate on CONTENT, not on the label: try `isRenderableSvg` whenever the
-  fence language is `svg`, `xml`, `html` or absent. The completeness gate is already the real
-  safety check, and it was doing nothing here because the label filtered the block out before it
-  was consulted.
+  Worth recording why this shape of bug matters here more than elsewhere: ask Claude and you get
+  ```svg and it works; ask a local 7B and you get ```xml and it does not. A feature that silently
+  depends on which model answered is the specific failure this product cannot afford, because
+  routing across models is the whole argument.
 - **Nothing in the artifact path is verified in a running app.** The SVG gate and the generated-image
   contract are pinned offline, and the renderer wiring is typechecked, but no recorded run shows a
   chart actually drawn in a bubble. It is `SHIPPED`, not `VERIFIED`, and for the usual reason: the

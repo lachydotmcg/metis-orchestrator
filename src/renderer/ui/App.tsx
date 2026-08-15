@@ -164,7 +164,7 @@ import type { LoopRecord } from "../../electron/loops";
 // The SAME parser main.ts uses, so the hint strip under the composer cannot
 // promise something different from what the command will actually do.
 import { describeLoopCommand, formatLoopDuration, formatStepChain, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
-import { isRenderableSvg, svgDataUrl } from "../../shared/svg-artifact";
+import { fenceMayBeSvg, isRenderableSvg, svgDataUrl } from "../../shared/svg-artifact";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
 
@@ -6887,10 +6887,16 @@ function CodeBlock({ children }: { children?: ReactNode }): JSX.Element | null {
 
 const MARKDOWN_COMPONENTS: Components = {
   pre: ({ children }) => {
-    // Only a complete, single-root SVG is promoted. Anything a model truncated
-    // stays a code block, because a broken render is worse than no render and
-    // Metis routes to local models that truncate constantly.
-    if (fenceLanguage(children) === "svg") {
+    // Gated on CONTENT, not on the fence label. Testing for the label `svg`
+    // alone was a v1.2.0 bug: a local model answering with a complete SVG in an
+    // ```xml fence printed as code, so the feature silently worked or did not
+    // depending on which model answered. isRenderableSvg is the real check and
+    // it was never reached.
+    //
+    // Only a complete, single-root SVG is promoted either way. Anything a model
+    // truncated stays a code block, because a broken render is worse than no
+    // render and Metis routes to local models that truncate constantly.
+    if (fenceMayBeSvg(fenceLanguage(children))) {
       const source = reactNodeToPlainText(children);
       if (isRenderableSvg(source)) return <SvgArtifactBlock source={source}>{children}</SvgArtifactBlock>;
     }
