@@ -136,10 +136,17 @@ engine referenced below.
   carries VRAM, quantisation and tokens per second, and inventing those numbers
   to fill a table is the failure this catalogue work exists to prevent.
 
-- **Every answer says which rung produced it, and Usage totals them up.** A
-  small badge on each run's route line names the Depths rung, and Settings >
-  Usage gains a "What each rung served" table: runs, tokens, and the turns
-  promoted in or out of each rung.
+- **Every answer says which rung produced it**, as a small badge on each run's
+  route line, and a "What each rung served" table lands in Settings > Usage:
+  runs, tokens, and the turns promoted in or out of each rung.
+
+  **Correction, 2026-08-16:** this first shipped saying "Settings > Usage adds
+  a table" without noting that **Usage is one of the two settings sections v1
+  deliberately hides**. The badge is reachable; the table is not, until that
+  section is un-hidden. The check written to prevent exactly this asserted the
+  panel *renders*, which passed — rendering is not reaching, and
+  `12-doc-honesty` now resolves each panel to its section and compares against
+  `V1_HIDDEN_SETTINGS`.
 
   `run.depth` had been recorded since Depths shipped and rendered **nowhere**.
   The ladder was invisible at exactly the moment it mattered — you could see

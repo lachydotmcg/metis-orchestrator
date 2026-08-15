@@ -324,6 +324,66 @@ section("Every store key main reads has a control that can change it");
   ok("the posture default still matches main", /readStoreValue<RetrievalOverride>\("retrievalPosture", RETRIEVAL_OVERRIDE_DEFAULT\)/.test(main));
 }
 
+section("A panel in a hidden settings section is not a surface");
+{
+  // Written because the previous reachability guard was not enough and I
+  // proved it. On 2026-08-16 the rung ledger shipped with a source check that
+  // it RENDERS, which passed — while sitting in Settings > Usage, a section
+  // v1 deliberately hides. The changelog and FEATURES both said "Settings >
+  // Usage adds a table" as though you could open it. Rendering is not
+  // reaching, and a guard that only proves the JSX exists checks the wrong
+  // layer.
+  const app = read("src/renderer/ui/App.tsx");
+  const hidden = new Set(
+    (/const V1_HIDDEN_SETTINGS = new Set<SettingsSection>\(\[([^\]]*)\]\)/.exec(app)?.[1] ?? "")
+      .split(",")
+      .map((entry) => entry.trim().replace(/^"|"$/g, ""))
+      .filter(Boolean)
+  );
+  ok("the hidden set was found", hidden.size > 0);
+
+  /** Which `section === "x"` block a heading sits inside. */
+  const sectionOf = (heading) => {
+    const at = app.indexOf(heading);
+    if (at < 0) return null;
+    const before = app.slice(0, at);
+    const marks = [...before.matchAll(/\{section === "(\w+)" \? \(/g)];
+    return marks.length ? marks[marks.length - 1][1] : null;
+  };
+
+  // Expected visibility per panel, so drift in EITHER direction fails: a panel
+  // moving into a hidden section, or a section being unhidden without the
+  // docs catching up.
+  const panels = [
+    { heading: "What each rung served", reachable: false },
+    { heading: "What Metis is noticing", reachable: false },
+    { heading: "How much of your project reaches the model", reachable: true }
+  ];
+  for (const panel of panels) {
+    const where = sectionOf(panel.heading);
+    ok(`"${panel.heading}" is in a section`, Boolean(where));
+    const isReachable = where !== null && !hidden.has(where);
+    check(`"${panel.heading}" reachability (section: ${where})`, isReachable, panel.reachable);
+  }
+
+  // The rung BADGE is the reachable half of that feature — it renders on every
+  // run's route line in the chat feed, which is not a settings section at all.
+  // Worth pinning separately so "the rung ledger is unreachable" never becomes
+  // "nothing about rungs is visible".
+  ok("the per-message rung badge is outside settings entirely", sectionOf("function RungBadge(") === null);
+
+  // And the docs must say so rather than implying an openable panel. Matched
+  // loosely on purpose — the point is that the changelog says Usage is hidden
+  // somewhere near where it says Usage gains a panel, not that it says it in
+  // one blessed phrasing.
+  const changelog = read("CHANGELOG.md");
+  ok("the changelog flags the hidden section", /Usage[\s\S]{0,200}?\bhid(?:den|es)\b/i.test(changelog));
+  // LIMITATIONS is where a reader goes to find out what does not work, so the
+  // whole section being unopenable belongs there rather than only in a
+  // per-feature note.
+  ok("LIMITATIONS records the whole section as hidden", /Settings > Usage is hidden in v1/.test(read("docs/LIMITATIONS.md")));
+}
+
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

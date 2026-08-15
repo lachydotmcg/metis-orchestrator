@@ -192,6 +192,13 @@ stamp, or fall back to token counts past N days.
 `src/shared/rung-ledger.ts` (the rollup), a `RungBadge` on every run's route
 line, and a "What each rung served" table in Settings > Usage. Suite 24.
 
+**Half of it is reachable.** The badge renders in the chat feed on every run.
+The table sits in Settings > Usage, which `V1_HIDDEN_SETTINGS` cuts from v1 —
+so it is built, correct, and not openable until that section returns. This was
+missed on the day and caught two passes later; `12-doc-honesty` now resolves
+each settings panel to its section and fails if a panel claimed as reachable
+is inside a hidden one.
+
 Both corrections were checked, and **neither survived as written**:
 
 - **The counterfactual is gone entirely.** "Same turns at frontier pricing" is

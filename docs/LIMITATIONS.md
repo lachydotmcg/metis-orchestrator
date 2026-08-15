@@ -330,10 +330,21 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 - **The Benchmark is simulated.** A hardware sizing guide, not measured inference.
 - **Fan-out is sequential.** Named sub-agents with real file territories, executed one at a time.
+- **Settings > Usage is hidden in v1**, so everything in it is written and not openable: the
+  per-provider and per-model rollups, the local-electricity estimate, the usage limits, the
+  "What Metis is noticing" observations, and the rung ledger added 2026-08-16. The reason is
+  recorded next to `V1_HIDDEN_SETTINGS` — a read-only report over data already being collected
+  costs nothing sitting hidden until its numbers have a live-test checkmark. Worth stating here
+  because a panel that renders is easy to mistake for a panel you can reach; `12-doc-honesty`
+  now fails if a panel documented as reachable resolves to a hidden section.
 - **Usage limits do not throttle.** Display-only, and the section is hidden in v1 anyway.
 - **The router does not learn from you.** Metis keeps a private local log of how you actually use
   it and shows it back as plain-sentence observations. Nothing in it changes routing. It is a
-  record, not a decision.
+  record, not a decision — and that is a promise rather than a stage: a router that quietly started
+  steering from a log the owner never asked to train would be a behaviour change nobody consented
+  to. Applying it is a separate, opted-in round or it does not happen.
+  Those observations live in Settings > Usage, which is hidden in v1 (see below), so today they are
+  written and not openable.
 - **The Auto Router classifies by keyword rules plus a length rule**, not a learned model. The
   confidence numbers are fixed constants, so read them as a category label rather than a calibrated
   probability.
