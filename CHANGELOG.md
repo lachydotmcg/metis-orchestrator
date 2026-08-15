@@ -12,6 +12,42 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Changed (2026-08-16)
+
+- **A loop turn no longer talks itself into another turn.** The independent
+  judge covered only the path where a work turn produced no decision block.
+  A turn that answered inline still graded itself, and an inline `continue` is
+  now re-checked by a model that did not do the work.
+
+  The claim this corrects is the interesting part. That limit shipped saying the
+  inline path was the low-stakes half *by construction*: a turn doing real work
+  routes to the build pipeline, whose reply cannot carry a block, so the judge
+  runs on exactly the dangerous turns. Checking it before building found the
+  opposite. `composeWakePrompt` appends the decision block **unconditionally**,
+  so any turn that routes to chat answers inline — and that is every step of
+  `plan -> draft -> review -> synthesise`. Self-grading covered the entire
+  flowchart-chain feature; only file-writing turns ever reached the separate
+  call.
+
+  **Only a continue is re-checked**, which is the same asymmetry the rest of
+  Loops runs on, applied one level up. Stopping is the recoverable direction,
+  and `blocked` claims nothing — a model that declines to assert an outcome has
+  not graded itself favourably. Verifying either would double the calls to
+  confirm the answer that was already safe.
+
+  Three rules keep it from overreaching. A null verdict **keeps** the turn's own
+  continue: unlike the fallback path, silence here is not the absence of a
+  decision — the turn made one — and an unreachable judge is not evidence
+  against it. A confirmed continue keeps the working model's own delay and
+  spawn requests, because the judge was asked *whether* to go on, not *how*. And
+  an overruled loop reports "an independent model judged this finished" rather
+  than "the model chose to stop", because it did not.
+
+- **Stale claims in `docs/FEATURES.md` corrected.** The Loops honest-limits
+  paragraph still said the step handoff was one hop (it has reached three since
+  2026-08-06) and that a chain has no branches (it carries one conditional edge
+  since `1bb58a1`).
+
 ### Added (2026-08-16)
 
 - **The two settings that had no screen now have one**, plus a third that

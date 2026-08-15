@@ -114,6 +114,7 @@ import {
   extractLoopDecision,
   gateAppliesToTurn,
   gatePromptFor,
+  inlineDecisionNeedsSecondOpinion,
   latestArtifact,
   loopTerminalReason,
   loopTurnLabel,
@@ -11521,6 +11522,10 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   let decision = runError ? null : extractLoopDecision(assistantText);
   let decisionAsked = false;
   let judgedBy: LoopIterationRecord["judgedBy"];
+  // True when the turn asked to continue and an independent model said
+  // otherwise. Changes how the stop is REPORTED: a loop that was overruled did
+  // not stop itself, and saying it did would hide the disagreement.
+  let judgeOverrode = false;
   let gateVerdict: "pass" | "fail" | null = null;
   // Re-measured AFTER the work turn: runSessionTracked just appended this
   // turn's ledger rows, and the budget must count the spend that already
@@ -11542,6 +11547,45 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       evidence: turnEvidence
     });
     judgedBy = judge.judgedBy();
+  } else if (!runError && !alreadyTerminal && inlineDecisionNeedsSecondOpinion(decision)) {
+    // The turn answered inline, and what it said about itself was "keep going".
+    //
+    // That used to stand unchallenged, on the reasoning that a turn doing real
+    // work routes to the build pipeline and therefore always takes the branch
+    // above. It does not: every wake prompt appends the decision block, so any
+    // chat-routed turn answers inline — which is every step of a
+    // `plan -> draft -> review -> synthesise` chain. The self-graded path was
+    // the whole flowchart feature, not an edge case.
+    //
+    // Only a continue is re-checked. Stopping is the recoverable direction and
+    // needs no second opinion; "I am not finished" is the answer that spends
+    // money on every turn it buys.
+    const judge = loopJudgeInvoker(providerResultForDecision);
+    const verdict = await decideLoopContinuation(judge.invoke, {
+      goal: loaded.goal,
+      whatHappened: summariseTurn(assistantText, 600),
+      turnsLeft: Math.max(0, loaded.maxIterations - index),
+      evidence: turnEvidence
+    });
+    judgedBy = judge.judgedBy();
+    // A null verdict KEEPS the model's own continue. Unlike the branch above,
+    // silence here is not the absence of a decision — the turn made one — and
+    // an unreachable judge is not evidence against it. Same reasoning as
+    // loopJudgeInvoker's own fallback: a self-judge beats no loop.
+    if (verdict && verdict.decision !== "continue") {
+      await appendAudit("info", "loop.judge.override", `Loop "${loopLabel(loaded)}" asked to continue on iteration ${index}; an independent model disagreed.`, {
+        id,
+        iteration: index,
+        judgedBy: judgedBy?.model,
+        verdict: verdict.decision,
+        reason: verdict.reason
+      });
+      judgeOverrode = true;
+      decision = verdict;
+    }
+    // A confirmed continue keeps the ORIGINAL decision object, not the
+    // judge's: the delay and any spawn requests were the working model's to
+    // make, and the judge was asked whether to go on, not how.
   }
 
   // THE GATE (docs/FLOWCHART_LOOPS_V2.md piece 1). Asked only when this turn
@@ -11720,7 +11764,13 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     settled = {
       ...advanced,
       status: "stopped",
-      stoppedReason: `the model chose to stop: ${decision.reason ?? "no reason given"}`
+      // "chose to stop" is only true when the stop was the turn's own. An
+      // overridden continue is the opposite of the loop stopping itself, and
+      // reporting it that way would hide the disagreement that is the whole
+      // point of asking a second model.
+      stoppedReason: judgeOverrode
+        ? `an independent model judged this finished: ${decision.reason ?? "no reason given"}`
+        : `the model chose to stop: ${decision.reason ?? "no reason given"}`
     };
     await appendAudit("info", "loop.stop", `Loop "${loopLabel(advanced)}" stopped itself on iteration ${index}.`, {
       id,

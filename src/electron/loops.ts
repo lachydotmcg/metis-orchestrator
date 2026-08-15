@@ -873,6 +873,30 @@ export function composeWakePrompt(loop: LoopRecord): string {
  *  artifact, for the same reason: this IS an artifact, given a name. */
 export const LOOP_VARIABLE_LIMIT = 3000;
 
+/** Whether a decision the working model made about ITSELF needs a second
+ *  opinion (docs/LOOPS.md, "the judge is not the worker").
+ *
+ *  Only a `continue` does. That is the asymmetry the whole feature runs on
+ *  applied one level up: stopping is the recoverable direction, so a model
+ *  saying "I am done" about its own work costs a wasted opportunity at worst,
+ *  while "keep going, I am not finished" is the self-serving answer that spends
+ *  money on every turn it buys. Verifying both would double the calls to
+ *  re-check the answer that was already safe.
+ *
+ *  `blocked` is not verified either, for the same reason and a sharper one: it
+ *  is the verdict that CLAIMS NOTHING, and a model that declines to assert an
+ *  outcome has not graded itself favourably.
+ *
+ *  This exists because "the inline path is the low-stakes half" turned out to
+ *  be wrong. Every wake prompt appends the decision block unconditionally, so
+ *  any turn that routes to chat rather than the build pipeline answers inline —
+ *  and that is every step of `plan -> draft -> review -> synthesise`, which is
+ *  the shape flowchart chains are actually written in. Only file-writing turns
+ *  reach the separate call. */
+export function inlineDecisionNeedsSecondOpinion(decision: LoopDecision | null): boolean {
+  return decision?.decision === "continue";
+}
+
 /** Whether the gate should be consulted after this turn.
  *
  *  Four ways to say no, and each is a different kind of "no": no gate was

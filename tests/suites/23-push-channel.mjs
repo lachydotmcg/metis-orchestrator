@@ -90,6 +90,21 @@ section("Both subscribers survive a preload that does not have it");
   ok("and both clean up after themselves", [...app.matchAll(/unsubscribe\?\.\(\);/g)].length === 2);
 }
 
+section("An overruled continue is not reported as the loop stopping itself");
+{
+  // A loop that was overruled did NOT stop itself, and saying it did would
+  // hide the disagreement that is the entire reason for asking a second model.
+  ok("the override is tracked", /let judgeOverrode = false;/.test(main));
+  ok("and changes how the stop reads", /judgeOverrode\s*\?\s*`an independent model judged this finished/.test(main));
+  // A null verdict must KEEP the turn's own continue. Unlike the fallback
+  // path, silence here is not the absence of a decision — the turn made one —
+  // and an unreachable judge is not evidence against it.
+  ok("only a non-continue verdict overrides", /if \(verdict && verdict\.decision !== "continue"\)/.test(main));
+  // The judge was asked WHETHER to go on, not how: a confirmed continue keeps
+  // the working model's delay and spawn requests.
+  ok("a confirmed continue keeps the original decision", /keeps the ORIGINAL decision object/.test(main));
+}
+
 section("The docs stopped claiming nothing pushes");
 {
   // The 20-second conversation poll survives only as the no-preload fallback,

@@ -131,6 +131,27 @@ total += 1;
   else console.log("  FAIL  an empty evidence section was rendered");
 }
 
+console.log("\nWHICH SELF-GRADED DECISIONS GET A SECOND OPINION");
+{
+  const { inlineDecisionNeedsSecondOpinion } = m;
+  const say = (label, got, want) => {
+    total += 1;
+    if (got === want) { pass += 1; console.log(`  PASS  ${label.padEnd(58)}`); }
+    else console.log(`  FAIL  ${label.padEnd(58)} got ${got} want ${want}`);
+  };
+  // Only the answer that spends money. "Keep going, I am not finished" said by
+  // a model about its own work is the self-serving one; stopping is the
+  // recoverable direction and re-checking it would double the calls to confirm
+  // the answer that was already safe.
+  say("a continue is re-checked", inlineDecisionNeedsSecondOpinion({ decision: "continue" }), true);
+  say("a stop is not", inlineDecisionNeedsSecondOpinion({ decision: "stop" }), false);
+  // blocked CLAIMS NOTHING. A model declining to assert an outcome has not
+  // graded itself favourably, so there is nothing to check.
+  say("nor is blocked", inlineDecisionNeedsSecondOpinion({ decision: "blocked" }), false);
+  say("nor is a silent turn", inlineDecisionNeedsSecondOpinion(null), false);
+  say("nor is junk", inlineDecisionNeedsSecondOpinion({}), false);
+}
+
 console.log("\nSILENCE STILL STOPS THE LOOP");
 await check("no decision at all", ask("I have finished the work."), null);
 await check("empty reply", ask(""), null);

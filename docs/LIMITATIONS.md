@@ -84,13 +84,23 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   prose about itself. It can also answer `BLOCKED` — *what I was shown does not tell me either way*
   — which outranks `STOP` when a reply contains both, because a judge that said both has told us it
   could not tell, and filing that as a met goal is the one wrong answer that reads as success.
-  **Two edges.** With no local model reachable it falls back to the working model, since a null
+  **One edge.** With no local model reachable it falls back to the working model, since a null
   decision ends the loop and a self-judge beats no loop; the fallback is recorded on the turn and
-  shown in the panel and the walkthrough rather than passed off as independent. And a turn that
-  answers inline with its own `metis-loop` block still grades itself — the judge only runs on the
-  fallback path. That is the low-stakes half by construction: a turn doing real work routes to the
-  build pipeline, whose reply cannot carry a block, so the judge runs on exactly the turns where
-  self-grading was dangerous.
+  shown in the panel and the walkthrough rather than passed off as independent.
+
+  ~~*This shipped claiming the inline path was the low-stakes half "by construction": a turn doing
+  real work routes to the build pipeline, whose reply cannot carry a block.*~~ **That was wrong, and
+  was corrected 2026-08-16.** Every wake prompt appends the decision block unconditionally, so any
+  turn that routes to CHAT answers inline — which is every step of
+  `plan -> draft -> review -> synthesise`. The self-graded path was the whole flowchart-chain
+  feature, not an edge case; only file-writing turns ever reached the separate call. An inline
+  `continue` is now re-checked by a model that did not do the work.
+  **Only a continue.** Stopping is the recoverable direction and needs no second opinion, and
+  `blocked` claims nothing so there is nothing to check — verifying either would double the calls to
+  re-confirm the answer that was already safe. A null verdict KEEPS the turn's own continue: unlike
+  the fallback path, silence here is not the absence of a decision, and an unreachable judge is not
+  evidence against one. And a confirmed continue keeps the working model's own delay and spawn
+  requests, because the judge was asked whether to go on, not how.
 - ~~**A running loop was invisible in the chat it came from.**~~ Fixed 2026-08-15: a loop carries a
   conversation id from creation (the one it was started from, or a fresh one when started from an
   empty new session) instead of inheriting whatever thread its first tick happened to mint, and its

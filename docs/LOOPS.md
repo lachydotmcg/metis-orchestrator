@@ -269,6 +269,23 @@ The judge's *reason* is also kept: it is replayed into the next wake prompt as t
 that turn. It is the only sentence in the loop written by something that looked at the goal and the
 evidence together, and it used to reach the panel and the tray and never the model.
 
+**And it covers the inline path too, since 2026-08-16.** This originally ran only when the work turn
+carried no `metis-loop` block, on the reasoning that a turn doing real work routes to the build
+pipeline and therefore always takes that branch. That reasoning was wrong: `composeWakePrompt`
+appends the decision block unconditionally, so any turn that routes to CHAT answers inline — which
+is every step of `plan -> draft -> review -> synthesise`. Self-grading covered the whole
+flowchart-chain feature; only file-writing turns ever reached the separate call.
+
+An inline `continue` now gets a second opinion from a model that did not do the work. **Only a
+continue.** Stopping is the recoverable direction, and `blocked` claims nothing — a model that
+declines to assert an outcome has not graded itself favourably — so re-checking either would double
+the calls to confirm the answer that was already safe. Three rules keep it honest: a null verdict
+KEEPS the turn's own continue (silence here is not the absence of a decision, and an unreachable
+judge is not evidence against one); a confirmed continue keeps the working model's own delay and
+spawn requests, because the judge was asked *whether* to go on and not *how*; and an overruled loop
+is reported as "an independent model judged this finished" rather than as the loop stopping itself,
+because it did not.
+
 This does not weaken the governing rule. The second call is a second chance to say continue, never
 a default toward continuing: a failed call, an unparseable answer, or a placeholder result (Ollama
 down, no key configured) all return null and the loop ends. An outage must never read as a reason
