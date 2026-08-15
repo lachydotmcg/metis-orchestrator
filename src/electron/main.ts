@@ -157,6 +157,7 @@ import {
 } from "../shared/intent-and-paths.js";
 import { lineDiffCounts } from "../shared/line-diff.js";
 import { pickDepthRung } from "../shared/depth-stack.js";
+import { rollUpByRung, type RungRollup } from "../shared/rung-ledger.js";
 import {
   RETRIEVAL_OVERRIDE_DEFAULT,
   describeRetrievalPosture,
@@ -5063,6 +5064,16 @@ interface UsageLedgerEntry {
    *  electricity estimate in the Usage tab. Capped at 30min so a stray clock
    *  jump or suspended laptop can never poison the sum. */
   durationMs?: number;
+  /** Which Depths rung served this run, and the one it started on if a blown
+   *  thinking budget promoted it (docs/COMPETITIVE_SWEEP.md #4).
+   *
+   *  Recorded for exactly the reason the attribution fields above were: a
+   *  rollup can only read rows that already carry the field, and rows written
+   *  before it existed can never be labelled retroactively. Undefined on every
+   *  run with Depths off, which is the default — so "not recorded" has to stay
+   *  a visible bucket rather than being folded in with the rest. */
+  depth?: 1 | 2 | 3;
+  depthPromotedFrom?: 1 | 2 | 3;
 }
 
 const USAGE_LEDGER_DURATION_CAP_MS = 30 * 60 * 1000;
@@ -5085,7 +5096,9 @@ async function appendUsageLedgerEntry(run: SessionRun): Promise<void> {
     oracleServed: run.oracleServed,
     conversationId: run.conversationId,
     loopId: run.loopId,
-    durationMs
+    durationMs,
+    depth: run.depth,
+    depthPromotedFrom: run.depthPromotedFrom
   };
   const current = await readStoreValue<UsageLedgerEntry[]>("usageLedger", []);
   const next = [...current, entry].slice(-5000);
@@ -5339,6 +5352,10 @@ interface UsageModelRollup {
 interface UsageSummary {
   byProvider: UsageProviderRollup[];
   byModel: UsageModelRollup[];
+  /** Which Depths rung served what (shared/rung-ledger.ts). Empty until runs
+   *  start recording a rung, and a "Not recorded" bucket carries every run
+   *  with Depths off — which is the default. */
+  byRung: RungRollup[];
   last4h: { runs: number; totalTokens: number };
   last7d: { runs: number; totalTokens: number };
   /** Local (ollama) wall-clock generation time (B12.2 follow-up): the raw
@@ -5432,6 +5449,7 @@ async function computeUsageSummary(): Promise<UsageSummary> {
   return {
     byProvider,
     byModel,
+    byRung: rollUpByRung(ledger),
     last4h: { runs: last4hRuns, totalTokens: last4hTokens },
     last7d: { runs: last7dRuns, totalTokens: last7dTokens },
     localRuntime: { last7dMs: local7dMs, totalMs: localTotalMs },

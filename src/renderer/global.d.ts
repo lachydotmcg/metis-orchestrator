@@ -212,6 +212,17 @@ declare global {
           outputTokens: number;
           estimated: boolean;
         }>;
+        // Which Depths rung served what (shared/rung-ledger.ts). Optional so an
+        // older preload renders the rest of the tab rather than nothing.
+        byRung?: Array<{
+          depth: 1 | 2 | 3 | null;
+          runs: number;
+          inputTokens: number;
+          outputTokens: number;
+          estimated: boolean;
+          promotedIn: number;
+          promotedOut: number;
+        }>;
         last4h: { runs: number; totalTokens: number };
         last7d: { runs: number; totalTokens: number };
         // B12.2 follow-up: local (ollama) wall-clock generation time for the

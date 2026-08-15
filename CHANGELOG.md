@@ -70,6 +70,39 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **Every answer says which rung produced it, and Usage totals them up.** A
+  small badge on each run's route line names the Depths rung, and Settings >
+  Usage gains a "What each rung served" table: runs, tokens, and the turns
+  promoted in or out of each rung.
+
+  `run.depth` had been recorded since Depths shipped and rendered **nowhere**.
+  The ladder was invisible at exactly the moment it mattered — you could see
+  which model answered and never which rung sent it there. The usage ledger
+  carried no rung at all, so no lifetime rollup was derivable either; it records
+  one now, for the same reason the attribution fields beside it were added
+  early: rows written before a field exists can never be labelled
+  retroactively.
+
+  **There is no "you saved $X" figure, and that is the feature.** The design
+  note proposed one, then corrected itself to "same turns at frontier pricing".
+  Checking that correction, it does not survive either: *two* things differ when
+  another model answers, the turn count and the tokens per turn, so pricing this
+  run's exact tokens at another model's rate answers "what if a different model
+  behaved identically to this one" — a question about nothing. And the
+  arithmetic was never the real problem: the cheap rung's answer may simply have
+  been worse, so money not spent is not money saved. The note under the table
+  says so out loud, because a number that demos well is exactly the kind that
+  gets added back later.
+
+  Runs made with Depths off — the default — sit in a permanent **"Not
+  recorded"** row rather than being folded into a rung that never ran. And the
+  column worth having turned out to be **promoted**: the turns where a local
+  rung blew its thinking budget and the router corrected itself. It is the only
+  number in the ledger that measures routing being *wrong*, and a promoted run's
+  tokens are billed to the rung that answered while the abandoned rung records
+  only that it lost a turn — so the ladder's error rate is visible without
+  inflating anyone's spend.
+
 - **The two settings that had no screen now have one**, plus a third that
   never had one at all. Settings > Chat gains a **Knowledge banks** panel — the
   bank's own on/off, and how much to retrieve — and the **Experiments** panel

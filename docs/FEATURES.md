@@ -409,6 +409,10 @@ This is where "cheapest" comes from. A pipeline where every turn hits your stron
 
 **The node shows this, rather than hiding it.** A depths-enabled node displays all three rungs with their providers instead of a single model name, because a node captioned "Fable 5" while L3 is pinned to Opus 4.8 tells you the opposite of the truth about your hardest tasks. Rungs you pinned read bright, inherited ones read quieter but stay legible, since an unset level is not an empty slot.
 
+**Every answer says which rung produced it**, as a small badge on the run's route line — the ladder was invisible before, since you could see which model answered and never which rung sent it there. A promoted turn shows both ends (`L3 → L2`), which is the badge worth noticing: it means the router judged that turn wrong and corrected itself mid-flight.
+
+Settings > Usage adds **What each rung served**: runs, tokens, and how many turns were promoted in or out of each rung. There is deliberately **no "you saved $X" figure**. A different model would not have taken the same turns or produced the same tokens, and the cheaper answer is not automatically the equal one — so the table reports what happened and refuses to guess at what else might have. Runs made with Depths off (the default) sit in their own "Not recorded" row rather than being folded into a rung that never ran.
+
 **And it can now notice when it guessed wrong.** A turn routed to a *local* rung carries a thinking budget. If the model spends the whole budget without starting an answer, the stream is cut and the turn is re-run one rung deeper, with a line in the timeline saying so. That is the only place routing corrects itself: everything else in Metis that recovers (fallback chains, the critic loop, the loop judge) reacts to something that already failed, and routing had no failure signal at all. A model that will not stop thinking is free information about difficulty, and it arrives *before* you pay for the answer.
 
 **Honest limits:**

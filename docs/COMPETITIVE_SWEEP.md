@@ -187,6 +187,42 @@ price. The headline number of your best demo depends on a JSON file that can go
 stale silently. Bundle a local pricing table with a visible "prices as of DATE"
 stamp, or fall back to token counts past N days.
 
+### Built, 2026-08-16
+
+`src/shared/rung-ledger.ts` (the rollup), a `RungBadge` on every run's route
+line, and a "What each rung served" table in Settings > Usage. Suite 24.
+
+Both corrections were checked, and **neither survived as written**:
+
+- **The counterfactual is gone entirely.** "Same turns at frontier pricing" is
+  still not honest: *two* things differ when another model answers, the turn
+  count and the tokens per turn, so pricing this run's exact token counts at
+  another model's rate answers "what if a different model behaved identically
+  to this one" — a question about nothing. And the arithmetic was never the
+  real problem: the cheap rung's answer may simply have been worse, so money
+  not spent is not money saved. The table reports what each rung served and
+  spent, and `RUNG_LEDGER_NOTE` says out loud why there is no savings figure —
+  because a number that demos well is exactly the kind that gets added back
+  later.
+- **The pricing trap closed itself.** `remoteModelCatalog` no longer needs a
+  hand-updated sibling repo: since `159004c` a refresh fetches OpenRouter's
+  no-auth `/api/v1/models` live. The "prices as of DATE" stamp is unnecessary
+  for the reason the correction feared — though this table sidesteps it anyway
+  by reporting **tokens**, not money, per rung.
+
+Two things the note did not anticipate. `run.depth` had been recorded since
+Depths shipped and rendered **nowhere**, so the ladder was invisible at exactly
+the moment it mattered — you could see which model answered and never which rung
+sent it there. And the usage ledger carried no rung at all, so no lifetime
+rollup was derivable; it records one now, with a permanent **"Not recorded"**
+bucket for every run made with Depths off (the default) rather than folding
+those into a rung that never ran.
+
+The column worth having turned out to be neither runs nor tokens but
+**promoted**: the turns where a local rung blew its thinking budget and the
+router corrected itself. It is the only number in the ledger that measures
+routing being *wrong*.
+
 ### 5. Route chip in the composer
 
 Show the router's judgement on the draft before send, one click to pin.

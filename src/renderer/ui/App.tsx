@@ -167,6 +167,7 @@ import { describeLoopCommand, formatLoopDuration, formatStepChain, parseLoopComm
 import { fenceMayBeSvg, isRenderableSvg, svgDataUrl } from "../../shared/svg-artifact";
 import { costLabel, routePricing } from "../../shared/model-catalogue";
 import { DEFAULT_THINK_TOKEN_CEILING } from "../../shared/think-budget";
+import { RUNG_LEDGER_NOTE, rungLabel } from "../../shared/rung-ledger";
 import { RETRIEVAL_OVERRIDE_CHOICES, RETRIEVAL_OVERRIDE_DEFAULT, type RetrievalOverride } from "../../shared/retrieval-policy";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
@@ -7518,6 +7519,34 @@ function routeLineText(run: SessionRun): string {
   return isPinnedRun(run) ? `Called ${label} directly` : `Routed via ${label}`;
 }
 
+/** The Depths rung that produced this answer, badged on the route line
+ *  (docs/COMPETITIVE_SWEEP.md #4).
+ *
+ *  `run.depth` has been recorded since Depths shipped and rendered nowhere,
+ *  which made the ladder invisible at exactly the moment it mattered — you
+ *  could see which model answered and never which rung sent it there. Absent
+ *  when Depths is off, because there is no rung to name.
+ *
+ *  A promoted turn shows both ends. That is the one badge worth clicking
+ *  through the noise for: it says the router judged this wrong and corrected
+ *  itself mid-turn. */
+function RungBadge({ run }: { run: SessionRun }): JSX.Element | null {
+  if (!run.depth) return null;
+  const promoted = run.depthPromotedFrom && run.depthPromotedFrom !== run.depth;
+  return (
+    <span
+      className={promoted ? "rung-badge promoted" : "rung-badge"}
+      title={
+        promoted
+          ? `Started on ${rungLabel(run.depthPromotedFrom ?? null)} and was promoted to ${rungLabel(run.depth)} — that rung spent its whole thinking budget without starting an answer.`
+          : `Depths judged this turn and routed it to ${rungLabel(run.depth)}.`
+      }
+    >
+      {promoted ? `${rungLabel(run.depthPromotedFrom ?? null)} → ${rungLabel(run.depth)}` : rungLabel(run.depth)}
+    </span>
+  );
+}
+
 /** Live-streaming counterpart of isPinnedRun, for turns still in flight
  *  (turn.run is undefined so routeLineText/run.steps aren't available yet).
  *  main.ts's plain-chat path (the common "pin a model, just chat" case)
@@ -7572,6 +7601,7 @@ function RouteLine({ run, withCaret }: { run: SessionRun; withCaret?: boolean })
         {withCaret ? <ChevronRight className="stage-caret" size={14} /> : null}
         <Waypoints size={13} />
         <span>{routeLineText(run)}</span>
+        <RungBadge run={run} />
         {ttftSuffix(run)}
       </summary>
       <div className="route-trace-body">
@@ -16961,6 +16991,51 @@ function SettingsWorkspace({
             <p>No metered runs yet — usage appears here as you use Metis.</p>
           )}
         </article>
+
+        {/* The rung ledger (docs/COMPETITIVE_SWEEP.md #4). A record of which
+            Depths rung served what, and deliberately NOT a savings claim — see
+            RUNG_LEDGER_NOTE and the header of shared/rung-ledger.ts. */}
+        {usageSummary?.byRung?.length ? (
+          <article className="settings-panel">
+            <header>
+              <span>
+                <small>Depths</small>
+                <h2>What each rung served</h2>
+              </span>
+            </header>
+            <table className="usage-table">
+              <thead>
+                <tr>
+                  <th>Rung</th>
+                  <th>Runs</th>
+                  <th>Tokens</th>
+                  <th>Promoted in</th>
+                  <th>Promoted out</th>
+                </tr>
+              </thead>
+              <tbody>
+                {usageSummary.byRung.map((row) => (
+                  <tr key={row.depth ?? "unrecorded"}>
+                    <td>{rungLabel(row.depth)}</td>
+                    <td>{row.runs}</td>
+                    <td>
+                      {row.estimated ? "~" : ""}
+                      {formatTokenCount(row.inputTokens + row.outputTokens)}
+                    </td>
+                    <td>{row.promotedIn || "—"}</td>
+                    <td>{row.promotedOut || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="settings-hint">{RUNG_LEDGER_NOTE}</p>
+            <p className="settings-hint">
+              <strong>Promoted</strong> counts the turns where routing corrected itself: a local rung spent its whole thinking budget
+              without starting an answer, so the turn was re-run one rung deeper. It is the only number here that measures the router
+              being wrong, which is why it is worth more than the totals beside it.
+            </p>
+          </article>
+        ) : null}
 
         <article className="settings-panel">
           <header>
