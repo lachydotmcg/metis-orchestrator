@@ -29,10 +29,20 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   **Still bounded, on purpose:** three hops, not the whole chain. A step cannot ask for a specific
   earlier step's output — that needs grammar, and the count is the cheap version that covers the
   shape people actually write.
-- **A step chain is a ring with no branches.** `stepIndex` only ever advances `(i + 1) % len`, so
-  there is no conditional edge, no jump to an earlier step, and no terminal step. A chain cannot
-  express "if this fails, go back and try again", and the only verdict the model gets to steer with
-  is the binary continue/stop.
+- ~~**A step chain is a ring with no branches.**~~ Partly fixed 2026-08-15: a chain can carry ONE
+  conditional edge. `--gate "synthesise fails -> draft" --gate-attempts 3` asks a model that did not
+  do the work for a PASS or FAIL after the named step, and a FAIL sends the program counter
+  backwards instead of forwards — the "Pass?" diamond from the reference flowchart, and the first
+  verdict in this grammar that decides *where* rather than only *whether*. A step can also name what
+  it produces (`draft as $draft`) and a later step can ask for it by name (`revise $draft`), which
+  makes explicit what the artifact channel already carried positionally.
+  **What is still a ring.** One gate per chain, not a general graph: no terminal step, no
+  parenthesised sub-chains, and no branch that is itself a chain — those need per-branch program
+  counters that do not exist. The gate is capped at 5 attempts, because a conditional edge with no
+  ceiling is an infinite loop wearing a condition and this one runs unattended. And **silence falls
+  through**: an unreadable verdict, an unreachable judge or a spent allowance all advance the chain
+  normally, so a gated chain degrades to exactly the chain it would have been without the gate.
+  Guessing FAIL on silence would turn a flaky judge into an infinite retry.
 - ~~**No token ceiling.**~~ Shipped 2026-07-24 (`0d48f27`): `/loop --budget 200k` sums the ledger's
   per-loop attribution before and after every turn and settles the loop at `exhausted` with both
   numbers in the reason.
@@ -240,12 +250,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 21 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 22 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
   into the store, the conversation-store race, the SVG render gate, the live model-catalogue
-  mappers, the loop walkthrough, the think-token ceiling, the per-reader retrieval policy, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+  mappers, the loop walkthrough, the think-token ceiling, the per-reader retrieval policy, the loop gate and named outputs, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
 - ~~**An SVG only renders when the model labels the fence `svg`.**~~ Fixed 2026-08-14. Found in
   first live use: Qwen3 8B answered a chart request with a correct, complete SVG inside an
   ```xml fence and it printed as code, because the renderer tested the LABEL and never reached

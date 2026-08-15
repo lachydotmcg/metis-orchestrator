@@ -4688,6 +4688,7 @@ function NewSessionWorkspace({
         fixedIntervalSeconds: parts.everySeconds,
         budgetTokens: parts.budgetTokens,
         steps: parts.steps,
+        gate: parts.gate,
         // Undefined on a brand-new session that has no conversation yet, in
         // which case main mints one and the loop's first turn creates it. Either
         // way the loop has a thread from the moment it exists.

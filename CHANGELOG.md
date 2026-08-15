@@ -154,6 +154,41 @@ engine referenced below.
 
 ### Added (2026-08-15)
 
+- **A step chain can name its outputs, and turn back on itself.**
+
+  ```
+  /loop --steps "plan -> draft as $draft -> review $draft as $notes -> revise $draft using $notes"
+  /loop --steps "plan -> draft -> synthesise -> publish" --gate "synthesise fails -> draft" --gate-attempts 3
+  ```
+
+  The gate is the "Pass?" diamond from the flowchart this feature was designed
+  against, and the first verdict in the grammar that decides **where** rather
+  than only **whether**. `stepIndex` had exactly two writers and both did
+  `(i + 1) % len`, so a chain could not express "if it fails, go back and try
+  again" no matter what any model said. Now, after the named step runs, a model
+  that did *not* do the work is asked PASS or FAIL, and a FAIL sends the counter
+  backwards.
+
+  Naming makes explicit what the handoff already carried positionally. A step
+  could always see recent outputs, but only as "whatever came before", never as
+  "the draft".
+
+  Four rules that are the feature rather than details of it. **Silence falls
+  through** — an unreadable verdict, an unreachable judge, or a spent attempt
+  allowance all advance the chain normally, so a gated chain is never worse than
+  an ungated one; guessing FAIL on silence would turn one flaky judge into an
+  infinite retry. **FAIL wins an ambiguous verdict**, which is the opposite of
+  the continue/stop rule and for the same reason: going back costs a turn, while
+  a wrong PASS ships the failure. **The gate is capped** at five attempts,
+  because a conditional edge with no ceiling is an infinite loop wearing a
+  condition and this one runs unattended. And **`as $name` never reaches the
+  model** — it is Metis's bookkeeping, and "draft the post as $draft" handed to
+  a 7B is an invitation to write the literal `$draft` into the answer.
+
+  A name used before anything declares it is refused in the composer, and so is
+  a forward reference: a chain is a ring, so a later declaration would work on
+  the second pass and not the first.
+
 - **A finished loop writes down what it did.** When a loop settles it writes
   `walkthrough.md` into the folder it worked in: the routing trace first, then
   the files it wrote, then what actually got checked, then the verdict.

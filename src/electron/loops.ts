@@ -24,7 +24,7 @@
  * Manager two actions it cannot perform.
  */
 
-import { formatStepChain, type LoopStepPosition } from "../shared/loop-command.js";
+import { formatStepChain, stepInstruction, stepVariableName, stepVariableRefs, type LoopGate, type LoopStepPosition } from "../shared/loop-command.js";
 import { findBlock } from "../shared/model-blocks.js";
 import type { WalkthroughFile, WalkthroughRouting } from "../shared/walkthrough.js";
 
@@ -317,6 +317,22 @@ export interface LoopRecord {
    *  moment every member has finished and the counter advances. Its
    *  presence is what tells a wake apart from a fresh arrival at the group. */
   currentGroup?: { startedAt: string; names: string[] };
+  /** The conditional edge (docs/FLOWCHART_LOOPS_V2.md piece 1), from
+   *  '--gate "synthesise fails -> draft"'. Absent on every chain that did not
+   *  ask for one. */
+  gate?: LoopGate;
+  /** How many times the gate has already sent the chain backwards. Counts up to
+   *  `gate.attempts` and then stops firing, so a step that cannot pass makes the
+   *  chain slower rather than eternal. Persisted rather than derived: history is
+   *  capped and a long loop would lose the early jumps, which would silently
+   *  hand the gate a fresh allowance. */
+  gateUsed?: number;
+  /** Outputs named with "as $name", newest write wins. Keyed lowercase.
+   *
+   *  This is naming what the artifact channel already carries: a step could
+   *  always see the last three outputs, but only positionally ("whatever came
+   *  before"), never by name ("the draft"). */
+  variables?: Record<string, string>;
 }
 
 /** What a flowchart loop should do THIS turn, or null for a plain goal loop.
@@ -742,7 +758,13 @@ export function composeWakePrompt(loop: LoopRecord): string {
   // A group position never composes a wake prompt — the tick launches its
   // members as helpers instead of running a work turn — so the defensive
   // join below only ever renders if a caller slips. Single steps lead.
-  const lines: string[] = [step ? (step.kind === "single" ? step.text : step.members.join(" and ")) : loop.goal, ""];
+  // stepInstruction drops the trailing "as $name": that half is Metis's
+  // bookkeeping, and "draft the post as $draft" handed to a 7B is an
+  // invitation to write the literal string "$draft" into the answer.
+  const lines: string[] = [
+    step ? (step.kind === "single" ? stepInstruction(step.text) : step.members.map(stepInstruction).join(" and ")) : loop.goal,
+    ""
+  ];
   if (step) {
     lines.push(`(Step ${step.index + 1} of ${step.total} in a repeating cycle: ${formatStepChain(loop.steps!)}.)`, "");
   }
@@ -790,6 +812,27 @@ export function composeWakePrompt(loop: LoopRecord): string {
     lines.push(")", "");
   }
 
+  // Named outputs this step actually asks for, and only those
+  // (docs/FLOWCHART_LOOPS_V2.md piece 1). Injecting every variable a chain has
+  // ever declared would be the artifact channel again with extra steps — the
+  // point of naming is that a step says which earlier output it means.
+  if (step) {
+    const members = step.kind === "single" ? [step.text] : step.members;
+    const wanted: string[] = [];
+    for (const member of members) {
+      for (const name of stepVariableRefs(member)) if (!wanted.includes(name)) wanted.push(name);
+    }
+    const available = wanted.filter((name) => (loop.variables?.[name] ?? "").trim());
+    if (available.length) {
+      lines.push("(Named outputs this step refers to:");
+      for (const name of available) {
+        lines.push(`--- $${name} ---`);
+        lines.push(captureArtifact(loop.variables?.[name] ?? "", LOOP_VARIABLE_LIMIT));
+      }
+      lines.push(")", "");
+    }
+  }
+
   // What the last turn's commands and checks actually PROVED. Sits below the
   // artifact and directly above the protocol block, so it is the last thing
   // read before the decision is asked for — the loop's own evidence should be
@@ -824,6 +867,104 @@ export function composeWakePrompt(loop: LoopRecord): string {
 
   lines.push(loopDecisionPromptBlock());
   return lines.join("\n");
+}
+
+/** How much of a named variable travels into a prompt. Same budget as one
+ *  artifact, for the same reason: this IS an artifact, given a name. */
+export const LOOP_VARIABLE_LIMIT = 3000;
+
+/** Whether the gate should be consulted after this turn.
+ *
+ *  Four ways to say no, and each is a different kind of "no": no gate was
+ *  configured, this turn was not the gated step, the turn did not produce a
+ *  verdict-able outcome, or the gate has already spent its attempts. Asking
+ *  anyway would cost a model call whose answer is discarded. */
+export function gateAppliesToTurn(loop: LoopRecord, positionIndex: number | null): boolean {
+  if (!loop.gate || positionIndex === null) return false;
+  if (loop.gate.at !== positionIndex) return false;
+  return (loop.gateUsed ?? 0) < loop.gate.attempts;
+}
+
+/** Reads PASS or FAIL out of a gate reply, or null when it said neither.
+ *
+ *  **Null falls through**, which is the same governing rule the whole feature
+ *  runs on: an unreadable answer degrades a gated chain to exactly the chain it
+ *  would have been without the gate. A gate that guessed FAIL on silence would
+ *  turn every flaky judge into an infinite retry, and one that guessed PASS
+ *  would make a broken judge look like a working one.
+ *
+ *  FAIL wins a reply containing both, mirroring extractLoopDecision's
+ *  ambiguity rule: going back is the recoverable direction — it costs a turn —
+ *  while a wrong PASS ships the failure. */
+export function extractGateVerdict(raw: string): "pass" | "fail" | null {
+  const cleaned = (raw ?? "")
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/i, "");
+  const candidates = cleaned
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^(pass|fail)\b/i.test(line))
+    // The prompt lists both words, and a model that echoes the menu before
+    // answering must not have its echo read as the answer.
+    .filter((line) => !/<.*?>/.test(line));
+  if (!candidates.length) return null;
+  if (candidates.some((line) => /^fail\b/i.test(line))) return "fail";
+  return "pass";
+}
+
+/** The prompt the gate judge is given.
+ *
+ *  It is told what the step was FOR and what actually ran, and nothing about
+ *  the loop's protocol — this call has one job. Same one-job-per-call rule
+ *  followups.ts learned the hard way and decideLoopContinuation inherited. */
+export function gatePromptFor(input: { goal: string; step: string; produced: string; evidence?: LoopEvidence[] }): string {
+  const evidenceLines: string[] = [];
+  if (input.evidence?.length) {
+    evidenceLines.push("WHAT ACTUALLY RAN, AND HOW IT ENDED:");
+    for (const item of input.evidence) {
+      const code = typeof item.exitCode === "number" ? ` (exit ${item.exitCode})` : "";
+      evidenceLines.push(`- ${item.label}: ${item.status}${code}${item.detail ? ` — ${item.detail}` : ""}`);
+    }
+    evidenceLines.push("");
+  }
+  return [
+    "One step of a background task just finished. Judge ONLY that step. You did not do this work.",
+    "",
+    "THE OVERALL GOAL:",
+    input.goal,
+    "",
+    "THE STEP THAT JUST RAN:",
+    stepInstruction(input.step),
+    "",
+    "WHAT IT PRODUCED:",
+    input.produced || "(nothing was reported)",
+    "",
+    ...evidenceLines,
+    "Answer with ONE word and nothing else:",
+    "  PASS   if that step did its job well enough to build on",
+    "  FAIL   if it needs redoing",
+    "",
+    "Judge the step, not the whole goal. Later steps have not run yet."
+  ].join("\n");
+}
+
+/** Where the program counter goes after a turn on a chain.
+ *
+ *  Three writers now, and this is the only one that can go BACKWARDS. The ring
+ *  is still the default — reaching the end starts again, because it is a loop —
+ *  and a gate FAIL is the single exception (docs/FLOWCHART_LOOPS_V2.md).
+ *
+ *  Kept pure and separate from the tick because "which step runs next" is the
+ *  one piece of loop state that a wrong answer makes unrecoverable: a counter
+ *  that jumps to the wrong place does not error, it just quietly runs the wrong
+ *  work forever. */
+export function nextStepIndex(loop: LoopRecord, verdict: "pass" | "fail" | null): number | undefined {
+  if (!loop.steps?.length) return loop.stepIndex;
+  const current = loop.stepIndex ?? 0;
+  if (verdict === "fail" && loop.gate && gateAppliesToTurn(loop, current % loop.steps.length)) {
+    return loop.gate.target;
+  }
+  return (current + 1) % loop.steps.length;
 }
 
 /** What a loop turn is CALLED in the conversation it lands in

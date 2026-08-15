@@ -267,7 +267,7 @@ declare global {
     // `stop` resolves undefined when the id is already gone.
     metisLoops?: {
       list: () => Promise<LoopRecord[]>;
-      create: (input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: (string | string[])[]; conversationId?: string }) => Promise<LoopRecord>;
+      create: (input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: (string | string[])[]; gate?: { at: number; target: number; attempts: number }; conversationId?: string }) => Promise<LoopRecord>;
       usage: (id: string) => Promise<{ inputTokens: number; outputTokens: number; turns: number; estimated: boolean }>;
       draftChain: (goal: string) => Promise<{ chain?: string; error?: string }>;
       stop: (id: string, reason?: string) => Promise<LoopRecord | undefined>;

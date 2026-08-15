@@ -110,10 +110,14 @@ import {
   currentLoopStep,
   decideLoopContinuation,
   assessLoopCapability,
+  extractGateVerdict,
   extractLoopDecision,
+  gateAppliesToTurn,
+  gatePromptFor,
   latestArtifact,
   loopTerminalReason,
   loopTurnLabel,
+  nextStepIndex,
   summariseTurn,
   type LoopEvidence,
   type LoopIterationRecord,
@@ -122,6 +126,8 @@ import {
   type LoopSpawnedAgent
 } from "./loops.js";
 import {
+  LOOP_COMMAND_DEFAULT_GATE_ATTEMPTS,
+  LOOP_COMMAND_MAX_GATE_ATTEMPTS,
   LOOP_COMMAND_MAX_GROUP,
   LOOP_COMMAND_MAX_INTERVAL_SECONDS,
   LOOP_COMMAND_MAX_STEPS,
@@ -130,6 +136,8 @@ import {
   countChainSteps,
   formatStepChain,
   parseStepChain,
+  stepVariableName,
+  type LoopGate,
   type LoopStepPosition
 } from "../shared/loop-command.js";
 import { runCliMode, type CliRuntime } from "./cli.js";
@@ -11065,6 +11073,11 @@ async function createLoop(input: {
   fixedIntervalSeconds?: number;
   budgetTokens?: number;
   steps?: LoopStepPosition[];
+  /** The conditional edge (docs/FLOWCHART_LOOPS_V2.md piece 1). Re-validated
+   *  here because this is reachable over IPC: both positions must be real
+   *  indices into the chain that actually got stored, or the tick would jump
+   *  the program counter somewhere that does not exist. */
+  gate?: LoopGate;
   /** The conversation the loop was started FROM, so its turns land where the
    *  person was standing when they started it (docs/ROADMAP.md). Absent when a
    *  loop is started from a brand-new session that has no conversation yet, or
@@ -11099,6 +11112,33 @@ async function createLoop(input: {
     while (validSteps.length > 0 && countChainSteps(validSteps) > LOOP_COMMAND_MAX_STEPS) validSteps = validSteps.slice(0, -1);
     if (validSteps.length < 2) validSteps = undefined;
   }
+  // The gate, re-validated against the chain that actually survived the
+  // normalisation above. A caller could send indices for a chain that then got
+  // truncated by the step cap, and a program counter pointed past the end is
+  // the one piece of loop state whose corruption is silent: it does not throw,
+  // it just runs the wrong step forever. Anything that does not check out drops
+  // the gate rather than the loop — a chain with no conditional edge is the
+  // behaviour this feature is a superset of.
+  const requestedGate = input.gate;
+  const validGate: LoopGate | undefined =
+    validSteps &&
+    requestedGate &&
+    Number.isInteger(requestedGate.at) &&
+    Number.isInteger(requestedGate.target) &&
+    requestedGate.at >= 0 &&
+    requestedGate.at < validSteps.length &&
+    requestedGate.target >= 0 &&
+    requestedGate.target < validSteps.length &&
+    // A group position runs as parallel helpers and never reaches a work turn,
+    // so there is no single output for a verdict to be about.
+    !Array.isArray(validSteps[requestedGate.at])
+      ? {
+          at: requestedGate.at,
+          target: requestedGate.target,
+          attempts: Math.min(LOOP_COMMAND_MAX_GATE_ATTEMPTS, Math.max(1, Math.floor(Number(requestedGate.attempts) || LOOP_COMMAND_DEFAULT_GATE_ATTEMPTS)))
+        }
+      : undefined;
+
   // A steps-only command has no separate goal text; the chain IS the goal,
   // and doubles as the record's label in the panel and audit log.
   const goal = (typeof input.goal === "string" ? input.goal.trim() : "") || (validSteps ? formatStepChain(validSteps) : "");
@@ -11154,6 +11194,8 @@ async function createLoop(input: {
     budgetTokens: normaliseBudgetTokens(input.budgetTokens),
     steps: validSteps,
     stepIndex: validSteps ? 0 : undefined,
+    gate: validGate,
+    gateUsed: validGate ? 0 : undefined,
     capabilityWarning: capability.warning,
     status: "sleeping",
     iterations: 0,
@@ -11436,6 +11478,7 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   let decision = runError ? null : extractLoopDecision(assistantText);
   let decisionAsked = false;
   let judgedBy: LoopIterationRecord["judgedBy"];
+  let gateVerdict: "pass" | "fail" | null = null;
   // Re-measured AFTER the work turn: runSessionTracked just appended this
   // turn's ledger rows, and the budget must count the spend that already
   // happened, not the total as of one turn ago.
@@ -11456,6 +11499,46 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       evidence: turnEvidence
     });
     judgedBy = judge.judgedBy();
+  }
+
+  // THE GATE (docs/FLOWCHART_LOOPS_V2.md piece 1). Asked only when this turn
+  // was the gated step, the step produced something, the loop is continuing,
+  // and the gate has attempts left — a verdict on a turn that already failed,
+  // or on a chain that is about to stop, is a model call whose answer nothing
+  // reads.
+  //
+  // The judge is loopJudgeInvoker, so it is NOT the model that did the work.
+  // Self-preference bias in LLM judges is well documented, and a step grading
+  // its own output is precisely the arrangement a gate exists to avoid.
+  if (!runError && decision?.decision === "continue" && gateAppliesToTurn(loaded, positionNow?.kind === "single" ? positionNow.index : null)) {
+    const gateJudge = loopJudgeInvoker(providerResultForDecision);
+    try {
+      const reply = await gateJudge.invoke(
+        gatePromptFor({
+          goal: loaded.goal,
+          step: positionNow?.kind === "single" ? positionNow.text : loaded.goal,
+          produced: captureArtifact(assistantText, 2000),
+          evidence: turnEvidence
+        })
+      );
+      // A placeholder is "no model was reachable", not a verdict. Reading it as
+      // one would turn an outage into an infinite retry.
+      gateVerdict = reply && reply.source !== "placeholder" ? extractGateVerdict(reply.output) : null;
+    } catch {
+      // Silence falls through: a gated chain with a broken judge degrades to
+      // exactly the chain it would have been without the gate.
+      gateVerdict = null;
+    }
+    if (gateVerdict === "fail") {
+      await appendAudit("info", "loop.gate", `Loop "${loopLabel(loaded)}" failed its gate on iteration ${index} and is going back a step.`, {
+        id,
+        iteration: index,
+        at: loaded.gate?.at,
+        target: loaded.gate?.target,
+        attempt: (loaded.gateUsed ?? 0) + 1,
+        attempts: loaded.gate?.attempts
+      });
+    }
   }
   const entry: LoopIterationRecord = {
     index,
@@ -11482,11 +11565,22 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     judgedBy
   };
 
+  // A step that declared "as $name" writes its output under that name
+  // (docs/FLOWCHART_LOOPS_V2.md piece 1). Newest write wins: a chain is a ring,
+  // so the second pass through "draft as $draft" should hand later steps the
+  // NEW draft, not the one from the first cycle.
+  const declaredName = positionNow?.kind === "single" ? stepVariableName(positionNow.text) : null;
+  const nextVariables =
+    declaredName && entry.artifact
+      ? { ...(loaded.variables ?? {}), [declaredName]: entry.artifact }
+      : loaded.variables;
+
   const finishedAt = new Date();
   const advanced: LoopRecord = {
     ...loaded,
     conversationId,
     iterations: index,
+    variables: nextVariables,
     history: [...loaded.history, entry],
     // Every branch below either leaves this cleared or sets a real wake, so a
     // terminal loop can never keep a wake time the scheduler would act on.
@@ -11621,8 +11715,11 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
         lastReason: decision.reason,
         // Flowchart loops: the program counter advances on every continue,
         // wrapping implicitly — reaching the end of the chain starts it
-        // again, because it is a loop (docs/FLOWCHART_LOOPS_DESIGN.md).
-        stepIndex: advanced.steps?.length ? ((advanced.stepIndex ?? 0) + 1) % advanced.steps.length : advanced.stepIndex,
+        // again, because it is a loop (docs/FLOWCHART_LOOPS_DESIGN.md) —
+        // UNLESS the gate just failed this step, which is the one edge in the
+        // grammar that goes backwards (docs/FLOWCHART_LOOPS_V2.md piece 1).
+        stepIndex: nextStepIndex(advanced, gateVerdict),
+        gateUsed: gateVerdict === "fail" ? (advanced.gateUsed ?? 0) + 1 : advanced.gateUsed,
         nextWakeAt: new Date(finishedAt.getTime() + delaySeconds * 1000).toISOString()
       };
       await appendAudit("info", "loop.tick", `Loop "${loopLabel(advanced)}" continues after iteration ${index}.`, {
@@ -14761,7 +14858,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-loops:list", () => listLoops());
   ipcMain.handle(
     "metis-loops:create",
-    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: (string | string[])[]; conversationId?: string }) =>
+    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: (string | string[])[]; gate?: { at: number; target: number; attempts: number }; conversationId?: string }) =>
       // origin is forced here, never taken from the caller: a renderer must not
       // be able to mint a "cli" loop and inherit the never-resume-on-launch
       // handling that belongs to a process that has since exited.

@@ -86,6 +86,41 @@ LLM judges is well documented, and this is a one-line change to the existing
 Cost: roughly 300–400 lines, one new persisted field, no new subsystem.
 `stepIndex` gains its third writer.
 
+### Built, 2026-08-15
+
+Both halves. Grammar and validation in `src/shared/loop-command.ts`
+(`stepVariableName`, `stepInstruction`, `stepVariableRefs`, `parseGateSpec`),
+runtime in `src/electron/loops.ts` (`extractGateVerdict`, `gatePromptFor`,
+`gateAppliesToTurn`, `nextStepIndex`), three persisted fields on `LoopRecord`
+(`gate`, `gateUsed`, `variables`). Suite 22, 62 assertions.
+
+Four things the note above did not say, three of them found by building it:
+
+- **The declaration is stripped before the model sees the step.** "draft the
+  post as $draft" handed to a 7B is an invitation to write the literal string
+  `$draft` into the answer. `as $name` is Metis's bookkeeping, not part of the
+  instruction, and `stepInstruction` is what the wake prompt and the gate judge
+  both read.
+- **A reference to an undeclared name is a parse error**, not a no-op, and it
+  must be to an EARLIER position. A chain is a ring, so a forward reference
+  would work on the second pass and not the first — the worst kind of
+  intermittent. Group members cannot reference each other either: they run side
+  by side and neither can see the other's output.
+- **The gate resolves names to POSITIONS at parse time.** Storing text would let
+  an edited chain silently repoint an edge at whatever step now carries those
+  words, and a program counter pointed at the wrong place does not error — it
+  quietly runs the wrong work forever. A group position cannot be gated at all,
+  since it returns before any work turn and has no single output to judge.
+- **FAIL wins an ambiguous verdict.** The opposite of `extractLoopDecision`'s
+  rule, and for the same reason: going back costs a turn, while a wrong PASS
+  ships the failure. Silence still falls through, so the safe default and the
+  ambiguous default point in different directions here on purpose.
+
+The "different model than the worker" is `loopJudgeInvoker`, which shipped for
+the continue-or-stop call a few hours earlier — so the gate cost one call site
+rather than the one-line change this note predicted, and inherits the
+falls-back-to-the-worker-and-says-so behaviour with it.
+
 ---
 
 ## Piece 2: role fan-out, and the AI writing the loop
