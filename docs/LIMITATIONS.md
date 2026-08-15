@@ -182,6 +182,15 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   precondition as above, and the same reason it is written down rather than fixed: an allowlist
   that has to cover every legitimate link the app opens is a change worth making deliberately.
 
+- **The model catalogue is hardcoded, so it goes stale silently.** Refreshed 2026-08-14
+  (docs/MODEL_CATALOGUE.md), which found DeepSeek's `deepseek-chat` and `deepseek-reasoner`
+  retired on 2026-07-24 and still being sent from eleven call sites — every DeepSeek route in
+  v1.2.0 was pointing at a dead id. Fixed, but the mechanism that let it happen is unchanged: a
+  list in source that nothing checks against a provider. OpenRouter publishes a free, no-auth
+  `/api/v1/models` carrying pricing, context, expiry dates and benchmark scores, and Ollama's
+  `/api/tags` cannot go stale because the weights are on disk. Until one of those is wired in,
+  assume this list is correct only on the day it was written.
+
 ## Verification
 
 - **CI now runs the offline suites on every push** (`.github/workflows`), 17 suites via

@@ -860,31 +860,36 @@ function findCatalogModelEntry(catalog: CatalogModel[], ref: ModelRef): CatalogM
   );
 }
 
+// Refreshed 2026-08-14 against provider documentation (docs/MODEL_CATALOGUE.md).
+// Names here are BRAND-SCOPED: PROVIDERS supplies the brand word, so a Gemini
+// entry is "3.7 Flash" rather than "Gemini 3.7 Flash".
+//
+// Entries removed rather than renamed, because the ids behind them are dead:
+// DeepSeek V3 and R1 (deepseek-chat / deepseek-reasoner retired 2026-07-24),
+// and GPT-5.1 / GPT-5 mini (the original GPT-5 family retires 2026-12-11 — not
+// worth putting in a curated library four months out).
 const MODEL_LIBRARY: ModelRef[] = [
-  { provider: "claude", model: "Opus 4.8" },
-  { provider: "claude", model: "Sonnet 5" },
+  { provider: "claude", model: "Opus 5" },
   { provider: "claude", model: "Fable 5" },
+  { provider: "claude", model: "Sonnet 5" },
   { provider: "claude", model: "Haiku 4.5" },
   { provider: "openai", model: "GPT-5.6 Sol" },
   { provider: "openai", model: "GPT-5.6 Terra" },
   { provider: "openai", model: "GPT-5.6 Luna" },
-  { provider: "openai", model: "GPT-5.1" },
-  { provider: "openai", model: "GPT-5 mini" },
+  { provider: "gemini", model: "3.7 Flash" },
   { provider: "gemini", model: "3.1 Pro" },
-  { provider: "gemini", model: "3.5 Flash" },
-  { provider: "gemini", model: "2.5 Pro" },
+  { provider: "gemini", model: "3.5 Flash-Lite" },
   { provider: "gemini", model: "2.5 Flash" },
-  { provider: "grok", model: "Grok 4.5" },
+  { provider: "grok", model: "Grok 4.6" },
   { provider: "grok", model: "Grok 4.3" },
+  { provider: "grok", model: "Grok Build 0.1" },
   { provider: "deepseek", model: "V4 Pro" },
   { provider: "deepseek", model: "V4 Flash" },
-  { provider: "deepseek", model: "V3" },
-  { provider: "deepseek", model: "R1" },
-  { provider: "qwen", model: "Qwen3.7 Max" },
-  { provider: "qwen", model: "Qwen2.5 72B" },
+  { provider: "qwen", model: "Qwen3.8 Max" },
+  { provider: "qwen", model: "Qwen3.7 Plus" },
   { provider: "qwen", model: "Qwen3 4B" },
   { provider: "glm", model: "GLM-5.2" },
-  { provider: "glm", model: "GLM-4.6" }
+  { provider: "glm", model: "GLM-4.7" }
 ];
 
 // Persisted via useAppStoreState("modelPresets", ...) — empty until Lachy
@@ -7493,31 +7498,74 @@ function providerLabel(provider: ProviderKey): string {
 // to a generic prettifier (strip provider prefixes, split on separators,
 // capitalize words, keep version dots/numbers intact).
 const PRETTY_MODEL_NAMES: Record<string, string> = {
-  "claude-sonnet-4-6": "Claude Sonnet 4.6",
-  "claude-sonnet-4-5": "Claude Sonnet 4.5",
-  "claude-opus-4-8": "Claude Opus 4.8",
-  "claude-opus-4-6": "Claude Opus 4.6",
+  // Anthropic. From 4.6 onward a DATELESS id is a pinned snapshot, not an
+  // evergreen pointer — appending a date to "claude-opus-5" 404s. Pre-4.6 is
+  // the opposite: the dated snapshot is canonical and the bare form floats.
+  "claude-opus-5": "Claude Opus 5",
   "claude-sonnet-5": "Claude Sonnet 5",
   "claude-fable-5": "Claude Fable 5",
+  "claude-mythos-5": "Claude Mythos 5",
+  // Kept although superseded: Anthropic's server-side refusal fallback routes
+  // cyber-category refusals to 4.8, so it can appear in a response you did not
+  // ask for it by name.
+  "claude-opus-4-8": "Claude Opus 4.8",
+  "claude-opus-4-7": "Claude Opus 4.7",
+  "claude-opus-4-6": "Claude Opus 4.6",
+  "claude-sonnet-4-6": "Claude Sonnet 4.6",
+  "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
   "claude-haiku-4-5": "Claude Haiku 4.5",
-  "gemini-3.1-pro": "Gemini 3.1 Pro",
+  "claude-sonnet-4-5-20250929": "Claude Sonnet 4.5",
+  "claude-sonnet-4-5": "Claude Sonnet 4.5",
+  "claude-opus-4-5-20251101": "Claude Opus 4.5",
+  "claude-opus-4-5": "Claude Opus 4.5",
+  // Google. The Developer API REQUIRES the -preview suffix on 3.1 Pro; the
+  // bare form is Vertex-only. The whole gemini-2.0 family is already dead.
+  "gemini-3.7-flash": "Gemini 3.7 Flash",
+  "gemini-3.6-flash": "Gemini 3.6 Flash",
   "gemini-3.5-flash": "Gemini 3.5 Flash",
+  "gemini-3.5-flash-lite": "Gemini 3.5 Flash-Lite",
+  "gemini-3.1-pro-preview": "Gemini 3.1 Pro",
+  "gemini-3.1-pro": "Gemini 3.1 Pro",
   "gemini-2.5-pro": "Gemini 2.5 Pro",
   "gemini-2.5-flash": "Gemini 2.5 Flash",
-  "gemini-2.0-flash": "Gemini 2.0 Flash",
-  "deepseek-chat": "DeepSeek V4 Flash",
-  "deepseek-reasoner": "DeepSeek V4 Pro",
+  "gemini-2.5-flash-lite": "Gemini 2.5 Flash-Lite",
+  // DeepSeek. First-party exposes exactly two ids, both floating, no dated
+  // snapshot. deepseek-chat and deepseek-reasoner were retired 2026-07-24.
+  "deepseek-v4-pro": "DeepSeek V4 Pro",
+  "deepseek-v4-flash": "DeepSeek V4 Flash",
+  // OpenRouter pins its bare alias to an OLDER snapshot than first-party, so
+  // matching first-party behaviour needs the dated form.
+  "deepseek/deepseek-v4-flash-0731": "DeepSeek V4 Flash",
   "deepseek-ai/deepseek-v3.1": "DeepSeek V3.1 (NVIDIA)",
-  "x-ai/grok-4.5": "Grok 4.5",
+  // xAI. Retired Grok ids silently REDIRECT to grok-4.3 and bill for it while
+  // returning 200, so they are deliberately absent rather than left to alias.
+  "grok-4.6": "Grok 4.6",
+  "grok-4.3": "Grok 4.3",
+  "grok-build-0.1": "Grok Build 0.1",
+  "x-ai/grok-4.6": "Grok 4.6",
   "x-ai/grok-4.3": "Grok 4.3",
+  // Zhipu. The pricing page renders "GLM-5.2"; the API accepts only lowercase.
+  "glm-5.2": "GLM-5.2",
+  "glm-4.7": "GLM-4.7",
+  "glm-4.7-flash": "GLM-4.7 Flash",
   "z-ai/glm-5.2": "GLM 5.2",
   "moonshotai/kimi-k2.6": "Kimi K2.6",
   "llama-3.3-70b-versatile": "Llama 3.3 70B (Groq)",
+  // OpenAI. gpt-oss-* and gpt-5.3-codex do NOT support Chat Completions on
+  // OpenAI's own API, so they are named but must not be routed there.
   "gpt-5.6-sol": "GPT-5.6 Sol",
   "gpt-5.6-terra": "GPT-5.6 Terra",
   "gpt-5.6-luna": "GPT-5.6 Luna",
-  "gpt-5.1": "GPT-5.1",
-  "gpt-5": "GPT-5",
+  "gpt-5.5": "GPT-5.5",
+  "gpt-5.5-pro": "GPT-5.5 Pro",
+  "gpt-5.4": "GPT-5.4",
+  "gpt-5.4-mini": "GPT-5.4 mini",
+  "gpt-5.4-nano": "GPT-5.4 nano",
+  "gpt-oss-120b": "GPT-OSS 120B",
+  "gpt-oss-20b": "GPT-OSS 20B",
+  "gpt-5.1": "GPT-5.1 (retires 2026-12-11)",
+  "gpt-5": "GPT-5 (retires 2026-12-11)",
+  "o3": "o3 (retires 2026-12-11)",
   "gpt-4.1": "GPT-4.1",
   "gpt-4o": "GPT-4o",
   "qwen3:1.7b": "Qwen3 1.7B",

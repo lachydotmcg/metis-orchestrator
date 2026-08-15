@@ -173,7 +173,7 @@ const providerInfo: Record<ProviderKey, { label: string; defaultModel?: string }
   anthropic: { label: "Anthropic", defaultModel: "claude-sonnet-4-6" },
   openai: { label: "OpenAI", defaultModel: "gpt-5.1" },
   gemini: { label: "Google Gemini", defaultModel: "gemini-2.5-pro" },
-  deepseek: { label: "DeepSeek", defaultModel: "deepseek-chat" },
+  deepseek: { label: "DeepSeek", defaultModel: "deepseek-v4-flash" },
   openrouter: { label: "OpenRouter", defaultModel: "auto" },
   // Free-tier pool providers (docs/FABLE_PLANS.md section 19, "Never Run Dry").
   // Both are OpenAI-chat-schema-compatible; see invokeCloudProvider below.
@@ -1417,7 +1417,13 @@ async function invokeCloudProvider(input: ProviderInvokeInput, secret: string, s
   }
 
   if (input.provider === "deepseek") {
-    const model = /r1|reason/i.test(input.model) ? "deepseek-reasoner" : "deepseek-chat";
+    // `deepseek-chat` and `deepseek-reasoner` were RETIRED on 2026-07-24 and
+    // now 404. DeepSeek's first-party API exposes exactly two ids, both
+    // floating aliases with no dated snapshot: deepseek-v4-pro and
+    // deepseek-v4-flash. Reasoning stopped being a separate model card and
+    // became a request parameter, so the old r1-vs-chat split maps onto the
+    // pro/flash pair rather than onto two model names.
+    const model = /pro|r1|reason/i.test(input.model) ? "deepseek-v4-pro" : "deepseek-v4-flash";
     const response = await fetchJson<{
       choices?: Array<{ message?: { content?: string } }>;
       usage?: { prompt_tokens?: number; completion_tokens?: number };
@@ -3742,7 +3748,7 @@ function applySessionRouteOverrides(prompt: string, decision: RouteDecision, rou
       selected_route: {
         kind: "cloud",
         provider: "deepseek",
-        model: "deepseek-chat",
+        model: "deepseek-v4-flash",
         availability: "available"
       },
       fallback_routes: [decision.selected_route, ...(decision.fallback_routes ?? [])],
@@ -5875,8 +5881,8 @@ const MODEL_DISPLAY_IDS: Partial<Record<ProviderKey, Record<string, string>>> = 
     "2.5 flash": "gemini-2.5-flash"
   },
   deepseek: {
-    v3: "deepseek-chat",
-    r1: "deepseek-reasoner"
+    v3: "deepseek-v4-flash",
+    r1: "deepseek-v4-pro"
   },
   openrouter: {
     "grok 4": "x-ai/grok-4"
@@ -5945,7 +5951,7 @@ function overrideDisplayLabel(override: SessionModelOverride): string {
 function defaultAgenticStages(prompt = "", override?: SessionModelOverride): StageConfig[] {
   const claude: StageModelRef = { provider: "anthropic", model: providerInfo.anthropic.defaultModel ?? "claude-sonnet-4-6" };
   const gemini: StageModelRef = { provider: "gemini", model: providerInfo.gemini.defaultModel ?? "gemini-2.5-pro" };
-  const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-chat" };
+  const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-v4-flash" };
   const stages: StageConfig[] = [
     { id: "plan", label: "Plan", chain: [gemini, claude, localStageRef()], templateRole: "plan" },
     { id: "frontend", label: "Front end", chain: [claude, deepseek, localStageRef()], templateRole: "frontend" },
@@ -8498,7 +8504,7 @@ function repairEvidence(project: ProjectToolResult): string {
 }
 
 function repairChainFor(override?: SessionModelOverride): StageModelRef[] {
-  const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-chat" };
+  const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-v4-flash" };
   const claude: StageModelRef = { provider: "anthropic", model: providerInfo.anthropic.defaultModel ?? "claude-sonnet-4-6" };
   const base: StageModelRef[] = [deepseek, claude, localStageRef()];
   if (!override) return base;
@@ -8543,7 +8549,7 @@ async function resolveManagerModelOverride(): Promise<StageModelRef | null> {
  *  entries so it isn't tried twice. */
 async function managerChatChain(): Promise<StageModelRef[]> {
   const claude: StageModelRef = { provider: "anthropic", model: providerInfo.anthropic.defaultModel ?? "claude-sonnet-4-6" };
-  const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-chat" };
+  const deepseek: StageModelRef = { provider: "deepseek", model: "deepseek-v4-flash" };
   const base: StageModelRef[] = [claude, deepseek, localStageRef()];
   const override = await resolveManagerModelOverride();
   if (!override) return base;
