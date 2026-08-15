@@ -70,6 +70,42 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **Metis remembers your other conversations.** Alongside project files, a chat
+  turn can now bring back what you worked out in a different thread, labelled
+  as earlier and separate rather than folded in with the current exchange.
+
+  The retrieval for this had existed since knowledge banks phase 2 — a local
+  embeddings index over past conversations, reachable over IPC — and nothing
+  called it. Its comment said "not wired into any prompt-assembly site yet",
+  which reads as an oversight and turned out to be load-bearing: wiring it as
+  written made the app **worse** in two independent ways, and both had to be
+  fixed first.
+
+  **The live thread was already in every prompt.** `recentConversationContext`
+  puts up to 3000 characters of the current conversation into every chat call,
+  so a search across all conversations retrieved that same thread back — paying
+  an embedding round-trip to duplicate text the model was already reading, and
+  spending its limited attention doing it. The current conversation is now
+  excluded, which is also what makes this worth having at all: the value is the
+  *other* threads.
+
+  **The index invalidated on every turn.** Its signature counts each
+  conversation's turn count and last-updated time, so finishing a turn changed
+  it, and a miss re-embeds up to 200 chunks through Ollama. On the chat path
+  that is a full re-index per message. A signature-stale cache is now reused for
+  ten minutes — deliberate staleness, correct here and nowhere else in the app,
+  because this index is only ever asked about *past* threads while the live one
+  is injected verbatim regardless. An undated cache still rebuilds: "unknown
+  age" must not mean "fresh forever".
+
+  It is sized by the same per-reader policy as file retrieval, so a small local
+  model gets one chunk over a strict floor and usually none — the design note's
+  "behind the tier policy, not unconditionally" instruction, honoured rather
+  than bolted on. And it is applied identically on the Oracle prewarm path,
+  because that prompt is hashed byte-for-byte against the live one and a block
+  on one side only would silently stop every exact-match serve. Suite 26 pins
+  both call sites and that they prepend in the same order.
+
 - **The models Metis installs for you can now be picked.** The Library gains a
   **Local** brand, and eleven models move into it: Llama 3.1 8B, Llama 4 Scout,
   Gemma 3 12B and 27B, Phi-4 and Phi-4 Mini, Mistral Small 24B, Moondream 2,

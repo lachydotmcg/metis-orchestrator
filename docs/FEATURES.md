@@ -220,11 +220,15 @@ The flag is therefore no longer a global on/off. It is an amount, chosen from th
 
 Nobody else can do this, because everybody else has one model behind the curtain. When the amount is reduced, the **"Grounded on N chunks"** row says why, so a retrieval that returns one chunk is never mistaken for a knowledge bank that has broken.
 
+**It remembers other conversations too.** Alongside your project files, Metis searches your past threads and can bring back what you worked out somewhere else — "you chose Postgres for the JSON columns" — as clearly-labelled background rather than as part of the current exchange. The thread you are in is deliberately excluded, because its recent turns are already in the prompt verbatim and retrieving them back would spend the model's attention on text it is already reading. It obeys the same per-reader amounts as file retrieval, so a small local model almost never sees any of it.
+
 The table above is the **Automatic** setting. You can override it to Minimal, Conservative or Full for every reader. Full is offered, and the control says in the same breath that on a model under 10B it is measurably worse than off — an override that hides what it costs is worse than no override.
 
 When retrieval succeeds you get a **"Grounded on N chunks"** row in the run, and it carries per-chunk provenance: file, chunk ordinal, and a snippet of each chunk. That is deliberate. You can spot a wrong or stale chunk steering an answer instead of wondering where a claim came from.
 
 **Honest limits:** this needs Ollama running with `nomic-embed-text` pulled. Without it the flag is on and nothing is retrieved. Every function in the path fails soft, returning null or an empty array on any error, so if embeddings are unavailable the run is byte-identical to one with no knowledge bank at all. It changes nothing and says nothing, which is correct behaviour but does mean a silent no-op is indistinguishable from "nothing relevant was found" unless you check that the model is pulled.
+
+On cross-conversation memory: its index is rebuilt at most every ten minutes rather than whenever the conversation store changes. The signature counts every conversation's turns, so finishing a turn invalidates it, and a rebuild re-embeds up to 200 chunks — on the chat path that would be a full re-index per message. Deliberate staleness is right here and nowhere else in the app, because this index is only ever asked about *past* threads while the current one is injected verbatim regardless.
 
 On the per-reader policy specifically: the size comes from the model **tag** (`qwen3:8b`), because Ollama's reported byte size folds quantisation in and a 4-bit 30B looks like an 8-bit 13B. A tag that does not state a size gets the middle posture rather than either extreme, since guessing rich on a hidden 7B reproduces the harm and guessing minimal on someone's 70B silently disables something that was working. The 10B line is the paper's own; the 32B line and the 0.55 floor are judgement calls, and the studies stop well before either.
 </details>

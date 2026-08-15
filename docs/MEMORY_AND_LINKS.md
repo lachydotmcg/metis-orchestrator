@@ -260,9 +260,36 @@ summary be the only surviving copy of something.
    already exist.
 3. **The manifest.**
 4. **One-hop pre-expansion with previews.**
-5. **Wire up the conversation-memory path that is already built and unreachable**
+5. ~~**Wire up the conversation-memory path that is already built and unreachable**
    (`metis-knowledge:searchConversations` exists and nothing calls it) — but
-   behind the tier policy from step 1, not unconditionally.
+   behind the tier policy from step 1, not unconditionally.~~ **Built
+   2026-08-16.** The path was not merely unwired; it was **unwireable as
+   written**, for two reasons neither this doc nor the code comment recorded,
+   and both had to be fixed before the wiring was an improvement rather than a
+   regression:
+
+   - **The live thread was already in every prompt.** `recentConversationContext`
+     puts up to 3000 characters of the current conversation into every chat
+     call. A semantic search over all conversations retrieves that same thread
+     back, paying an embedding round-trip to duplicate text the model is already
+     reading — and spending the reader's limited attention doing it, which is
+     the precise harm step 1's policy exists to bound. The current conversation
+     is now excluded, which is also what makes the feature worth having: the
+     value is the OTHER threads.
+   - **The index invalidated on every turn.** Its signature counts each
+     conversation's turn count and last-updated time, so finishing a turn
+     changes it, and a miss re-embeds up to 200 chunks through Ollama. On the
+     hot path that is a full re-index per message. A signature-stale cache is
+     now reused for ten minutes; staleness is correct *here specifically*
+     because this index is only ever asked about past conversations, and the
+     live one arrives verbatim regardless.
+
+   Sized by `retrievalPlanFor` with the same reader as file retrieval, so a
+   small local model gets one chunk over a 0.55 floor and usually none — the
+   "behind the tier policy, not unconditionally" instruction, honoured. Applied
+   identically on the Oracle prewarm path, because that prompt is hashed
+   byte-for-byte against the live one and a block on one side only would
+   silently stop every exact-match serve.
 6. Deterministic curation, then forgetting.
 
 Steps 1–3 are the ones that would change how the app behaves. The rest is

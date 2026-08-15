@@ -158,6 +158,7 @@ import {
 import { lineDiffCounts } from "../shared/line-diff.js";
 import { pickDepthRung } from "../shared/depth-stack.js";
 import { rollUpByRung, type RungRollup } from "../shared/rung-ledger.js";
+import { conversationMemoryBlock, excludeCurrentConversation, shouldRebuildConversationIndex } from "../shared/conversation-memory.js";
 import {
   RETRIEVAL_OVERRIDE_DEFAULT,
   describeRetrievalPosture,
@@ -7068,8 +7069,25 @@ async function buildOrLoadConversationIndex(): Promise<KnowledgeIndex | null> {
     const signature = conversationIndexSignature(conversations);
     const cachePath = conversationIndexCachePath();
     try {
-      const cached = JSON.parse(await readFile(cachePath, "utf8")) as KnowledgeIndex;
-      if (cached.signature === signature && cached.model === KNOWLEDGE_EMBED_MODEL && Array.isArray(cached.chunks)) {
+      const cached = JSON.parse(await readFile(cachePath, "utf8")) as KnowledgeIndex & { builtAt?: number };
+      const usable = cached.model === KNOWLEDGE_EMBED_MODEL && Array.isArray(cached.chunks);
+      // A signature MISS is tolerated while the cache is young
+      // (shared/conversation-memory.ts). The signature counts every
+      // conversation's turns and last-updated time, so finishing a turn
+      // invalidates it — and this index is now read on the chat hot path, where
+      // a miss means re-embedding up to 200 chunks through Ollama per message.
+      // Staleness is the right trade because the LIVE thread is already in the
+      // prompt verbatim via recentConversationContext; this index is only ever
+      // asked about other conversations.
+      if (
+        usable &&
+        !shouldRebuildConversationIndex({
+          cachedSignature: cached.signature ?? null,
+          currentSignature: signature,
+          cachedAt: typeof cached.builtAt === "number" ? cached.builtAt : null,
+          now: Date.now()
+        })
+      ) {
         return cached;
       }
     } catch {
@@ -7093,7 +7111,10 @@ async function buildOrLoadConversationIndex(): Promise<KnowledgeIndex | null> {
     };
     try {
       await mkdir(dirname(cachePath), { recursive: true });
-      await writeFile(cachePath, JSON.stringify(index), "utf8");
+      // builtAt is what the staleness rule reads. A cache without one is
+      // rebuilt rather than trusted — "unknown age" must not mean "fresh
+      // forever".
+      await writeFile(cachePath, JSON.stringify({ ...index, builtAt: Date.now() }), "utf8");
     } catch {
       /* cache write failure is non-fatal — the index is still usable this run */
     }
@@ -7108,7 +7129,12 @@ async function buildOrLoadConversationIndex(): Promise<KnowledgeIndex | null> {
  *  auto-built at startup). Returns [] on ANY failure or when the
  *  index/embedding is unavailable, or when nothing clears the similarity
  *  floor — mirrors retrieveKnowledge above exactly. */
-async function retrieveConversationContext(query: string, topK: number = KNOWLEDGE_TOP_K): Promise<RetrievedConversationChunk[]> {
+async function retrieveConversationContext(
+  query: string,
+  topK: number = KNOWLEDGE_TOP_K,
+  similarityFloor: number = KNOWLEDGE_SIMILARITY_FLOOR,
+  excludeConversationId?: string
+): Promise<RetrievedConversationChunk[]> {
   try {
     const index = await buildOrLoadConversationIndex();
     if (!index || index.chunks.length === 0) return [];
@@ -7122,11 +7148,42 @@ async function retrieveConversationContext(query: string, topK: number = KNOWLED
         text: chunk.text,
         score: cosineSimilarity(queryVector, chunk.vector)
       }))
-      .filter((chunk) => chunk.score >= KNOWLEDGE_SIMILARITY_FLOOR)
+      .filter((chunk) => chunk.score >= similarityFloor)
       .sort((a, b) => b.score - a.score);
-    return scored.slice(0, topK);
+    // The live thread is already in the prompt verbatim
+    // (recentConversationContext), so retrieving it back spends the reader's
+    // limited attention on text it has already been given.
+    return excludeCurrentConversation(scored, excludeConversationId).slice(0, topK);
   } catch {
     return [];
+  }
+}
+
+/** Cross-conversation memory for a prompt-assembly site
+ *  (docs/MEMORY_AND_LINKS.md build order step 5).
+ *
+ *  Sized by the SAME per-reader policy as file retrieval, and for the same
+ *  measured reason: at 7B, injected context destroyed 42–57% of answers the
+ *  model had previously got right unaided. A second unconditional injection on
+ *  top of the first would double exactly the harm that policy exists to bound —
+ *  which is why the design note said to wire this "behind the tier policy, not
+ *  unconditionally".
+ *
+ *  Returns null rather than an empty string when there is nothing to add, so a
+ *  caller cannot accidentally prepend a blank block. */
+async function conversationMemoryForPrompt(
+  query: string,
+  conversationId: string | undefined,
+  reader?: { provider: string; model: string }
+): Promise<string | null> {
+  try {
+    if (!(await readStoreValue<boolean>("knowledgeBankEnabled", true))) return null;
+    const override = await readStoreValue<RetrievalOverride>("retrievalPosture", RETRIEVAL_OVERRIDE_DEFAULT);
+    const plan = retrievalPlanFor(reader, { richTopK: KNOWLEDGE_TOP_K, baseFloor: KNOWLEDGE_SIMILARITY_FLOOR }, override);
+    const chunks = await retrieveConversationContext(query, plan.topK, plan.similarityFloor, conversationId);
+    return conversationMemoryBlock(chunks, KNOWLEDGE_CONTEXT_CHAR_CAP) || null;
+  } catch {
+    return null;
   }
 }
 
@@ -10062,6 +10119,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     emitTimeline(stream, { id: randomUUID(), kind: "operations", title: chatKnowledge.operation.label, operationIds: [chatKnowledge.operation.id] });
   }
   let sessionPrompt = await sessionProviderPrompt(prompt, effectiveDecision, pipelineName, previousRun, projectSnapshot, chatDesignSeed, metisFile, chatConversationContext, chatKnowledge?.block, !fastLane);
+  // Cross-conversation memory, sized by the same per-reader policy as file
+  // retrieval and excluding the live thread (which chatConversationContext has
+  // already put in this prompt verbatim). Skipped on the fast lane for the
+  // reason the fast lane exists: a two-word turn should not pay for an
+  // embedding round-trip.
+  const chatMemory = fastLane ? null : await conversationMemoryForPrompt(prompt, input.conversationId, { provider, model });
+  if (chatMemory) sessionPrompt = `${chatMemory}${sessionPrompt}`;
   if (images.length > 0) {
     sessionPrompt += attachmentNoteFor(images.length);
   }
@@ -12583,7 +12647,7 @@ async function assembleChatPrewarmPrompt(draft: string, context?: PrewarmContext
     // retrieval policy applied on the live path and not here would silently
     // stop every exact-match serve rather than fail loudly.
     const knowledge = fastLane ? null : await retrieveKnowledgeForPrompt(workspace?.path, draft, reader);
-    return sessionProviderPrompt(
+    const assembled = await sessionProviderPrompt(
       draft,
       effectiveDecision,
       pipelineName,
@@ -12595,6 +12659,14 @@ async function assembleChatPrewarmPrompt(draft: string, context?: PrewarmContext
       knowledge?.block,
       !fastLane
     );
+    // Same lockstep rule as the knowledge block above, and the same
+    // consequence for getting it wrong: this prompt is hashed and matched
+    // byte-for-byte against the live one, so a block prepended there and not
+    // here silently stops every exact-match serve. It must also be prepended
+    // in the SAME order — after assembly, ahead of everything else — because
+    // "the same bytes in a different order" is a different hash.
+    const memory = fastLane ? null : await conversationMemoryForPrompt(draft, context.conversationId, reader);
+    return memory ? `${memory}${assembled}` : assembled;
   } catch {
     return null;
   }
