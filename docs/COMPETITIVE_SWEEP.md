@@ -72,6 +72,27 @@ so it belongs at the top of the file, not in a footnote.
 A pure `formatWalkthrough(run, snapshot, ledgerRows): string` in `src/shared/`
 plus one `writeFile` call site. Nothing added to `App.tsx`. A weekend.
 
+**Built, 2026-08-15.** `src/shared/walkthrough.ts`, one call site in
+`fireLoopTick` when the loop settles, and `19-walkthrough` in the offline suite.
+`App.tsx` got 18 lines SHORTER: the Usage tab's cost formatting moved into
+`shared/model-catalogue` so the walkthrough and the Usage tab render money
+through one function instead of two that drift.
+
+Three things the design above got wrong, found by building it:
+
+- **The ledger was the wrong source.** It rolls off at 5000 rows and has never
+  carried the judged depth — the one column that makes the trace worth
+  printing. Routing is now captured onto the iteration record at the tick, not
+  joined afterwards.
+- **Snapshot ids are not reachable.** `writeGeneratedFileSet` sends its id to
+  the audit log and the `lastProjectSnapshot` key and never onto the run, so
+  there is no per-turn id to print. The file points at the revert control
+  instead. Threading it is a separate change.
+- **Helpers have no row and cannot have one.** A helper runs in its own
+  conversation, so it is not a turn. It is named, and the file states that the
+  totals understate whenever helpers ran, rather than presenting a total that
+  looks complete.
+
 ### 2. Give the loop verdict to the local router, not the working model
 
 Swap the invoker at `main.ts:11139` from `followupInvokerFor(...)` to the local

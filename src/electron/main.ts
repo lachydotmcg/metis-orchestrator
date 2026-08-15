@@ -86,7 +86,15 @@ import type {
   GatewayStatus
 } from "../shared/runtime-contracts.js";
 import { findBlock, stripBlock } from "../shared/model-blocks.js";
-import { mapOllamaTag, mapOpenRouterModel, mergeCatalogModels, type OllamaTag, type OpenRouterModel } from "../shared/model-catalogue.js";
+import {
+  mapOllamaTag,
+  mapOpenRouterModel,
+  mergeCatalogModels,
+  routePricing,
+  type OllamaTag,
+  type OpenRouterModel
+} from "../shared/model-catalogue.js";
+import { formatWalkthrough, walkthroughFileName, type WalkthroughFile, type WalkthroughRouting } from "../shared/walkthrough.js";
 import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
@@ -98,6 +106,7 @@ import {
   captureArtifact,
   composeWakePrompt,
   evidenceFromOperations,
+  filesFromOperations,
   currentLoopStep,
   decideLoopContinuation,
   assessLoopCapability,
@@ -11132,6 +11141,8 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
    *  work, falling back to the local one when the work path produced none. */
   let providerResultForDecision: ProviderInvokeResult | undefined;
   let turnEvidence: LoopEvidence[] = [];
+  let turnRouting: WalkthroughRouting | undefined;
+  let turnFiles: WalkthroughFile[] = [];
   // What the turn needed a human for. A loop has no window, so an ask that
   // reaches here is one nobody can answer — the run parks rather than
   // proceeding on the default (docs/ROADMAP.md, feedback channel face 2).
@@ -11181,6 +11192,22 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // The feedback channel. These were always on the run; the tick just never
     // looked at them (docs/ROADMAP.md, the loop feedback channel design note).
     turnEvidence = evidenceFromOperations(run.operations ?? []);
+    turnFiles = filesFromOperations(run.operations ?? []);
+    // The routing trace, captured here rather than joined from the usage ledger
+    // later: the ledger rolls off at 5000 rows and has never carried the judged
+    // depth, which is the one column of the walkthrough no competitor can
+    // print (docs/COMPETITIVE_SWEEP.md, shortlist item 1).
+    const runDurationMs =
+      run.createdAt && run.completedAt ? Math.max(0, Date.parse(run.completedAt) - Date.parse(run.createdAt)) : undefined;
+    turnRouting = {
+      ...(run.providerResult?.provider ? { provider: run.providerResult.provider } : {}),
+      ...(run.providerResult?.model ? { model: run.providerResult.model } : {}),
+      ...(run.depth ? { depth: run.depth } : {}),
+      ...(typeof run.providerResult?.usage?.inputTokens === "number" ? { inputTokens: run.providerResult.usage.inputTokens } : {}),
+      ...(typeof run.providerResult?.usage?.outputTokens === "number" ? { outputTokens: run.providerResult.usage.outputTokens } : {}),
+      ...(run.providerResult?.usage?.estimated ? { estimated: true } : {}),
+      ...(Number.isFinite(runDurationMs) && runDurationMs ? { durationMs: runDurationMs } : {})
+    };
   } catch (error) {
     runError = error instanceof Error ? error.message : String(error);
     runCancelled = isCancellationError(error);
@@ -11226,7 +11253,12 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // Which step produced it, so a later step can tell the draft from the
     // critique rather than guessing at three unlabelled blobs.
     step: positionNow?.kind === "single" ? positionNow.text : undefined,
-    evidence: turnEvidence.length ? turnEvidence : undefined
+    evidence: turnEvidence.length ? turnEvidence : undefined,
+    // Absent rather than empty when the turn never reached a provider, so the
+    // walkthrough can say "not judged" instead of inventing a routing row for a
+    // turn that did not route.
+    routing: turnRouting && Object.keys(turnRouting).length ? turnRouting : undefined,
+    files: turnFiles.length ? turnFiles : undefined
   };
 
   const finishedAt = new Date();
@@ -11411,7 +11443,89 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   if (finalRecord && finalRecord.status === "sleeping" && decision?.decision === "continue" && decision.spawn?.length) {
     launchLoopWorkers(finalRecord, decision.spawn);
   }
+  // The loop is over: leave the owner an account of it. Never on a "sleeping"
+  // record — a walkthrough rewritten every turn is a file whose modified time
+  // means nothing and whose contents are always provisional.
+  if (finalRecord && finalRecord.status !== "sleeping") await writeLoopWalkthrough(finalRecord);
   return finalRecord;
+}
+
+/** Writes `walkthrough.md` into the folder the loop worked in, once, when the
+ *  loop settles (docs/COMPETITIVE_SWEEP.md, shortlist item 1).
+ *
+ *  Three refusals worth stating, because each is the difference between a
+ *  useful report and an unwelcome one:
+ *
+ *  - **Plan mode writes nothing.** "plan" means Metis does not touch the disk,
+ *    and a report is still a file appearing in someone's repo. The account is
+ *    still in the app either way.
+ *  - **A project folder or nothing.** No app-data fallback: a walkthrough
+ *    filed somewhere the owner will never look is worse than absent, because
+ *    it reads as delivered.
+ *  - **It never overwrites a file it did not write.** See walkthroughFileName.
+ *
+ *  Failure here is logged and swallowed. A read-only folder must not turn a
+ *  loop that finished its work into a loop that reports as failed. */
+async function writeLoopWalkthrough(loop: LoopRecord): Promise<void> {
+  if (!loop.projectPath || loop.permissionMode === "plan") return;
+  if (!loop.history.length) return;
+  try {
+    const root = resolve(loop.projectPath);
+    // The folder can be gone by now: a loop outlives the session that made it,
+    // and an unattended run is exactly when a drive gets unplugged. Recreating
+    // it to hold a report would be Metis inventing a directory nobody asked
+    // for.
+    if (!(await stat(root).then((info) => info.isDirectory()).catch(() => false))) return;
+    // Priced from the catalogue at write time. A model that has since left the
+    // catalogue simply has no price, and the walkthrough says so rather than
+    // guessing — same rule as the Usage tab, same function.
+    const catalog = await readStoreValue<CatalogModel[]>("modelCatalog", []);
+    const pricing: Record<string, { in: number; out: number }> = {};
+    for (const turn of loop.history) {
+      const provider = turn.routing?.provider;
+      const model = turn.routing?.model;
+      if (!provider || !model) continue;
+      const found = routePricing(catalog, provider, model);
+      if (found) pricing[`${provider}::${model}`] = found;
+    }
+    const body = formatWalkthrough({
+      loopId: loop.id,
+      goal: loop.goal,
+      status: loop.status,
+      stoppedReason: loop.stoppedReason,
+      createdAt: loop.createdAt,
+      finishedAt: new Date().toISOString(),
+      projectPath: root,
+      chain: loop.steps?.length ? formatStepChain(loop.steps) : undefined,
+      budgetTokens: loop.budgetTokens,
+      history: loop.history,
+      helpers: loop.spawnedAgents?.map((agent) => ({ name: agent.name, status: agent.status, task: agent.task })),
+      pricing
+    });
+    // Look at the target before overwriting it. Only the head is read: enough
+    // to recognise Metis's own marker, cheap on a large file that happens to
+    // share the name.
+    const preferred = join(root, "walkthrough.md");
+    let head: string | null = null;
+    try {
+      const handle = await readFile(preferred, "utf8");
+      head = handle.slice(0, 400);
+    } catch {
+      head = null;
+    }
+    const target = join(root, walkthroughFileName(head, loop.id));
+    await writeFile(target, body, "utf8");
+    await appendAudit("info", "loop.walkthrough", `Wrote a walkthrough for loop "${loopLabel(loop)}".`, {
+      id: loop.id,
+      path: target,
+      turns: loop.history.length
+    });
+  } catch (error) {
+    await appendAudit("warning", "loop.walkthrough.failed", `Could not write the walkthrough for loop "${loopLabel(loop)}".`, {
+      id: loop.id,
+      error: error instanceof Error ? error.message : String(error)
+    });
+  }
 }
 
 /** "--flowchart" (docs/FLOWCHART_LOOPS_DESIGN.md): asks a model to PROPOSE a

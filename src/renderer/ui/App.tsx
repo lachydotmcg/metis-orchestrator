@@ -165,6 +165,7 @@ import type { LoopRecord } from "../../electron/loops";
 // promise something different from what the command will actually do.
 import { describeLoopCommand, formatLoopDuration, formatStepChain, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
 import { fenceMayBeSvg, isRenderableSvg, svgDataUrl } from "../../shared/svg-artifact";
+import { costLabel, routePricing } from "../../shared/model-catalogue";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
 
@@ -15371,27 +15372,11 @@ type UsageSummaryData = Awaited<ReturnType<NonNullable<Window["metisUsage"]>["su
 // a plausible retail tariff. Both editable in the Usage tab.
 const DEFAULT_LOCAL_COST_CONFIG: { watts: number; perKwh: number } = { watts: 350, perKwh: 0.3 };
 
-/** Finds the $/Mtok pricing of the catalog route matching the SERVING
- *  provider + model id recorded on a ledger row (docs/DRILL_PLAN.md B12.2).
- *  Null when unknown - unknown never renders as $0, it renders as a dash. */
-function usageRoutePricing(catalog: CatalogModel[], provider: string, model: string): { in: number; out: number } | null {
-  for (const entry of catalog) {
-    const route = (entry.access ?? []).find((candidate) => candidate.provider === provider && candidate.id === model);
-    if (route?.pricing) return route.pricing;
-  }
-  return null;
-}
-
-/** Display-only cost estimate for one usage rollup row. Local (ollama) rows
- *  are honestly "Free"; rows with no known route pricing get a dash rather
- *  than a fake zero; estimated token counts get a ~ prefix. */
+/** Display-only cost estimate for one usage rollup row (docs/DRILL_PLAN.md
+ *  B12.2). The rule itself lives in shared/model-catalogue so the Usage tab and
+ *  the loop walkthrough cannot drift apart on how money is rendered. */
 function usageCostLabel(catalog: CatalogModel[], row: { provider: string; model: string; inputTokens: number; outputTokens: number; estimated: boolean }): string {
-  if (row.provider === "ollama") return "Free";
-  const pricing = usageRoutePricing(catalog, row.provider, row.model);
-  if (!pricing) return "—";
-  const cost = (row.inputTokens * pricing.in + row.outputTokens * pricing.out) / 1_000_000;
-  const prefix = row.estimated ? "~" : "";
-  return cost >= 0.01 ? `${prefix}$${cost.toFixed(2)}` : `${prefix}<$0.01`;
+  return costLabel(routePricing(catalog, row.provider, row.model), row);
 }
 
 function SettingsWorkspace({

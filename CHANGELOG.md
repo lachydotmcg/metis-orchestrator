@@ -14,6 +14,33 @@ engine referenced below.
 
 ### Added (2026-08-15)
 
+- **A finished loop writes down what it did.** When a loop settles it writes
+  `walkthrough.md` into the folder it worked in: the routing trace first, then
+  the files it wrote, then what actually got checked, then the verdict.
+
+  The routing trace leads on purpose. Every agent that writes a run report can
+  tell you which files it touched, and each of them reconstructs that report
+  from its own tool calls afterwards. Metis has the difficulty the router
+  judged, the model that served the turn and the tokens it used as typed
+  records the instant the turn ends, so "turn 1 was judged trivial and ran
+  local for nothing, turn 2 was judged deep and went to Opus 5 for twenty
+  cents" is a read rather than an inference. That line is the product's whole
+  argument, stated in evidence.
+
+  It stays out of the way. Nothing in `plan` mode, nothing when the loop has no
+  project folder, and it never overwrites a `walkthrough.md` it did not write —
+  a foreign file gets a suffixed sibling, because an unattended loop clobbering
+  a document is discovered late or never.
+
+  Two things it refuses to round off: a turn on a model with no catalogue price
+  is excluded from the total and counted in a footnote rather than summed in as
+  zero, and helper turns are named but have no row, so the file says outright
+  that its totals understate whenever helpers ran.
+
+  The Usage tab's cost formatting moved into `shared/model-catalogue` on the
+  way through, so the walkthrough and the Usage tab now render money through
+  one function. `App.tsx` came out 18 lines shorter than it went in.
+
 - **The model catalogue asks providers what they serve.** A refresh now
   fetches OpenRouter's `/api/v1/models` and Ollama's `/api/tags` from the
   main process and merges them over the bundled list, dropping anything past

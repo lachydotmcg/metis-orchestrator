@@ -53,6 +53,21 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   happen on the desktop and the loop is restarted, because the pending maps still store only the
   resolver and never the request, so nothing can enumerate what was asked. Answering a permission
   prompt over HTTP is also a grant made remotely, which is a decision rather than a refactor.
+- ~~**A finished loop left no account of itself.**~~ Fixed 2026-08-15: a loop that settles writes
+  `walkthrough.md` into the folder it worked in — the routing trace first (difficulty judged, model
+  that served it, tokens, cost, per turn), then the files, then what actually got checked, then the
+  verdict. The routing trace leads because it is the line no competitor can print: everyone else
+  reconstructs a run report from their own tool calls afterwards, and Metis has the depth judgement
+  and the serving model as typed records at the moment each turn ends.
+  **Four honest edges.** It is skipped entirely in `plan` mode and when the loop has no project
+  folder, because a report filed somewhere nobody looks reads as delivered when it is not. It never
+  overwrites a `walkthrough.md` it did not write — a foreign file gets a suffixed sibling instead,
+  since an unattended loop clobbering a document is discovered late or never. The table has **no
+  snapshot ids**: the snapshot id from `writeGeneratedFileSet` reaches the audit log and the
+  `lastProjectSnapshot` key but was never threaded onto the run, so the file points at the revert
+  control rather than at a specific backup. And helper turns are named but have no row, because a
+  helper runs in its own conversation — so the cost total understates whenever helpers ran, which
+  the file says outright rather than quietly.
 - **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
   are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
   is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the
@@ -198,12 +213,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 18 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 19 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
   into the store, the conversation-store race, the SVG render gate, the live model-catalogue
-  mappers, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+  mappers, the loop walkthrough, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
 - ~~**An SVG only renders when the model labels the fence `svg`.**~~ Fixed 2026-08-14. Found in
   first live use: Qwen3 8B answered a chart request with a correct, complete SVG inside an
   ```xml fence and it printed as code, because the renderer tested the LABEL and never reached

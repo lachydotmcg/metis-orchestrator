@@ -120,6 +120,42 @@ export function mergeCatalogModels(bundled: CatalogModel[], live: CatalogModel[]
   return [...merged.values()].filter((model) => !isExpiredCatalogModel(model, now));
 }
 
+/** The $/Mtok of the catalogue route matching a SERVING provider + model id,
+ *  or null when nothing in the catalogue covers it.
+ *
+ *  Null is the honest answer and must stay distinguishable from free: a route
+ *  Metis has no price for is not a route that costs nothing. */
+export function routePricing(catalog: readonly CatalogModel[], provider: string, model: string): { in: number; out: number } | null {
+  for (const entry of catalog) {
+    const route = (entry.access ?? []).find((candidate) => candidate.provider === provider && candidate.id === model);
+    if (route?.pricing) return route.pricing;
+  }
+  return null;
+}
+
+/** Display-only cost for one billed row, as the Usage tab and the loop
+ *  walkthrough both render it.
+ *
+ *  Shared rather than duplicated on purpose: two places formatting money from
+ *  the same ledger with independently-written rules is how one of them ends up
+ *  quietly rounding a different way from the other. Three honesty rules are
+ *  carried here:
+ *   - a local (`ollama`) row is "Free", because it genuinely is;
+ *   - an unknown price is an em dash, never `$0.00`, because "we do not know"
+ *     and "it cost nothing" are different claims;
+ *   - an estimated token count keeps its `~`, so a char-count guess never
+ *     renders with the authority of a provider-reported number. */
+export function costLabel(
+  pricing: { in: number; out: number } | null,
+  row: { provider: string; inputTokens: number; outputTokens: number; estimated?: boolean }
+): string {
+  if (row.provider === "ollama") return "Free";
+  if (!pricing) return "—";
+  const cost = (row.inputTokens * pricing.in + row.outputTokens * pricing.out) / 1_000_000;
+  const prefix = row.estimated ? "~" : "";
+  return cost >= 0.01 ? `${prefix}$${cost.toFixed(2)}` : `${prefix}<$0.01`;
+}
+
 /** The providers a live fetch can populate, so callers do not guess. */
 export const LIVE_CATALOG_SOURCES: ReadonlyArray<{ provider: ProviderKey; url: string; needsAuth: boolean }> = [
   { provider: "openrouter", url: "https://openrouter.ai/api/v1/models", needsAuth: false },

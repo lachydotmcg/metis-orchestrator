@@ -26,6 +26,7 @@
 
 import { formatStepChain, type LoopStepPosition } from "../shared/loop-command.js";
 import { findBlock } from "../shared/model-blocks.js";
+import type { WalkthroughFile, WalkthroughRouting } from "../shared/walkthrough.js";
 
 /** Hard ceiling on iterations, even if a caller asks for more. A loop that
  *  needs 50 turns is a loop that has misunderstood its goal. */
@@ -160,6 +161,37 @@ export function evidenceFromOperations(
   return evidence;
 }
 
+/** How many files one turn reports having written. A turn that rewrote 200
+ *  files is a turn whose walkthrough row nobody reads; the count is stated
+ *  either way so the truncation cannot pass for the whole list. */
+export const LOOP_FILES_MAX = 20;
+
+/** Which files a turn wrote, for the walkthrough.
+ *
+ *  Deliberately NOT evidence (see evidenceFromOperations): a write reports that
+ *  something happened, not that it worked. This is the other half of the same
+ *  record — the reader wants both "what did it touch" and "what did it prove",
+ *  and conflating them is what lets a loop look verified because it was busy. */
+export function filesFromOperations(
+  operations: ReadonlyArray<{ kind?: string; target?: string; label?: string; addedLines?: number; removedLines?: number }>
+): WalkthroughFile[] {
+  if (!Array.isArray(operations)) return [];
+  const files: WalkthroughFile[] = [];
+  for (const operation of operations) {
+    if (operation?.kind !== "file_edit" && operation?.kind !== "file_create") continue;
+    const path = (operation.target ?? operation.label ?? "").trim();
+    if (!path) continue;
+    files.push({
+      path: path.slice(0, 200),
+      kind: operation.kind === "file_create" ? "create" : "edit",
+      ...(typeof operation.addedLines === "number" ? { addedLines: operation.addedLines } : {}),
+      ...(typeof operation.removedLines === "number" ? { removedLines: operation.removedLines } : {})
+    });
+    if (files.length >= LOOP_FILES_MAX) break;
+  }
+  return files;
+}
+
 /** Keeps the END of a string. See LoopEvidence.detail for why. */
 export function trimToTail(text: string, limit: number): string {
   const cleaned = (text ?? "").trim();
@@ -199,6 +231,19 @@ export interface LoopIterationRecord {
    *  blobs has to guess which is the draft and which is the critique, and
    *  guessing is what carrying them forward was meant to stop. */
   step?: string;
+  /** Where this turn was routed and what it cost, captured AT THE TICK.
+   *
+   *  Every competitor that writes a run report reconstructs it afterwards from
+   *  its own tool calls. Metis has the depth the router judged, the model that
+   *  answered and the usage it reported as typed values the moment the turn
+   *  ends, so the walkthrough's routing trace is a read rather than an
+   *  inference (docs/COMPETITIVE_SWEEP.md, shortlist item 1). Stored on the
+   *  record rather than joined from the usage ledger at write time because the
+   *  ledger keeps only the last 5000 rows and carries no depth. */
+  routing?: WalkthroughRouting;
+  /** Files this turn wrote. See filesFromOperations for why these are kept
+   *  apart from evidence. */
+  files?: WalkthroughFile[];
 }
 
 export interface LoopRecord {
