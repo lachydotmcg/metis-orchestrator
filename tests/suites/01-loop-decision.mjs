@@ -141,6 +141,35 @@ check("counts the turn", p2.includes("Loop turn 3 of 3"), true);
   check("a stop reason is not replayed as a directive", composeWakePrompt(stopped).includes("Why another turn was asked for"), false);
 }
 
+console.log("\nHOW A LOOP TURN READS IN THE CHAT IT RUNS IN");
+{
+  const { loopTurnLabel } = mod;
+  const running = { ...base, maxIterations: 5, goal: "Make the landing page load under a second" };
+  check("names the loop and how far through it is", loopTurnLabel(running, 2), "Loop turn 2 of 5 — Make the landing page load under a second");
+  // THE POINT OF THE LABEL. A loop turn's prompt is the wake prompt: the goal,
+  // a history digest, the helper list, the artifact and the protocol block.
+  // Storing that as the user's message puts several hundred characters of
+  // Metis talking to itself into the chat, attributed to a person who typed
+  // none of it.
+  const label = loopTurnLabel(running, 1);
+  check("it is not the wake prompt", label === composeWakePrompt(running), false);
+  check("no protocol block leaks into the chat", /metis-loop/.test(label), false);
+  check("no scaffolding leaks either", /do not redo|Helpers you already asked for/.test(label), false);
+  check("one line, always", label.includes("\n"), false);
+  // A chain turn is doing THIS STEP, not the whole chain. Labelling every turn
+  // with the goal would make five different turns look identical.
+  const chained = { ...base, maxIterations: 6, goal: "a -> b", steps: ["read the tests", "fix what fails"], stepIndex: 1 };
+  check("a chain turn names its step", loopTurnLabel(chained, 3), "Loop turn 3 of 6 — fix what fails");
+  const grouped = { ...base, maxIterations: 4, goal: "g", steps: ["draft", ["review", "critique"]], stepIndex: 1 };
+  check("a group names all its members", loopTurnLabel(grouped, 2), "Loop turn 2 of 4 — review and critique");
+  const wordy = { ...base, maxIterations: 3, goal: "x".repeat(200) };
+  check("a long goal is trimmed", loopTurnLabel(wordy, 1).length < 120, true);
+  check("and says it was trimmed", loopTurnLabel(wordy, 1).includes("…"), true);
+  // An empty goal cannot happen through createLoop, but a stored record from
+  // an older build could carry one, and a bare label beats a dangling dash.
+  check("an empty goal still labels the turn", loopTurnLabel({ ...base, maxIterations: 2, goal: "  " }, 1), "Loop turn 1 of 2");
+}
+
 console.log("\nFLOWCHART STEPS (currentLoopStep + wake prompt)");
 {
   const { currentLoopStep } = mod;

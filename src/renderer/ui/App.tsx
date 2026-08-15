@@ -4283,6 +4283,19 @@ function NewSessionWorkspace({
     [storedConversations, activeConversationId]
   );
 
+  /** Loop turns that have landed in this conversation since it was opened.
+   *
+   *  Read from `storedConversations`, which the poll above refreshes, rather
+   *  than by rewriting `history` — history is the snapshot taken when the
+   *  thread was opened, and replacing it under a live feed throws away the
+   *  reader's scroll position. Ids already in history are filtered out, so
+   *  reopening the thread later renders each turn exactly once. */
+  const loopTurnsHere = useMemo(() => {
+    if (!openStoredConversation) return [] as ConversationTurnRecord[];
+    const known = new Set(history.map((turn) => turn.id));
+    return openStoredConversation.turns.filter((turn) => turn.loop && !known.has(turn.id));
+  }, [openStoredConversation, history]);
+
   /** Slim per-conversation token line (DRILL_PLAN Phase 8): sums real
    *  providerResult.usage across every run in the active conversation's
    *  turns. Never estimates a total itself — only real recorded usage counts
@@ -4457,6 +4470,51 @@ function NewSessionWorkspace({
     return () => el.removeEventListener("scroll", onScroll);
   }, [sections]);
 
+  // A loop appends to this conversation from the BACKGROUND, between wakeups
+  // that can be an hour apart. Nothing pushes that to the renderer — every
+  // existing main-to-renderer channel is a reply inside an invoke, and a loop
+  // tick has no invoke to reply to — so the feed re-reads while a live loop is
+  // attached here, and only then.
+  //
+  // Cheap by construction: `list` is one small store read, and the conversation
+  // refetch fires only when the loop's iteration count actually MOVES. A
+  // sleeping loop with an hour to go costs one list call a minute and nothing
+  // else. Deliberately not a general "poll conversations" timer: the rest of
+  // the app has no writer behind its back and does not need one.
+  const [awaitedLoopConversation, setAwaitedLoopConversation] = useState<string | null>(null);
+  const loopIterationsRef = useRef<number | null>(null);
+  useEffect(() => {
+    const loops = window.metisLoops;
+    const watched = activeConversationId ?? awaitedLoopConversation;
+    if (!loops || !watched) return;
+    // Reset per watched conversation, so switching threads compares this
+    // loop's count against nothing rather than against the last one's.
+    loopIterationsRef.current = null;
+    let alive = true;
+    const tick = async (): Promise<void> => {
+      const all = await loops.list().catch(() => [] as LoopRecord[]);
+      if (!alive) return;
+      const mine = all.find((loop) => loop.conversationId === watched);
+      if (!mine) return;
+      if (loopIterationsRef.current !== mine.iterations) {
+        loopIterationsRef.current = mine.iterations;
+        onConversationsChanged?.();
+        // The thread a loop minted for itself exists only once its first turn
+        // has landed. This is that moment.
+        if (awaitedLoopConversation && mine.iterations > 0) {
+          onOpenConversationById?.(awaitedLoopConversation);
+          setAwaitedLoopConversation(null);
+        }
+      }
+    };
+    void tick();
+    const timer = window.setInterval(() => void tick(), 20_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [activeConversationId, awaitedLoopConversation, onConversationsChanged, onOpenConversationById]);
+
   // Opening a stored conversation from the sidebar loads its turns as read-only
   // history; new sends continue the same conversation below.
   const openConversationId = openConversation?.id;
@@ -4611,12 +4669,12 @@ function NewSessionWorkspace({
     );
   }
 
-  /** Starts a background loop from "/loop". Deliberately NOT a session run:
-   *  nothing streams into the conversation feed, because a loop's turns land in
-   *  its own thread over the following minutes and pretending otherwise would
-   *  leave a chat bubble that never fills in. The user gets a confirmation
-   *  naming where to watch and stop it, which is the honest report of what just
-   *  happened. */
+  /** Starts a background loop from "/loop". Still not a session run — a loop's
+   *  turns arrive over the following minutes, and a chat bubble that never
+   *  fills in would be a lie — but since 2026-08-15 those turns land in THIS
+   *  conversation rather than in a hidden one of the loop's own
+   *  (docs/ROADMAP.md). They appear in the feed as they finish, marked as the
+   *  loop's work rather than as replies. */
   async function startLoopFromCommand(parts: LoopCommandParts): Promise<void> {
     if (!window.metisLoops) {
       setLoopNotice({ tone: "error", text: "Loops need the desktop app." });
@@ -4629,12 +4687,22 @@ function NewSessionWorkspace({
         maxIterations: parts.turns,
         fixedIntervalSeconds: parts.everySeconds,
         budgetTokens: parts.budgetTokens,
-        steps: parts.steps
+        steps: parts.steps,
+        // Undefined on a brand-new session that has no conversation yet, in
+        // which case main mints one and the loop's first turn creates it. Either
+        // way the loop has a thread from the moment it exists.
+        conversationId: activeConversationId ?? undefined
       });
+      // A loop started from an empty new session has a conversation id but no
+      // conversation record until its first turn lands. Remembering it here is
+      // what lets the feed jump there the moment it exists, instead of leaving
+      // the person on a blank page reading "watch it in Settings".
+      if (!activeConversationId && loop.conversationId) setAwaitedLoopConversation(loop.conversationId);
       const pace = loop.fixedIntervalSeconds ? `every ${formatLoopDuration(loop.fixedIntervalSeconds)}` : "at its own pace";
       const budget = loop.budgetTokens ? ` and a ${formatTokenCount(loop.budgetTokens)}-token budget` : "";
       const cycle = loop.steps?.length ? ` cycling ${loop.steps.length} steps` : "";
-      const base = `Loop started${cycle}, up to ${loop.maxIterations} turns ${pace}${budget}. It is working now. Watch or stop it in Settings > Privacy & Data.`;
+      const where = activeConversationId ? "Its turns appear here as it finishes them" : "Its turns appear in their own thread as it finishes them";
+      const base = `Loop started${cycle}, up to ${loop.maxIterations} turns ${pace}${budget}. It is working now. ${where}, and you can stop it in Settings > Privacy & Data.`;
       // A capability warning goes FIRST, before the reassurance. It is the part
       // that changes what you should expect to happen, and burying it under
       // "it is working now" would be the wrong order to read them in.
@@ -5034,7 +5102,9 @@ function NewSessionWorkspace({
         {hasConversation ? (
           <section className="conversation-feed" aria-label="Conversation">
             {history.map((turn, index) =>
-              turn.role === "user" ? (
+              turn.loop ? (
+                <LoopTurnRow key={`history-${index}`} turn={turn} onNavigate={onNavigate} />
+              ) : turn.role === "user" ? (
                 <div className="message-row user-message" id={`sec-h-${index}`} key={`history-${index}`}>
                   <div className="user-bubble">
                     <p>{turn.content}</p>
@@ -5046,6 +5116,15 @@ function NewSessionWorkspace({
                 </div>
               )
             )}
+            {/* Turns the loop appended to this same conversation since it was
+                opened. Kept separate from `history` rather than merged into it:
+                history is the snapshot taken when the thread was opened, and
+                rewriting it under a live feed is how a scroll position gets
+                thrown away mid-read. Ids already in history are filtered out,
+                so reopening the thread later shows each turn exactly once. */}
+            {loopTurnsHere.map((turn) => (
+              <LoopTurnRow key={`loop-${turn.id}`} turn={turn} onNavigate={onNavigate} />
+            ))}
             {conversation.map((turn) => (
               <ConversationTurnCard
                 key={turn.id}
@@ -7818,6 +7897,33 @@ function FanoutAgentChip({ agent }: { agent: { name: string; task: string; claim
           ))}
         </ul>
       ) : null}
+    </div>
+  );
+}
+
+/** One turn a loop took, rendered in the conversation it is running in
+ *  (docs/ROADMAP.md, "a running loop is invisible in the chat it came from").
+ *
+ *  Lachy's description of what he expected is the spec: *"it should be like I'm
+ *  chatting with the model each time it's activated, except it's essentially
+ *  working without a prompt."* So the assistant side is an ordinary run card —
+ *  same component, same detail, it IS a normal turn — and the user side is
+ *  replaced by a marker, because there is no user here. A bubble on the right
+ *  saying "Loop turn 2 of 5" would claim he sent it. */
+function LoopTurnRow({ turn, onNavigate }: { turn: ConversationTurnRecord; onNavigate?: (nav: NavKey) => void }): JSX.Element {
+  if (turn.role === "user") {
+    return (
+      <div className="message-row loop-marker-row">
+        <div className="loop-marker" title="Metis woke itself up and did this without being asked">
+          <span className="loop-marker-dot" aria-hidden="true" />
+          <span>{turn.content}</span>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="message-row assistant-message loop-authored">
+      {turn.run ? <CompletedRun run={turn.run} onNavigate={onNavigate} /> : <Markdown>{turn.content}</Markdown>}
     </div>
   );
 }

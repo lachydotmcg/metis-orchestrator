@@ -826,6 +826,36 @@ export function composeWakePrompt(loop: LoopRecord): string {
   return lines.join("\n");
 }
 
+/** What a loop turn is CALLED in the conversation it lands in
+ *  (docs/ROADMAP.md, "a running loop is invisible in the chat it came from").
+ *
+ *  This is the string that stands where a user's message would be, so it has
+ *  one job: say plainly that nobody typed this. "Loop turn 2 of 5 — fix what
+ *  fails" is honest about all three things a reader needs — that this is a
+ *  loop, how far through it is, and what it was asked to do this turn.
+ *
+ *  It is deliberately NOT the wake prompt. That is the goal plus a history
+ *  digest plus the helper list plus the artifact plus a protocol block, and
+ *  putting several hundred characters of Metis talking to itself into the chat
+ *  attributed to the person is the whole failure being fixed.
+ *
+ *  Pure, so the offline suite can hold the wording still. */
+export function loopTurnLabel(loop: LoopRecord, index: number): string {
+  const step = currentLoopStep(loop);
+  const what =
+    step === null
+      ? loop.goal
+      : step.kind === "single"
+        ? step.text
+        : // A group position runs its members as parallel helpers rather than a
+          // work turn, so the label names all of them.
+          step.members.join(" and ");
+  const oneLine = (what ?? "").replace(/\s+/g, " ").trim();
+  const trimmed = oneLine.length > 80 ? `${oneLine.slice(0, 79)}…` : oneLine;
+  const head = `Loop turn ${index} of ${loop.maxIterations}`;
+  return trimmed ? `${head} — ${trimmed}` : head;
+}
+
 /** One-line digest of a turn, stored in history. Kept short on purpose: this is
  *  replayed into every later prompt, so a verbose summary costs tokens on every
  *  remaining iteration. */

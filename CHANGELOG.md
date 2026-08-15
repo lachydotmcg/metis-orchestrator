@@ -14,6 +14,38 @@ engine referenced below.
 
 ### Changed (2026-08-15)
 
+- **A loop runs where you started it.** Type `/loop` in a conversation and its
+  turns now land in that conversation, appearing as it finishes them. Before
+  this they went into a hidden thread of the loop's own, so the loop existed in
+  Settings, in the tray and on the phone page — everywhere except the place you
+  started it.
+
+  The shape follows what was actually asked for: *"it should be like I'm
+  chatting with the model each time it's activated, except it's essentially
+  working without a prompt."* So the reply is an ordinary run card, because it
+  IS an ordinary turn, and where a user message would be there is a centred
+  marker instead — `Loop turn 2 of 5 — fix what fails`. Not a bubble on either
+  side. A bubble is the shape of somebody speaking and nobody spoke.
+
+  What is deliberately never stored as your message is the wake prompt. That is
+  the goal plus a digest of earlier turns plus the helper list plus the artifact
+  plus the decision protocol — Metis writing to itself — and putting several
+  hundred characters of it into the chat under your name would have
+  misrepresented the run more than hiding it did.
+
+  The fix underneath is small: a loop carries a conversation id from the moment
+  it is created rather than inheriting whatever thread its first tick happened
+  to mint. That is also why a loop started from an empty new session works —
+  it gets a thread of its own, and the view moves there once the first turn
+  lands.
+
+  One honest edge: the feed re-reads on a 20-second timer while a live loop is
+  attached to the open thread. Nothing pushes background work to the renderer,
+  because every main-to-renderer channel in this app is a reply inside an
+  `invoke` and a loop tick has no `invoke` to reply to. The poll is one small
+  store read and only refetches the conversation when the loop's iteration count
+  moves, but a real push channel is the better answer and is not built.
+
 - **The model that did the work no longer decides whether the work is done.**
   A loop's continue-or-stop call used to go to whatever had just answered the
   work turn: the model that made the mistake voting on whether it was

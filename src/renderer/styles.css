@@ -3801,6 +3801,43 @@ p {
   word-break: break-word;
 }
 
+/* A loop turn in the conversation it is running in (docs/ROADMAP.md). Where a
+   user message would be there is a centred marker instead, because nobody sent
+   this — Metis woke itself up. Deliberately NOT a bubble on either side: a
+   bubble is the shape of somebody speaking, and the honest shape here is a
+   divider. */
+.loop-marker-row {
+  justify-content: center;
+}
+
+.loop-marker {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  max-width: min(640px, 86%);
+  padding: 5px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 999px;
+}
+
+.loop-marker-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+}
+
+/* The reply itself is an ordinary run card — it IS a normal turn — with one
+   quiet rule down its edge saying who asked for it. */
+.loop-authored {
+  padding-left: 12px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
 .turn-attachment-row {
   display: flex;
   flex-wrap: wrap;

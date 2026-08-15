@@ -724,6 +724,14 @@ export interface SessionRunInput {
    *  it: the ledger needs to be accumulating attributable rows already by the
    *  time anything wants to read them. */
   loopId?: string;
+  /** How this loop turn should READ in the conversation it lands in.
+   *
+   *  A loop turn's prompt is the composed wake prompt: the goal, a digest of
+   *  earlier turns, the helper list, the artifact and the protocol block.
+   *  Storing that as the user's message would put several hundred characters of
+   *  Metis talking to itself into the chat, attributed to the person, and the
+   *  person did not say any of it. The label is what the chat shows instead. */
+  loopTurn?: { index: number; label: string };
   rawPromptStorage?: "local-only" | "hash-only";
   /** When set, bypass Metis Policy routing and call this model directly. */
   modelOverride?: SessionModelOverride;
@@ -967,6 +975,9 @@ export interface SessionRun {
    *  SessionRunInput.loopId so the usage ledger can attribute spend back to the
    *  loop that caused it. Undefined for every ordinary run. */
   loopId?: string;
+  /** Copied from SessionRunInput.loopTurn, so the conversation writer can label
+   *  the turn without re-reading the loop store on every run. */
+  loopTurn?: { index: number; label: string };
   /** Real suggested next messages (docs/DRILL_PLAN.md CORE.1) - written by
    *  the SAME model that answered, from the actual exchange, replacing the
    *  old canned heuristics ("Add a second page"). Two or three short things
@@ -1125,6 +1136,16 @@ export interface ConversationTurnRecord {
   content: string;
   runId?: string;
   run?: SessionRun;
+  /** Set on BOTH turns of a loop iteration when this conversation is the one a
+   *  loop is running in (docs/ROADMAP.md, "a running loop is invisible in the
+   *  chat it came from").
+   *
+   *  The chat needs to render these differently or it lies twice over: a wake
+   *  prompt shown as a user message attributes to the person several hundred
+   *  characters of Metis talking to itself, and an unmarked assistant bubble
+   *  reads as a reply to something they said. Neither happened. The marker is
+   *  what lets the feed say "Metis, working on its own" instead. */
+  loop?: { id: string; turn: number; label: string };
 }
 
 export interface ConversationRecord {

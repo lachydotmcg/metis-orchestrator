@@ -52,24 +52,38 @@ below came out of that, in his priority order.
   three pieces; the first (named variables plus one conditional gate) is the one
   that makes the rest composable.
 
-- **A running loop is invisible in the chat it came from.** This is the sharpest
-  of the lot and it is a product bug rather than a missing feature. He started a
-  loop from the composer, and the loop then ran with no trace in the conversation
-  — it exists in Settings > Privacy & Data, in the tray, and on the phone page,
-  but not where he started it. He expected: *"it should be like I'm chatting with
-  the model each time it's activated, except it's essentially working without a
-  prompt."*
+- ~~**A running loop is invisible in the chat it came from.**~~ **Fixed
+  2026-08-15.** This was the sharpest of the lot and a product bug rather than a
+  missing feature. He started a loop from the composer, and the loop then ran
+  with no trace in the conversation — it existed in Settings > Privacy & Data,
+  in the tray, and on the phone page, but not where he started it. He expected:
+  *"it should be like I'm chatting with the model each time it's activated,
+  except it's essentially working without a prompt."*
 
-  That is the right model and the current design fights it. A loop turn IS a
+  That was always the right model and the design fought it. A loop turn IS a
   conversation turn — it runs through `runSessionTracked`, produces a
-  `SessionRun`, and appends to a conversation. It just appends to the loop's OWN
-  conversation, invisible unless you go looking. Options, cheapest first: append
-  loop turns to the conversation the loop was started from, marked as
-  loop-authored so they read as "Metis working" rather than as replies; or keep
-  the separate conversation but surface a live card in the originating thread
-  that expands into it. The first is closer to what he described. Either way the
-  composer's confirmation message ("watch or stop it in Settings > Privacy &
-  Data") stops being the only breadcrumb.
+  `SessionRun`, and appends to a conversation. It just appended to the loop's
+  OWN conversation, invisible unless you went looking, because
+  `LoopRecord.conversationId` was undefined at creation and filled in from
+  whatever thread the first tick happened to mint.
+
+  The first option is what shipped. A loop now carries a conversation id from
+  the moment it exists — the one it was started from, or a fresh one when
+  started from an empty new session — and its turns land there marked as the
+  loop's work. The chat shows each one as a centred marker (`Loop turn 2 of 5 —
+  fix what fails`) followed by an ordinary run card, because the reply IS a
+  normal turn while the prompt was written by Metis to itself. What is
+  deliberately never stored is the wake prompt: putting several hundred
+  characters of goal-plus-digest-plus-protocol-block into the chat attributed to
+  the person would have been a worse lie than hiding it.
+
+  Two edges worth knowing. The feed re-reads on a 20-second timer while a live
+  loop is attached to the open thread, because nothing pushes background work to
+  the renderer — every existing main-to-renderer channel is a reply inside an
+  `invoke`, and a loop tick has no `invoke` to reply to. A real push channel is
+  the better answer and is not built. And a loop started from an empty new
+  session has a thread that does not exist until its first turn lands, so the
+  view jumps there at that moment rather than immediately.
 
 - **Pairing the phone is two pieces of string, and should be one.** Today you
   copy a token out of Settings and construct

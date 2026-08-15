@@ -81,6 +81,20 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   fallback path. That is the low-stakes half by construction: a turn doing real work routes to the
   build pipeline, whose reply cannot carry a block, so the judge runs on exactly the turns where
   self-grading was dangerous.
+- ~~**A running loop was invisible in the chat it came from.**~~ Fixed 2026-08-15: a loop carries a
+  conversation id from creation (the one it was started from, or a fresh one when started from an
+  empty new session) instead of inheriting whatever thread its first tick happened to mint, and its
+  turns land there marked as the loop's own work — a centred `Loop turn 2 of 5 — fix what fails`
+  marker where a user message would be, then an ordinary run card. The wake prompt is deliberately
+  never stored as the user's message: it is the goal plus a history digest plus the helper list plus
+  the protocol block, and attributing that to the person would be a worse lie than hiding the turn.
+  **Two edges.** The feed re-reads on a 20-second timer while a live loop is attached to the open
+  thread, because nothing pushes background work to the renderer — every main-to-renderer channel in
+  this app is a reply inside an `invoke`, and a loop tick has no `invoke` to reply to. The poll costs
+  one small store read and only refetches the conversation when the loop's iteration count actually
+  moves, but a real push channel is the better answer and is not built. And a loop started from an
+  empty new session has a thread that does not exist until its first turn lands, so the view jumps
+  there at that moment rather than immediately.
 - **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
   are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
   is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the

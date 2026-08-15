@@ -113,6 +113,7 @@ import {
   extractLoopDecision,
   latestArtifact,
   loopTerminalReason,
+  loopTurnLabel,
   summariseTurn,
   type LoopEvidence,
   type LoopIterationRecord,
@@ -5649,12 +5650,27 @@ async function appendRunToConversation(run: SessionRun, prompt: string): Promise
   // runs all reach: a loop turn and each of its up-to-three helpers append
   // through here at once. Read-modify-write against a pre-await snapshot lost
   // whichever turn finished first.
+  // A loop turn is a conversation turn, and this is where it stops looking like
+  // one the user typed (docs/ROADMAP.md). Two substitutions, both refusals to
+  // put words in the owner's mouth:
+  //
+  //  - The stored "user" content becomes the loop's own label, never the wake
+  //    prompt. The wake prompt is the goal plus a history digest plus the
+  //    helper list plus the artifact plus the protocol block — Metis writing to
+  //    itself — and attributing that to the person is the single most misleading
+  //    thing this function could do.
+  //  - A conversation CREATED by a loop is titled from the goal rather than
+  //    from that same wake prompt, which would otherwise name the thread after
+  //    its own scaffolding.
+  const loopMark =
+    run.loopId && run.loopTurn ? { id: run.loopId, turn: run.loopTurn.index, label: run.loopTurn.label } : undefined;
+
   const { id, created } = await mutateConversations((current) => {
     const existing = run.conversationId ? current.find((item) => item.id === run.conversationId) : undefined;
     const conversation: ConversationRecord = existing ?? {
       id: run.conversationId ?? randomUUID(),
       projectPath: run.projectPath,
-      title: conversationTitle(prompt),
+      title: conversationTitle(loopMark ? loopMark.label : prompt),
       createdAt: run.createdAt,
       updatedAt: run.completedAt,
       turns: []
@@ -5664,8 +5680,9 @@ async function appendRunToConversation(run: SessionRun, prompt: string): Promise
       id: randomUUID(),
       role: "user",
       createdAt: run.createdAt,
-      content: prompt,
-      runId: run.id
+      content: loopMark ? loopMark.label : prompt,
+      runId: run.id,
+      ...(loopMark ? { loop: loopMark } : {})
     };
     const assistantTurn: ConversationTurnRecord = {
       id: randomUUID(),
@@ -5673,7 +5690,8 @@ async function appendRunToConversation(run: SessionRun, prompt: string): Promise
       createdAt: run.completedAt,
       content: run.assistantText,
       runId: run.id,
-      run
+      run,
+      ...(loopMark ? { loop: loopMark } : {})
     };
     const nextConversation: ConversationRecord = {
       ...conversation,
@@ -6526,6 +6544,7 @@ async function runPreviewRequest(args: {
     // four, so the build-pipeline turns, which are a loop's most expensive,
     // wrote no ledger attribution at all.
     loopId: input.loopId,
+    loopTurn: input.loopTurn,
     promptPreview: prompt.slice(0, 180),
     rawPromptStored: false,
     projectPath: writable?.path ?? input.projectPath,
@@ -9313,6 +9332,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       completedAt: new Date().toISOString(),
       promptSha256: promptHash,
       loopId: input.loopId,
+      loopTurn: input.loopTurn,
       promptPreview: originalPrompt.slice(0, 180),
       rawPromptStored: false,
       projectPath: input.projectPath,
@@ -9739,6 +9759,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       // so omitting attribution here made loopUsageTotals understate exactly
       // the spend a budget would most need to see.
       loopId: input.loopId,
+      loopTurn: input.loopTurn,
       promptPreview: originalPrompt.slice(0, 180),
       rawPromptStored: false,
       projectPath: projectResult?.workspacePath ?? input.projectPath,
@@ -10291,6 +10312,7 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     // Carried so appendUsageLedgerEntry can attribute this turn back to the
     // loop that caused it. Undefined for every ordinary run.
     loopId: input.loopId,
+    loopTurn: input.loopTurn,
     oracleNearMatch: servedSimilarity ?? undefined,
     depth: routeDepth,
     projectResult,
@@ -10923,6 +10945,12 @@ async function createLoop(input: {
   fixedIntervalSeconds?: number;
   budgetTokens?: number;
   steps?: LoopStepPosition[];
+  /** The conversation the loop was started FROM, so its turns land where the
+   *  person was standing when they started it (docs/ROADMAP.md). Absent when a
+   *  loop is started from a brand-new session that has no conversation yet, or
+   *  by the CLI — see the id minted below for why that is not a fallback to
+   *  invisibility. */
+  conversationId?: string;
 }): Promise<LoopRecord> {
   // Flowchart steps (docs/FLOWCHART_LOOPS_DESIGN.md), re-validated here
   // because this is reachable over IPC: each position is a trimmed string or
@@ -10991,6 +11019,15 @@ async function createLoop(input: {
     id: randomUUID(),
     goal,
     projectPath: input.projectPath,
+    // Known from the first moment, not discovered on the first turn.
+    //
+    // It used to be undefined here and filled in from whatever conversation the
+    // first tick happened to create, which is precisely why a loop was
+    // invisible: there was nothing to open until a turn had already finished,
+    // and by then the person had moved on. Minting one when the caller has none
+    // means a loop started from an empty new session still has a thread the
+    // renderer can jump to immediately, and the tick's first append fills it.
+    conversationId: input.conversationId || randomUUID(),
     origin: input.origin ?? "app",
     permissionMode,
     fixedIntervalSeconds: normaliseFixedInterval(input.fixedIntervalSeconds),
@@ -11228,6 +11265,9 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       cancelScope: loopCancelScope(loaded.id),
       // Attributes this turn's spend to the loop in the usage ledger.
       loopId: loaded.id,
+      // And makes the turn READ as a loop turn in the conversation it lands in
+      // rather than as something the owner typed (docs/ROADMAP.md).
+      loopTurn: { index, label: loopTurnLabel(loaded, index) },
       conversationId: loaded.conversationId,
       projectPath: loaded.projectPath,
       // The mode captured at creation, never the current global — see
@@ -14596,7 +14636,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("metis-loops:list", () => listLoops());
   ipcMain.handle(
     "metis-loops:create",
-    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: (string | string[])[] }) =>
+    (_event, input: { goal: string; projectPath?: string; maxIterations?: number; permissionMode?: string; fixedIntervalSeconds?: number; budgetTokens?: number; steps?: (string | string[])[]; conversationId?: string }) =>
       // origin is forced here, never taken from the caller: a renderer must not
       // be able to mint a "cli" loop and inherit the never-resume-on-launch
       // handling that belongs to a process that has since exited.
