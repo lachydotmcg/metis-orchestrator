@@ -126,6 +126,37 @@ already exists as the mechanism — it just points at a registry repo that is
 hand-updated. Pointing part of it at OpenRouter's free endpoint would make the
 picker self-maintaining.
 
+### Built, 2026-08-15
+
+The two no-auth sources are wired in. `fetchLiveCatalogModels()` in
+`src/electron/main.ts` fetches both from the **main** process (the renderer does
+no outbound network — see `isRegistryFetchUrl`), each with its own 2-second
+timeout and each failing independently and silently, and `refreshModelCatalog`
+merges the result over the bundled list through `mergeCatalogModels`. The
+mapping itself is pure and lives in `src/shared/model-catalogue.ts`, so the
+offline suite (`18-model-catalogue`, 33 assertions) exercises the shipped code
+rather than a copy of it.
+
+Three decisions worth keeping:
+
+- **An OpenRouter entry produces an OpenRouter route only.** Never a
+  synthesised direct one. This is the "same model, three different ids" footgun
+  above turned into a rule: their ids are not safely invertible, so inventing a
+  first-party route from one manufactures exactly the 404s this exists to
+  prevent.
+- **Pricing is all-or-nothing.** Half a price displays a total that is *wrong*
+  rather than incomplete, and the usage display cannot say "half known". A
+  genuinely free model is `{in: 0, out: 0}`; an unparseable one is absent.
+- **Expiry drops the model at merge, not at the UI**, so nothing downstream has
+  to remember to check. An *unparseable* date counts as no expiry — hiding a
+  working model is worse than showing a dead one, because a dead one gives the
+  user an error they can read.
+
+The two keyed sources (DeepSeek, Anthropic) are not wired in. Adding them means
+reading a stored API key inside a catalogue refresh, which is a bigger change to
+the key-handling path than the value justifies while OpenRouter already carries
+both providers' current line-ups.
+
 ---
 
 ## Not adopted, and why

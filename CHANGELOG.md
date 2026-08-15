@@ -12,7 +12,39 @@ engine referenced below.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added (2026-08-15)
+
+- **The model catalogue asks providers what they serve.** A refresh now
+  fetches OpenRouter's `/api/v1/models` and Ollama's `/api/tags` from the
+  main process and merges them over the bundled list, dropping anything past
+  its provider-declared expiry. Both sources need no API key, each fails
+  independently and silently, and the hardcoded list stays as the offline
+  fallback.
+
+  This closes the mechanism behind the worst bug in `1.2.0` rather than the
+  bug itself: DeepSeek retired `deepseek-chat` and `deepseek-reasoner` on
+  2026-07-24, Metis kept sending them from eleven call sites, and nothing in
+  the app could notice because nothing ever asked a provider anything. The
+  ids were corrected by hand on 2026-08-14; this is the part that means the
+  next retirement does not need a person to spot it.
+
+  One deliberate refusal, pinned in `18-model-catalogue`: an OpenRouter
+  entry produces an OpenRouter route and never a synthesised direct one.
+  Their ids are not safely invertible — dots where Anthropic uses dashes,
+  dates dropped entirely, and `deepseek/deepseek-v4-flash` pointing at an
+  older snapshot than DeepSeek's own — so inventing a first-party route from
+  one would manufacture exactly the 404s this exists to prevent.
+
+### Fixed (2026-08-14)
+
+- **An SVG renders on what it contains, not on what the model called the
+  fence.** Found in the first live use of `1.2.0`: Qwen3 8B answered a chart
+  request with a correct, complete SVG and it printed as code, because the
+  fence was labelled `xml` and the renderer tested the label. `svg`, `xml`,
+  `html`, `markup` and a bare fence are all looked under now, and
+  `isRenderableSvg` still decides — an `xml` fence holding real XML still
+  prints as code. The exact Qwen output that failed is pinned in
+  `15-svg-artifact`.
 
 ## [1.2.0] - 2026-08-14
 

@@ -86,6 +86,7 @@ import type {
   GatewayStatus
 } from "../shared/runtime-contracts.js";
 import { findBlock, stripBlock } from "../shared/model-blocks.js";
+import { mapOllamaTag, mapOpenRouterModel, mergeCatalogModels, type OllamaTag, type OpenRouterModel } from "../shared/model-catalogue.js";
 import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
@@ -3171,6 +3172,63 @@ async function listModelCatalog(): Promise<ModelCatalogState> {
  *  registry refresh, caching the result so the model picker keeps its last
  *  known list offline (docs/FABLE_PLANS.md section 14). Accepts both v1 (bare
  *  provider+id) and v2 (`access[]`) entries — see upgradeCatalogModelToV2. */
+/** Asks the two providers that publish a model list what they actually serve.
+ *
+ *  The registry catalogue this sits beside is a JSON file in a second repo that
+ *  is updated by hand, which is how v1.2.0 shipped with DeepSeek ids that had
+ *  been retired three weeks earlier. These two cannot go stale the same way:
+ *  OpenRouter needs no auth and answers for hundreds of models, and Ollama's
+ *  tag list is derived from weights already on disk.
+ *
+ *  Each source fails independently and silently. Ollama being absent is the
+ *  normal state for a cloud-only user, and OpenRouter being unreachable must
+ *  not cost you the local models — so one failing source never blanks the
+ *  other, and neither can fail the refresh that called this. */
+async function fetchLiveCatalogModels(): Promise<CatalogModel[]> {
+  const models: CatalogModel[] = [];
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/models");
+    if (response.ok) {
+      const payload = (await response.json()) as { data?: unknown };
+      if (Array.isArray(payload.data)) {
+        for (const entry of payload.data) {
+          const mapped = mapOpenRouterModel(entry as OpenRouterModel);
+          if (mapped) models.push(mapped);
+        }
+      }
+    }
+  } catch {
+    // Offline, or OpenRouter down. The bundled catalogue still stands.
+  }
+
+  try {
+    // Same loopback base the rest of the app uses. A short timeout because a
+    // missing Ollama should not delay app start — the overwhelmingly common
+    // case for a cloud-only user is that nothing is listening at all.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2000);
+    try {
+      const response = await fetch(`${OLLAMA_BASE_URL}/api/tags`, { signal: controller.signal });
+      if (response.ok) {
+        const payload = (await response.json()) as { models?: unknown };
+        if (Array.isArray(payload.models)) {
+          for (const entry of payload.models) {
+            const mapped = mapOllamaTag(entry as OllamaTag);
+            if (mapped) models.push(mapped);
+          }
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    // Ollama not running. Expected, not an error.
+  }
+
+  return models;
+}
+
 async function refreshModelCatalog(sourceUrl?: string): Promise<ModelCatalogState> {
   const base = (sourceUrl?.trim() || METIS_REGISTRY_BASE_URL).replace(/\/$/, "");
   try {
@@ -3189,7 +3247,13 @@ async function refreshModelCatalog(sourceUrl?: string): Promise<ModelCatalogStat
           })
           .map(upgradeCatalogModelToV2)
       : [];
-    const state: ModelCatalogState = { sourceUrl: base, refreshedAt: new Date().toISOString(), status: "ok", models };
+    const live = await fetchLiveCatalogModels();
+    const state: ModelCatalogState = {
+      sourceUrl: base,
+      refreshedAt: new Date().toISOString(),
+      status: "ok",
+      models: mergeCatalogModels(models, live, new Date())
+    };
     await writeStoreValue("remoteModelCatalog", state);
     return state;
   } catch (error) {

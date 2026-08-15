@@ -182,23 +182,28 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   precondition as above, and the same reason it is written down rather than fixed: an allowlist
   that has to cover every legitimate link the app opens is a change worth making deliberately.
 
-- **The model catalogue is hardcoded, so it goes stale silently.** Refreshed 2026-08-14
-  (docs/MODEL_CATALOGUE.md), which found DeepSeek's `deepseek-chat` and `deepseek-reasoner`
-  retired on 2026-07-24 and still being sent from eleven call sites — every DeepSeek route in
-  v1.2.0 was pointing at a dead id. Fixed, but the mechanism that let it happen is unchanged: a
-  list in source that nothing checks against a provider. OpenRouter publishes a free, no-auth
-  `/api/v1/models` carrying pricing, context, expiry dates and benchmark scores, and Ollama's
-  `/api/tags` cannot go stale because the weights are on disk. Until one of those is wired in,
-  assume this list is correct only on the day it was written.
+- **The model catalogue is only partly live.** It used to be hardcoded and going stale silently:
+  the 2026-08-14 refresh (docs/MODEL_CATALOGUE.md) found DeepSeek's `deepseek-chat` and
+  `deepseek-reasoner` retired on 2026-07-24 and still being sent from eleven call sites — every
+  DeepSeek route in v1.2.0 was pointing at a dead id, and nothing in the app could have noticed
+  because nothing ever asked a provider what it serves. Since 2026-08-15 a catalogue refresh also
+  fetches OpenRouter's no-auth `/api/v1/models` and Ollama's `/api/tags` from the main process,
+  merges them over the bundled list, and drops anything past its provider-declared expiry.
+  What is still hardcoded: every **direct** first-party route. An OpenRouter id is deliberately
+  never inverted into an Anthropic or DeepSeek one (their ids disagree on dots, dashes and dates,
+  and `deepseek/deepseek-v4-flash` is pinned to an older snapshot than first-party), and neither
+  Alibaba nor Z.ai publishes a list at all. So Qwen, GLM and the direct provider routes are still
+  correct only on the day they were written; the live sources catch new and retired models, not
+  those.
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 17 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 18 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
-  into the store, the conversation-store race, the SVG render gate, and the honesty of this
-  documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+  into the store, the conversation-store race, the SVG render gate, the live model-catalogue
+  mappers, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
 - ~~**An SVG only renders when the model labels the fence `svg`.**~~ Fixed 2026-08-14. Found in
   first live use: Qwen3 8B answered a chart request with a correct, complete SVG inside an
   ```xml fence and it printed as code, because the renderer tested the LABEL and never reached

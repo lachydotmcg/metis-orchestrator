@@ -436,6 +436,11 @@ export interface CatalogModel {
    *  wire (v1 registry payloads omit it); always populated after main.ts's
    *  load-time upgrade, so in-app consumers can rely on it being present. */
   access?: ModelAccessRoute[];
+  /** Provider-declared retirement date, when the source publishes one
+   *  (OpenRouter returns `expiration_date`). Entries past it are dropped by
+   *  mergeCatalogModels rather than filtered at the UI, so nothing downstream
+   *  has to remember to check. Absent means no announced expiry. */
+  expiresAt?: string;
 }
 
 export interface ModelCatalogState {
