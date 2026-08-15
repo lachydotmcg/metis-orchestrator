@@ -64,6 +64,10 @@ export interface WalkthroughTurn {
   judgedBy?: { model: string; independent: boolean; note?: string };
   routing?: WalkthroughRouting;
   files?: WalkthroughFile[];
+  /** The backup taken before this turn's writes. Present only on a turn that
+   *  wrote through the generated-file path, which is the only writer that
+   *  snapshots. */
+  snapshot?: { id: string; dir: string };
   evidence?: { label: string; status: "complete" | "warning" | "error"; exitCode?: number; detail?: string }[];
 }
 
@@ -258,7 +262,7 @@ function filesSection(input: WalkthroughInput): string[] {
     }
   }
   if (!rows.length) return ["## What it wrote", "", "Nothing. No turn wrote a file."];
-  return [
+  const lines = [
     "## What it wrote",
     "",
     "| Turn | File | Change | Lines |",
@@ -273,6 +277,34 @@ function filesSection(input: WalkthroughInput): string[] {
     "Generated writes are backed up before they happen: **Settings → Privacy → Revert those files** restores the most recent backup. " +
       "It restores contents — files the run created are left in place rather than deleted."
   ];
+
+  // The backups, named. Only turns that wrote through the snapshotted path
+  // have one, so an absent row is a real fact about that turn rather than a
+  // gap in the report.
+  const snapshots = input.history.filter((turn) => turn.snapshot);
+  if (snapshots.length) {
+    lines.push("");
+    lines.push("### The backups");
+    lines.push("");
+    for (const turn of snapshots) {
+      lines.push(`- Turn ${turn.index} — \`${cell(turn.snapshot?.id ?? "")}\``);
+      lines.push(`  \`${turn.snapshot?.dir ?? ""}\``);
+    }
+    lines.push("");
+    // The honest limit, and the reason these paths are worth printing at all.
+    // The revert control restores whichever backup was taken LAST, so for
+    // every turn but the final one the folder above is the only way back —
+    // copy the file out of it by hand. Naming an id without saying that would
+    // imply a one-click undo that does not exist.
+    lines.push(
+      snapshots.length > 1
+        ? "Each folder holds the originals of the files that turn was about to change. **Only the last one is reachable from the app** — " +
+            "the revert control undoes the most recent write and nothing older, so for the earlier turns these paths are the way back: " +
+            "open the folder and copy the file you want out of it."
+        : "That folder holds the originals of the files this turn was about to change, which is the same backup the app's revert control uses."
+    );
+  }
+  return lines;
 }
 
 /** What the run PROVED, as opposed to what it said. Only operations that could

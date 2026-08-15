@@ -84,10 +84,14 @@ Three things the design above got wrong, found by building it:
   carried the judged depth — the one column that makes the trace worth
   printing. Routing is now captured onto the iteration record at the tick, not
   joined afterwards.
-- **Snapshot ids are not reachable.** `writeGeneratedFileSet` sends its id to
-  the audit log and the `lastProjectSnapshot` key and never onto the run, so
-  there is no per-turn id to print. The file points at the revert control
-  instead. Threading it is a separate change.
+- ~~**Snapshot ids are not reachable.**~~ **Threaded 2026-08-16.**
+  `writeGeneratedFileSet` returns the backup it took, `ProjectToolResult`
+  carries it, and the loop records one per turn — reading the
+  `lastProjectSnapshot` key at report time would have named only the final
+  turn's, since that key is a single slot every later write overwrites. What
+  the manifest is good for is narrower than "undo": the walkthrough prints each
+  id **with its folder**, because the revert control reaches only the most
+  recent one and the older folders have to be opened by hand.
 - **Helpers have no row and cannot have one.** A helper runs in its own
   conversation, so it is not a turn. It is named, and the file states that the
   totals understate whenever helpers ran, rather than presenting a total that

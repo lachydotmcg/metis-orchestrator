@@ -72,12 +72,15 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   **Four honest edges.** It is skipped entirely in `plan` mode and when the loop has no project
   folder, because a report filed somewhere nobody looks reads as delivered when it is not. It never
   overwrites a `walkthrough.md` it did not write — a foreign file gets a suffixed sibling instead,
-  since an unattended loop clobbering a document is discovered late or never. The table has **no
-  snapshot ids**: the snapshot id from `writeGeneratedFileSet` reaches the audit log and the
-  `lastProjectSnapshot` key but was never threaded onto the run, so the file points at the revert
-  control rather than at a specific backup. And helper turns are named but have no row, because a
-  helper runs in its own conversation — so the cost total understates whenever helpers ran, which
-  the file says outright rather than quietly.
+  since an unattended loop clobbering a document is discovered late or never. And helper turns are
+  named but have no row, because a helper runs in its own conversation — so the cost total
+  understates whenever helpers ran, which the file says outright rather than quietly.
+  ~~*It also had no snapshot ids.*~~ **Fixed 2026-08-16:** `writeGeneratedFileSet` now returns the
+  backup it took, `ProjectToolResult` carries it, and the loop records one per TURN — the
+  `lastProjectSnapshot` key holds a single slot, so by the time a five-turn loop settles four of its
+  backups are unnameable from there. The walkthrough lists each turn's id **and its folder**, and
+  says plainly that only the last is reachable from the app's revert control, so for the earlier
+  turns the path is the way back rather than a one-click undo that does not exist.
 - ~~**The model that did the work decided whether the work was done.**~~ Fixed 2026-08-15: the
   continue-or-stop call goes to the local rung instead of to whatever answered the work turn, it is
   told it did not do the work, and it is shown the turn's evidence rather than only the turn's
@@ -149,6 +152,11 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   resumed by the app.
 - **Undo is one deep.** Only the most recent generated write can be reverted from Settings. Older
   snapshot folders still exist on disk with their manifests, but there is no history browser.
+  `revertSnapshot` itself takes a whole snapshot object and can restore any of them; what is missing
+  is anything that hands it one other than the `lastProjectSnapshot` key, which holds a single slot
+  that every later write overwrites. Since 2026-08-16 a loop's `walkthrough.md` at least **names**
+  each turn's backup folder, so the older ones are findable by hand — see the walkthrough entry
+  under Loops.
 - **A revert never deletes files the run created.** Restoring content is safe and reversible;
   deleting a file you may have edited by hand since is not. Deliberate, and stated in the panel.
 - **`plan` mode is a pipeline guarantee, not a sandbox.** It stops the build path before it can

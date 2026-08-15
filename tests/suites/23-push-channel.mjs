@@ -90,6 +90,19 @@ section("Both subscribers survive a preload that does not have it");
   ok("and both clean up after themselves", [...app.matchAll(/unsubscribe\?\.\(\);/g)].length === 2);
 }
 
+section("The snapshot id reaches the run, not just the audit log");
+{
+  // It went to the audit log and the lastProjectSnapshot key from the day
+  // snapshots shipped, and never onto the run — so nothing reporting on a run
+  // afterwards could name the backup that would undo it.
+  ok("the write path returns it", /return \{ artifacts: fileArtifacts, snapshot: takenSnapshot \};/.test(main));
+  ok("and the tool result carries it", /\.\.\.\(written\.snapshot \? \{ snapshot: written\.snapshot \} : \{\}\)/.test(main));
+  // Captured per TURN. lastProjectSnapshot holds one slot, so by the time a
+  // five-turn loop settles, four of its backups are unnameable from there.
+  ok("the loop tick records it per turn", /turnSnapshot = run\.projectResult\?\.snapshot;/.test(main));
+  ok("onto the iteration record", /snapshot: turnSnapshot,/.test(main));
+}
+
 section("An overruled continue is not reported as the loop stopping itself");
 {
   // A loop that was overruled did NOT stop itself, and saying it did would

@@ -799,6 +799,19 @@ export interface ProjectToolResult {
   verificationScreenshotPath?: string;
   verificationCommands?: AgentOperation[];
   artifacts: ProjectArtifact[];
+  /** The backup taken before this run's writes (projectSnapshot.ts).
+   *
+   *  The id reached the audit log and the `lastProjectSnapshot` store key from
+   *  the day snapshots shipped, and never the run — so nothing that reports on
+   *  a run afterwards could name the backup that would undo it. Undefined when
+   *  the run wrote nothing, which is also why it is not on every run.
+   *
+   *  `dir` is the folder holding the copied originals. It matters more than it
+   *  looks: the app's revert control is one deep, so for anything older than
+   *  the most recent write this path is the ONLY way back, and a manifest that
+   *  named an id without the folder would be a reference to nothing a person
+   *  can open. */
+  snapshot?: { id: string; dir: string };
 }
 
 export type AgentOperationKind =

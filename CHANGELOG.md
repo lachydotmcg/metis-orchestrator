@@ -14,6 +14,26 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **A loop's walkthrough names the backups now, and says which one you can
+  actually reach.** Every turn that wrote files gets its snapshot id and the
+  folder holding the originals.
+
+  The id existed from the day snapshots shipped — it went to the audit log and
+  the `lastProjectSnapshot` store key. It just never went onto the run, so
+  nothing reporting on a run afterwards could name the backup that would undo
+  it. `writeGeneratedFileSet` returns it now, `ProjectToolResult` carries it,
+  and the loop records one **per turn** rather than reading that key when the
+  loop settles: the key is a single slot every later write overwrites, so by
+  the time a five-turn loop finishes, four of its backups are unnameable from
+  there.
+
+  The folder matters more than the id, and that is the honest part. Metis's
+  revert control undoes the most recent write and nothing older, so for every
+  turn but the last one the printed path is the way back — open it and copy the
+  file out. The walkthrough says that outright rather than listing ids beside a
+  one-click undo that does not exist. With only one backup the caveat is
+  dropped, because there is nothing older to be unreachable.
+
 - **A loop turn no longer talks itself into another turn.** The independent
   judge covered only the path where a work turn produced no decision block.
   A turn that answered inline still graded itself, and an inline `continue` is

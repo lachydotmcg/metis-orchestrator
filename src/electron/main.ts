@@ -4325,7 +4325,10 @@ async function writeTextArtifact(path: string, value: string): Promise<ProjectAr
   };
 }
 
-async function writeGeneratedFileSet(root: string, files: GeneratedFile[]): Promise<ProjectArtifact[]> {
+async function writeGeneratedFileSet(
+  root: string,
+  files: GeneratedFile[]
+): Promise<{ artifacts: ProjectArtifact[]; snapshot?: { id: string; dir: string } }> {
   await mkdir(root, { recursive: true });
 
   // CORE.5: every generated write in the app funnels through here, so this is
@@ -4337,9 +4340,15 @@ async function writeGeneratedFileSet(root: string, files: GeneratedFile[]): Prom
   const safePaths = files
     .map((file) => safeRelativeFilePath(file.path))
     .filter((path): path is string => Boolean(path));
+  // Returned as well as logged, so anything that reports on this run
+  // afterwards can name the backup that would undo it. It reached the audit
+  // log and the lastProjectSnapshot key from the day snapshots shipped, and
+  // never the run itself.
+  let takenSnapshot: { id: string; dir: string } | undefined;
   if (safePaths.length > 0) {
     try {
       const snapshot = await snapshotBeforeWrite(root, safePaths, dataPath("snapshots"));
+      takenSnapshot = { id: snapshot.id, dir: snapshot.snapshotDir };
       await writeStoreValue("lastProjectSnapshot", snapshot);
       await appendAudit("info", "project.snapshot", describeSnapshot(snapshot), {
         snapshotId: snapshot.id,
@@ -4367,7 +4376,7 @@ async function writeGeneratedFileSet(root: string, files: GeneratedFile[]): Prom
     fileArtifacts.push(await writeTextArtifact(full, file.content));
     await appendAudit("info", "project.write", `Wrote ${safePath}.`, { path: full });
   }
-  return fileArtifacts;
+  return { artifacts: fileArtifacts, snapshot: takenSnapshot };
 }
 
 async function verifyGeneratedProject(root: string, files: GeneratedFile[]): Promise<{
@@ -4431,11 +4440,13 @@ async function verifyGeneratedProject(root: string, files: GeneratedFile[]): Pro
 }
 
 async function buildProjectToolResult(root: string, workspace: ProjectWorkspace | null, files: GeneratedFile[], directoryLabel: string, notes: string[] = []): Promise<ProjectToolResult> {
-  const fileArtifacts = await writeGeneratedFileSet(root, files);
+  const written = await writeGeneratedFileSet(root, files);
+  const fileArtifacts = written.artifacts;
   const verification = await verifyGeneratedProject(root, files);
   const noteDetail = notes.length ? `${notes.join(" ")} ` : "";
   return {
     projectRoot: root,
+    ...(written.snapshot ? { snapshot: written.snapshot } : {}),
     workspacePath: workspace?.path,
     writeMode: workspace ? "selected-project" : "app-managed",
     previewUrl: verification.previewUrl,
@@ -11437,6 +11448,7 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   let turnEvidence: LoopEvidence[] = [];
   let turnRouting: WalkthroughRouting | undefined;
   let turnFiles: WalkthroughFile[] = [];
+  let turnSnapshot: { id: string; dir: string } | undefined;
   // What the turn needed a human for. A loop has no window, so an ask that
   // reaches here is one nobody can answer — the run parks rather than
   // proceeding on the default (docs/ROADMAP.md, feedback channel face 2).
@@ -11490,6 +11502,9 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // looked at them (docs/ROADMAP.md, the loop feedback channel design note).
     turnEvidence = evidenceFromOperations(run.operations ?? []);
     turnFiles = filesFromOperations(run.operations ?? []);
+    // Captured now, not read from lastProjectSnapshot when the loop settles:
+    // that key holds one slot and every later write overwrites it.
+    turnSnapshot = run.projectResult?.snapshot;
     // The routing trace, captured here rather than joined from the usage ledger
     // later: the ledger rolls off at 5000 rows and has never carried the judged
     // depth, which is the one column of the walkthrough no competitor can
@@ -11647,6 +11662,7 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // turn that did not route.
     routing: turnRouting && Object.keys(turnRouting).length ? turnRouting : undefined,
     files: turnFiles.length ? turnFiles : undefined,
+    snapshot: turnSnapshot,
     // Absent when the work turn carried its own decision block — that turn
     // graded itself, and saying nothing is the honest record of that.
     judgedBy

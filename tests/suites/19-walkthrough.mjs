@@ -179,6 +179,37 @@ section("Every terminal status reads as itself");
   ok("exhausted says it ran out", formatWalkthrough({ ...RUN, status: "exhausted" }).includes("Ran out of room"));
 }
 
+section("The backups are named, and the report is honest about reaching them");
+{
+  const backed = formatWalkthrough({
+    ...RUN,
+    history: [
+      { ...RUN.history[0], files: [{ path: "a.ts", kind: "edit" }], snapshot: { id: "snap-111", dir: "C:/data/snapshots/snap-111" } },
+      { ...RUN.history[1], snapshot: { id: "snap-222", dir: "C:/data/snapshots/snap-222" } }
+    ]
+  });
+  ok("every turn's backup id appears", backed.includes("snap-111") && backed.includes("snap-222"));
+  // An id alone is a reference to nothing a person can open. The folder is the
+  // thing they actually need, because of the limit below.
+  ok("with the folder that holds it", backed.includes("C:/data/snapshots/snap-222"));
+  // THE HONEST PART. The app's revert control restores whichever backup was
+  // taken LAST, so for every earlier turn these paths are the only way back.
+  // Printing ids while implying a one-click undo of any of them would be a
+  // manifest that lies.
+  ok("it says only the last is reachable from the app", backed.includes("Only the last one is reachable from the app"));
+  // With one backup there is nothing older to be unreachable, and the caveat
+  // would be noise.
+  const single = formatWalkthrough({
+    ...RUN,
+    history: [{ ...RUN.history[1], snapshot: { id: "snap-333", dir: "C:/data/snapshots/snap-333" } }]
+  });
+  ok("a single backup makes no such caveat", !single.includes("Only the last one"));
+  ok("but still names its folder", single.includes("C:/data/snapshots/snap-333"));
+  // A turn that wrote through a path with no snapshot (a generated image,
+  // METIS-SPEC.md) has no row, and that absence is a fact about the turn.
+  ok("an unsnapshotted run claims no backup", !formatWalkthrough(RUN).includes("### The backups"));
+}
+
 section("The walkthrough names the judge, or says there wasn't one");
 {
   const judged = formatWalkthrough({

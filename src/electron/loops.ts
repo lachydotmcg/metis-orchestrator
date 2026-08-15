@@ -244,6 +244,12 @@ export interface LoopIterationRecord {
   /** Files this turn wrote. See filesFromOperations for why these are kept
    *  apart from evidence. */
   files?: WalkthroughFile[];
+  /** The backup taken before this turn's writes, when it wrote through the
+   *  snapshotted path. Recorded per TURN rather than read from the
+   *  `lastProjectSnapshot` store key at report time, because that key holds one
+   *  slot and every later write overwrites it — by the time a five-turn loop
+   *  settles, four of its backups are unnameable from there. */
+  snapshot?: { id: string; dir: string };
   /** Who actually answered the continue-or-stop question, when it was asked as
    *  a separate call.
    *
