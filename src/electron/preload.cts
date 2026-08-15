@@ -240,7 +240,19 @@ contextBridge.exposeInMainWorld("metisLoops", {
     ipcRenderer.invoke("metis-loops:usage", id) as Promise<{ inputTokens: number; outputTokens: number; turns: number; estimated: boolean }>,
   draftChain: (goal: string) => ipcRenderer.invoke("metis-loops:draft-chain", goal) as Promise<{ chain?: string; error?: string }>,
   stop: (id: string, reason?: string) => ipcRenderer.invoke("metis-loops:stop", id, reason) as Promise<LoopRecord | undefined>,
-  delete: (id: string) => ipcRenderer.invoke("metis-loops:delete", id) as Promise<LoopRecord[]>
+  delete: (id: string) => ipcRenderer.invoke("metis-loops:delete", id) as Promise<LoopRecord[]>,
+  /** Fires whenever the loop store changes, including from a background tick
+   *  that no window asked for. Carries no payload on purpose — see
+   *  broadcastLoopsChanged in main: this is an invalidation signal, and the
+   *  subscriber re-reads through `list()`.
+   *
+   *  Returns its own unsubscribe, and the listener is removed by NAME rather
+   *  than by removeAllListeners, so two subscribers cannot unhook each other. */
+  onChanged: (cb: () => void) => {
+    const listener = (): void => cb();
+    ipcRenderer.on("metis-loops:changed", listener);
+    return () => ipcRenderer.removeListener("metis-loops:changed", listener);
+  }
 });
 
 contextBridge.exposeInMainWorld("metisOllama", {

@@ -272,6 +272,9 @@ declare global {
       draftChain: (goal: string) => Promise<{ chain?: string; error?: string }>;
       stop: (id: string, reason?: string) => Promise<LoopRecord | undefined>;
       delete: (id: string) => Promise<LoopRecord[]>;
+      /** Background loop changes, pushed. Optional because an older preload
+       *  will not have it — every caller falls back to its own polling. */
+      onChanged?: (cb: () => void) => () => void;
     };
     metisOllama?: {
       list(): Promise<OllamaListResult>;

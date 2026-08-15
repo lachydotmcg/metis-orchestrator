@@ -10993,6 +10993,32 @@ let loopMutationQueue: Promise<unknown> = Promise.resolve();
  *  same record. */
 const loopsTicking = new Set<string>();
 
+/** Tells every open window that the loop store changed.
+ *
+ *  The app's first main-to-renderer PUSH. Every other channel here is
+ *  `event.sender.send` — a reply inside an `invoke`, addressed to whoever asked
+ *  — which works for streaming a run the user started and not at all for work
+ *  that starts from a timer. A loop tick has no `invoke` to reply inside, so
+ *  until this existed the only way a window could learn a loop had taken a turn
+ *  was to keep asking, and the conversation feed did exactly that on a
+ *  20-second timer.
+ *
+ *  Deliberately carries NO PAYLOAD. Loop records hold their whole history
+ *  including per-step artifacts, so serialising the list on every write would
+ *  push tens of kilobytes through IPC to say "something moved". This is an
+ *  invalidation signal: the renderer re-reads if it cares, through the same
+ *  `list()` it would have called anyway.
+ *
+ *  Every window, not just `mainWindow`: a second window would otherwise sit on
+ *  stale state with no way to notice. Windows whose preload does not subscribe
+ *  (Quick Ask) simply ignore it. */
+function broadcastLoopsChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+    win.webContents.send("metis-loops:changed");
+  }
+}
+
 function mutateLoops<T>(mutator: (current: LoopRecord[]) => { next: LoopRecord[]; result: T }): Promise<T> {
   const run = loopMutationQueue.then(async () => {
     const current = await readLoops();
@@ -11004,6 +11030,11 @@ function mutateLoops<T>(mutator: (current: LoopRecord[]) => { next: LoopRecord[]
     // as every other refreshTrayMenu call site — a menu rebuild must never
     // slow down or fail a loop write.
     void refreshTrayMenu();
+    // And the one hook the RENDERER needs, for exactly the same reason the tray
+    // needs it: a loop tick fires from a timer, so there is no `invoke` for it
+    // to reply inside, and until this existed the only way a window could learn
+    // about background work was to keep asking.
+    broadcastLoopsChanged();
     return result;
   });
   // The chain must survive a failed mutation, or one throw wedges every later

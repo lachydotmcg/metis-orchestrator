@@ -77,13 +77,19 @@ below came out of that, in his priority order.
   characters of goal-plus-digest-plus-protocol-block into the chat attributed to
   the person would have been a worse lie than hiding it.
 
-  Two edges worth knowing. The feed re-reads on a 20-second timer while a live
-  loop is attached to the open thread, because nothing pushes background work to
-  the renderer — every existing main-to-renderer channel is a reply inside an
-  `invoke`, and a loop tick has no `invoke` to reply to. A real push channel is
-  the better answer and is not built. And a loop started from an empty new
-  session has a thread that does not exist until its first turn lands, so the
-  view jumps there at that moment rather than immediately.
+  It shipped with a 20-second poll, because nothing pushed background work to
+  the renderer: every main-to-renderer channel in the app was a reply inside an
+  `invoke`, and a loop tick has no `invoke` to reply to. **That is now built.**
+  `broadcastLoopsChanged` sends from inside `mutateLoops`, the one choke point
+  every loop write already passes through, so the feed and the Loops panel both
+  react on the beat a turn lands. The signal carries no payload — loop records
+  hold their whole history, so sending them on every write would push tens of
+  kilobytes to say "something moved" — and subscribers re-read through the
+  `list()` they would have called anyway.
+
+  One edge remains: a loop started from an empty new session has a thread that
+  does not exist until its first turn lands, so the view jumps there at that
+  moment rather than immediately.
 
 - **Pairing the phone is two pieces of string, and should be one.** Today you
   copy a token out of Settings and construct

@@ -4471,16 +4471,14 @@ function NewSessionWorkspace({
   }, [sections]);
 
   // A loop appends to this conversation from the BACKGROUND, between wakeups
-  // that can be an hour apart. Nothing pushes that to the renderer — every
-  // existing main-to-renderer channel is a reply inside an invoke, and a loop
-  // tick has no invoke to reply to — so the feed re-reads while a live loop is
-  // attached here, and only then.
+  // that can be an hour apart. Main pushes when the loop store changes
+  // (broadcastLoopsChanged), so the feed reacts to the turn actually landing
+  // instead of asking every 20 seconds whether one has.
   //
-  // Cheap by construction: `list` is one small store read, and the conversation
-  // refetch fires only when the loop's iteration count actually MOVES. A
-  // sleeping loop with an hour to go costs one list call a minute and nothing
-  // else. Deliberately not a general "poll conversations" timer: the rest of
-  // the app has no writer behind its back and does not need one.
+  // The push carries no payload, so this still reads the list — but only when
+  // something moved, rather than on a timer. An older preload without
+  // `onChanged` falls back to the 20-second poll, so a stale build degrades to
+  // the previous behaviour instead of to a feed that never updates.
   const [awaitedLoopConversation, setAwaitedLoopConversation] = useState<string | null>(null);
   const loopIterationsRef = useRef<number | null>(null);
   useEffect(() => {
@@ -4491,11 +4489,14 @@ function NewSessionWorkspace({
     // loop's count against nothing rather than against the last one's.
     loopIterationsRef.current = null;
     let alive = true;
-    const tick = async (): Promise<void> => {
+    const sync = async (): Promise<void> => {
       const all = await loops.list().catch(() => [] as LoopRecord[]);
       if (!alive) return;
       const mine = all.find((loop) => loop.conversationId === watched);
       if (!mine) return;
+      // Still compared rather than trusted: the store changes for stops,
+      // budget writes and helper bookkeeping too, and only a NEW TURN puts new
+      // messages in this thread.
       if (loopIterationsRef.current !== mine.iterations) {
         loopIterationsRef.current = mine.iterations;
         onConversationsChanged?.();
@@ -4507,11 +4508,13 @@ function NewSessionWorkspace({
         }
       }
     };
-    void tick();
-    const timer = window.setInterval(() => void tick(), 20_000);
+    void sync();
+    const unsubscribe = loops.onChanged?.(() => void sync());
+    const timer = unsubscribe ? null : window.setInterval(() => void sync(), 20_000);
     return () => {
       alive = false;
-      window.clearInterval(timer);
+      unsubscribe?.();
+      if (timer !== null) window.clearInterval(timer);
     };
   }, [activeConversationId, awaitedLoopConversation, onConversationsChanged, onOpenConversationById]);
 
@@ -17252,14 +17255,22 @@ function ActiveLoopsPanel(): JSX.Element | null {
       });
     };
     pull();
-    // Faster than the routines poll: a loop can change state every minute, and
-    // a stale "running" badge is exactly the kind of dishonest UI to avoid.
+    // A settled turn now arrives as a push, so the panel updates on the beat
+    // the loop actually moves rather than up to ten seconds later.
+    const unsubscribe = window.metisLoops?.onChanged?.(() => pull());
+    // The timer stays regardless, for two reasons that are not the same: the
+    // relative times ("wakes in 4m") have to keep counting with or without a
+    // store write, and a dropped push while this panel is open would otherwise
+    // leave a "running" badge on a loop that finished — exactly the dishonest
+    // UI this poll was added to prevent. With the push doing the real work it
+    // is a safety net rather than the mechanism, so it can be slower.
     const timer = window.setInterval(() => {
       setNow(Date.now());
       pull();
-    }, 10_000);
+    }, unsubscribe ? 30_000 : 10_000);
     return () => {
       cancelled = true;
+      unsubscribe?.();
       window.clearInterval(timer);
     };
   }, [hasBridge]);

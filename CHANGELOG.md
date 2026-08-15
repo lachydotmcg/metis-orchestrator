@@ -14,6 +14,35 @@ engine referenced below.
 
 ### Changed (2026-08-15)
 
+- **Background work reaches the window now, instead of the window asking.**
+  A settled loop turn pushes `metis-loops:changed` to every open window, so the
+  conversation feed and the Loops panel both update on the beat it lands.
+
+  Every main-to-renderer channel in this app was an `event.sender.send` — a
+  reply inside an `invoke`, addressed to whoever asked. That works for streaming
+  a run the user started and not at all for work that starts from a timer: a
+  loop tick has no `invoke` to reply inside. So two surfaces polled, the feed
+  every 20 seconds and the panel every 10, and the feed's poll shipped earlier
+  the same day with a note in LIMITATIONS saying a real push channel was the
+  better answer.
+
+  It hangs off `mutateLoops`, the one choke point every loop write already
+  passes through for the tray. One call site rather than one per writer, so a
+  background path added later is covered by construction instead of by whoever
+  adds it remembering.
+
+  It carries **no payload**, which is the decision worth keeping. Loop records
+  hold their whole history including per-step artifacts, so sending the list on
+  every write would push tens of kilobytes through IPC to say "something moved".
+  It is an invalidation signal; subscribers re-read through the `list()` they
+  would have called anyway. That is also why the channel leaks nothing.
+
+  Both subscribers keep a timer, for different reasons. The feed's runs only
+  when the preload is too old to have `onChanged`, so a stale build degrades to
+  the previous polling rather than to a feed that never updates. The panel's
+  stays permanently: it also drives the relative-time display, and a dropped
+  push must not leave a "running" badge on a loop that finished.
+
 - **The `/loop` hint is inside the prompt box now, not stacked on top of it.**
   *"The recommendations for when you're using /loop or whatever should be
   inside the prompt box not above it."* It sits along the bottom of the input,

@@ -98,13 +98,22 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   marker where a user message would be, then an ordinary run card. The wake prompt is deliberately
   never stored as the user's message: it is the goal plus a history digest plus the helper list plus
   the protocol block, and attributing that to the person would be a worse lie than hiding the turn.
-  **Two edges.** The feed re-reads on a 20-second timer while a live loop is attached to the open
-  thread, because nothing pushes background work to the renderer — every main-to-renderer channel in
-  this app is a reply inside an `invoke`, and a loop tick has no `invoke` to reply to. The poll costs
-  one small store read and only refetches the conversation when the loop's iteration count actually
-  moves, but a real push channel is the better answer and is not built. And a loop started from an
-  empty new session has a thread that does not exist until its first turn lands, so the view jumps
-  there at that moment rather than immediately.
+  **One edge.** A loop started from an empty new session has a thread that does not exist until its
+  first turn lands, so the view jumps there at that moment rather than immediately. The 20-second
+  poll this shipped with is gone — see the push channel below.
+- ~~**Nothing pushed background work to the renderer.**~~ Fixed 2026-08-15: `broadcastLoopsChanged`
+  in `main.ts` sends `metis-loops:changed` to every open window from inside `mutateLoops`, the one
+  choke point every loop write already passes through. Before it, every main-to-renderer channel in
+  this app was an `event.sender.send` — a reply inside an `invoke`, addressed to whoever asked —
+  which works for streaming a run the user started and not at all for work that starts from a timer.
+  So two surfaces polled: the conversation feed every 20 seconds and the Loops panel every 10.
+  **Narrower than "a push channel" sounds.** It is one signal about one store, not an event bus, and
+  it carries **no payload** — loop records hold their whole history including per-step artifacts, so
+  sending the list on every write would push tens of kilobytes to say "something moved". Subscribers
+  re-read through the `list()` they would have called anyway, which is also why the channel leaks
+  nothing. Both subscribers keep a timer: the feed's only when the preload is too old to have
+  `onChanged`, and the panel's permanently, because it also drives the relative-time display and a
+  dropped push must not leave a "running" badge on a loop that finished.
 - **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
   are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
   is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the
@@ -250,12 +259,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 22 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 23 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
   into the store, the conversation-store race, the SVG render gate, the live model-catalogue
-  mappers, the loop walkthrough, the think-token ceiling, the per-reader retrieval policy, the loop gate and named outputs, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+  mappers, the loop walkthrough, the think-token ceiling, the per-reader retrieval policy, the loop gate and named outputs, the loops push channel, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
 - ~~**An SVG only renders when the model labels the fence `svg`.**~~ Fixed 2026-08-14. Found in
   first live use: Qwen3 8B answered a chart request with a correct, complete SVG inside an
   ```xml fence and it printed as code, because the renderer tested the LABEL and never reached
