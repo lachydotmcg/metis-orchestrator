@@ -156,7 +156,13 @@ import {
 } from "../shared/intent-and-paths.js";
 import { lineDiffCounts } from "../shared/line-diff.js";
 import { pickDepthRung } from "../shared/depth-stack.js";
-import { describeRetrievalPosture, retrievalPlanFor, type RetrievalPlan } from "../shared/retrieval-policy.js";
+import {
+  RETRIEVAL_OVERRIDE_DEFAULT,
+  describeRetrievalPosture,
+  retrievalPlanFor,
+  type RetrievalOverride,
+  type RetrievalPlan
+} from "../shared/retrieval-policy.js";
 import {
   DEFAULT_THINK_TOKEN_CEILING,
   ThinkBudgetExceededError,
@@ -6954,7 +6960,13 @@ async function retrieveKnowledgeForPrompt(
     // (shared/retrieval-policy.ts). The flag was a global on/off, and at 7B
     // "on" is measurably worse than "off" — so the honest control is not a
     // switch but an amount, chosen from who is about to read it.
-    const plan = retrievalPlanFor(reader, { richTopK: KNOWLEDGE_TOP_K, baseFloor: KNOWLEDGE_SIMILARITY_FLOOR });
+    //
+    // The override is read here rather than passed in, so both prompt-assembly
+    // paths and the Oracle prewarm see the same value on the same turn. Oracle
+    // serves a draft only on a byte-identical prompt hash, and a setting read
+    // on one path and not the other would silently stop every exact match.
+    const override = await readStoreValue<RetrievalOverride>("retrievalPosture", RETRIEVAL_OVERRIDE_DEFAULT);
+    const plan = retrievalPlanFor(reader, { richTopK: KNOWLEDGE_TOP_K, baseFloor: KNOWLEDGE_SIMILARITY_FLOOR }, override);
     const chunks = await retrieveKnowledge(root, query, plan.topK, plan.similarityFloor);
     if (chunks.length === 0) return null;
     const block = knowledgeContextBlock(chunks);

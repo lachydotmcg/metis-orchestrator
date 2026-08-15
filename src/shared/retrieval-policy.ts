@@ -118,16 +118,35 @@ export function retrievalPostureFor(provider: string, model: string): RetrievalP
  *  inert on the tier Metis routes to most. */
 export function retrievalPlanFor(
   reader: { provider: string; model: string } | undefined,
-  defaults: { richTopK: number; baseFloor: number }
+  defaults: { richTopK: number; baseFloor: number },
+  override?: RetrievalOverride
 ): RetrievalPlan {
+  // An explicit choice wins over the size rule, INCLUDING for a reader the
+  // caller could not name. The measurements are strong but they are averages,
+  // and the person who can see their own answers getting worse knows something
+  // this function does not.
+  const chosen = isRetrievalOverride(override) && override !== "auto" ? override : null;
   // No reader known means the caller could not say who is about to read this,
   // and today's behaviour stands. A silent policy change at a call site nobody
   // updated is worse than an unimproved one.
-  if (!reader) return { posture: "rich", topK: defaults.richTopK, similarityFloor: defaults.baseFloor };
-  const posture = retrievalPostureFor(reader.provider, reader.model);
+  const posture = chosen ?? (reader ? retrievalPostureFor(reader.provider, reader.model) : "rich");
   if (posture === "minimal") return { posture, topK: 1, similarityFloor: Math.max(defaults.baseFloor, RETRIEVAL_MINIMAL_FLOOR) };
   if (posture === "conservative") return { posture, topK: Math.min(2, defaults.richTopK), similarityFloor: defaults.baseFloor };
   return { posture, topK: defaults.richTopK, similarityFloor: defaults.baseFloor };
+}
+
+/** What the Settings control can be set to. "auto" is the size rule above and
+ *  is the default, so an install that never opens the control behaves exactly
+ *  as it did before the control existed. */
+export type RetrievalOverride = RetrievalPosture | "auto";
+
+export const RETRIEVAL_OVERRIDE_DEFAULT: RetrievalOverride = "auto";
+
+/** Validates a stored override. The store is a plain JSON file anyone could
+ *  have written, and an unrecognised value must fall back to the size rule
+ *  rather than to whichever branch a bare comparison happened to reach. */
+export function isRetrievalOverride(value: unknown): value is RetrievalOverride {
+  return value === "auto" || value === "minimal" || value === "conservative" || value === "rich";
 }
 
 /** One line for the grounding operation, so the reason a turn got one chunk
@@ -137,3 +156,17 @@ export function describeRetrievalPosture(plan: RetrievalPlan): string {
   if (plan.posture === "conservative") return "conservative retrieval for a local model";
   return "minimal retrieval — a small local model reads its own knowledge better than retrieved text";
 }
+
+/** The Settings rows, kept here rather than in App.tsx so the wording and the
+ *  behaviour cannot drift apart — the label promises what retrievalPlanFor
+ *  actually does, because both are in this file.
+ *
+ *  The `rich` warning is not hedging. Forcing full retrieval onto a small local
+ *  model re-enables a measured 42–57% destruction of answers it would otherwise
+ *  have got right, and an override that hides that is worse than no override. */
+export const RETRIEVAL_OVERRIDE_CHOICES: ReadonlyArray<{ value: RetrievalOverride; label: string; hint: string }> = [
+  { value: "auto", label: "Automatic", hint: "Chosen from the model's size: one chunk under 10B, two to 32B, four above and for every cloud model." },
+  { value: "minimal", label: "Minimal", hint: "One chunk, and only on a near-exact match. What the evidence supports for a small local reader." },
+  { value: "conservative", label: "Conservative", hint: "Two chunks at the ordinary match floor, whatever is answering." },
+  { value: "rich", label: "Full", hint: "Four chunks always. On a model under 10B this is measurably worse than off — it destroyed 42–57% of answers the model already knew." }
+];

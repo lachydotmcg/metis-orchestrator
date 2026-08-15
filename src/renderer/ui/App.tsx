@@ -166,6 +166,8 @@ import type { LoopRecord } from "../../electron/loops";
 import { describeLoopCommand, formatLoopDuration, formatStepChain, parseLoopCommand, type LoopCommandParts } from "../../shared/loop-command";
 import { fenceMayBeSvg, isRenderableSvg, svgDataUrl } from "../../shared/svg-artifact";
 import { costLabel, routePricing } from "../../shared/model-catalogue";
+import { DEFAULT_THINK_TOKEN_CEILING } from "../../shared/think-budget";
+import { RETRIEVAL_OVERRIDE_CHOICES, RETRIEVAL_OVERRIDE_DEFAULT, type RetrievalOverride } from "../../shared/retrieval-policy";
 import { DEFAULT_SOUND_SETTINGS, SOUND_CUES, type SoundSettings, sound } from "./sound";
 import { installDecorativeSound } from "./soundRouter";
 
@@ -15575,6 +15577,21 @@ function SettingsWorkspace({
   // prewarm flag; main.ts double-gates on both keys plus a saved DeepSeek
   // key, so this toggle alone never spends anything. OFF by default.
   const [oracleCloudEnabled, setOracleCloudEnabled] = useAppStoreState("oracleCloudEnabled", false);
+  // Knowledge banks. Both keys existed and were read by main.ts from the day
+  // each shipped; neither had a control, which is the failure this panel is
+  // fixing — logic with no screen to reach it is logic nobody can turn off.
+  // Defaults are exactly what main.ts already assumed, so opening Settings for
+  // the first time changes nothing.
+  const [knowledgeBankEnabled, setKnowledgeBankEnabled] = useAppStoreState("knowledgeBankEnabled", true);
+  const [retrievalPosture, setRetrievalPosture] = useAppStoreState<RetrievalOverride>(
+    "retrievalPosture",
+    RETRIEVAL_OVERRIDE_DEFAULT
+  );
+  // The Depths overrun detector's budget (shared/think-budget.ts). 0 turns it
+  // off entirely, which has to stay reachable: it aborts a running generation,
+  // and anyone whose local model legitimately thinks for pages needs a way to
+  // say so.
+  const [thinkTokenCeiling, setThinkTokenCeiling] = useAppStoreState("thinkTokenCeiling", DEFAULT_THINK_TOKEN_CEILING);
   // Oracle v0.4 similarity serving opt-in (docs/DRILL_PLAN.md B12.3) — lets a
   // near-miss send (cosmetic last edit) serve the draft, honestly labeled
   // with its similarity. OFF by default; needs nomic-embed-text locally.
@@ -16645,6 +16662,75 @@ function SettingsWorkspace({
           </label>
           <p className="settings-hint">
             If your final edit before sending was cosmetic (a typo fix, a please), Oracle serves the already-drafted answer instantly, labeled with its match percentage. Edits that change meaning (negations, numbers) always fall back to a real call. Needs nomic-embed-text pulled locally.
+          </p>
+          {/* The Depths overrun detector's budget. It had no control at all until
+              now, and it is the one setting here that can ABORT a running
+              generation — so 0 (off) has to be reachable by anyone whose local
+              model legitimately reasons for pages. */}
+          <label className="settings-field">
+            <span>Thinking budget on local rungs</span>
+            <input
+              type="number"
+              min={0}
+              max={20000}
+              step={100}
+              value={thinkTokenCeiling}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                setThinkTokenCeiling(Number.isFinite(next) && next > 0 ? Math.min(20000, Math.round(next)) : 0);
+              }}
+            />
+          </label>
+          <p className="settings-hint">
+            With Depths on, a turn sent to a <em>local</em> rung that spends this many tokens thinking without starting an answer is
+            abandoned and re-run one rung deeper — a model that will not stop is the cheapest signal there is that the turn was
+            misrouted, and it arrives before you pay for the answer. Only fires while thinking is all it has produced, so an answer
+            already underway is never thrown away. Set 0 to switch it off. Local only: a cloud model's reasoning can only be measured
+            after you have been billed for it.
+          </p>
+        </article>
+        <article className="settings-panel">
+          <header>
+            <span>
+              <small>Knowledge banks</small>
+              <h2>How much of your project reaches the model</h2>
+            </span>
+          </header>
+          <label className="settings-field toggle-field">
+            <span>Ground answers in your project files</span>
+            <button
+              type="button"
+              className={`toggle-switch ${knowledgeBankEnabled ? "on" : ""}`}
+              role="switch"
+              aria-checked={knowledgeBankEnabled}
+              onClick={() => setKnowledgeBankEnabled(!knowledgeBankEnabled)}
+            >
+              <span className="toggle-knob" />
+            </button>
+          </label>
+          <p className="settings-hint">
+            Builds a local embeddings index over the attached project and prepends the most relevant chunks. Needs Ollama running with
+            <code> nomic-embed-text</code> pulled; without it this is on and nothing is retrieved.
+          </p>
+          <label className="settings-field">
+            <span>How much to retrieve</span>
+            <select
+              value={retrievalPosture}
+              onChange={(event) => setRetrievalPosture(event.target.value as RetrievalOverride)}
+              disabled={!knowledgeBankEnabled}
+            >
+              {RETRIEVAL_OVERRIDE_CHOICES.map((choice) => (
+                <option key={choice.value} value={choice.value}>
+                  {choice.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <p className="settings-hint">{RETRIEVAL_OVERRIDE_CHOICES.find((choice) => choice.value === retrievalPosture)?.hint}</p>
+          <p className="settings-hint">
+            More is not better here. Given a perfect passage, a 7B extracted the right answer about 15% of the time on questions it did
+            not already know, and adding retrieved context <strong>destroyed 42–57% of answers it had previously got right unaided</strong>.
+            The default sizes retrieval to whoever is actually answering, which is something no app with one model behind the curtain can do.
           </p>
         </article>
         <article className="settings-panel">

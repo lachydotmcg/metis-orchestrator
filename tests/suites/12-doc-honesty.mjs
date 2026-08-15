@@ -294,6 +294,36 @@ section("The /loop hint is inside the input, not stacked above it");
   ok("the textarea is padded to clear it", /\.composer-input-wrap\.has-loop-hint textarea\s*\{[^}]*padding-bottom/.test(css));
 }
 
+section("Every store key main reads has a control that can change it");
+{
+  // The standing complaint this guards: logic shipped with no screen to reach
+  // it. Three keys were read by main.ts from the day each shipped and had no
+  // control anywhere — knowledgeBankEnabled for its whole life, the other two
+  // for a few hours. A key main reads and the renderer cannot write is a
+  // setting only a text editor can change.
+  //
+  // Deliberately a short explicit list, not a scan for every readStoreValue
+  // call: plenty of keys are genuinely internal (lastProjectSnapshot,
+  // usageLedger), and a check that flags those is one somebody deletes.
+  const app = read("src/renderer/ui/App.tsx");
+  for (const key of ["knowledgeBankEnabled", "retrievalPosture", "thinkTokenCeiling"]) {
+    // Tolerant of the type parameter and of the call being wrapped across
+    // lines — this is checking that the renderer binds the key at all, not how
+    // prettier felt about it that day.
+    ok(`${key} is reachable from Settings`, new RegExp(`useAppStoreState(?:<[^>]+>)?\\(\\s*"${key}"`).test(app));
+  }
+  // A control is not reachable if nothing renders it.
+  ok("the knowledge-bank toggle renders", /setKnowledgeBankEnabled\(!knowledgeBankEnabled\)/.test(app));
+  ok("the posture select renders", /setRetrievalPosture\(event\.target\.value as RetrievalOverride\)/.test(app));
+  ok("the think-budget field renders", /setThinkTokenCeiling\(/.test(app));
+  // Opening Settings for the first time must not change how the app behaves,
+  // so every default has to match what main.ts already assumed.
+  const main = read("src/electron/main.ts");
+  ok("the bank default still matches main", /readStoreValue<boolean>\("knowledgeBankEnabled", true\)/.test(main) && app.includes('useAppStoreState("knowledgeBankEnabled", true)'));
+  ok("the ceiling default still matches main", /readStoreValue<number>\("thinkTokenCeiling", DEFAULT_THINK_TOKEN_CEILING\)/.test(main) && app.includes("DEFAULT_THINK_TOKEN_CEILING)"));
+  ok("the posture default still matches main", /readStoreValue<RetrievalOverride>\("retrievalPosture", RETRIEVAL_OVERRIDE_DEFAULT\)/.test(main));
+}
+
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

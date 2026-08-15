@@ -331,9 +331,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   default, so a depth-keyed policy would have done nothing for most installs while the harm applied
   to all of them. Size comes from the model **tag**, because Ollama's byte size folds quantisation
   in and a 4-bit 30B looks like an 8-bit 13B; a tag with no size gets the middle posture rather than
-  either extreme. And there is still no UI for any of it: the flag in Settings remains a single
-  on/off, and the postures are not configurable. The 10B line is the paper's own; the 32B line and
-  the 0.55 floor are judgement calls that no study reaches.
+  either extreme. The 10B line is the paper's own; the 32B line and the 0.55 floor are judgement
+  calls that no study reaches. **Controls landed 2026-08-15** under Settings > Chat > Knowledge
+  banks: the bank's own on/off (which had never had one at all) and an Automatic / Minimal /
+  Conservative / Full override. `Full` is offered and warns in the same breath that it re-enables
+  the measured 42–57% destruction on a small local reader, because an override that hides what it
+  costs is worse than no override.
 - ~~**Depths guesses once and never revisits.**~~ Partly fixed 2026-08-15: a turn routed to a
   **local** rung under Depths now carries a thinking budget, and a model that spends the whole
   budget without starting an answer has its stream cut and the turn re-run one rung deeper. That is
@@ -347,9 +350,10 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   produced** — once an answer has started the deliberation is over, and aborting then would discard
   a real answer to punish a long preamble. It promotes **once**: the retry has no ceiling of its
   own, or one hard prompt could walk the whole ladder burning a call per rung, and a turn already on
-  the deepest rung fails rather than re-running the same model. And the ceiling (1500 tokens) has
-  **no settings UI** — it is a runaway detector with a deliberately generous default, adjustable
-  only by writing the `thinkTokenCeiling` store key.
+  the deepest rung fails rather than re-running the same model. The ceiling is a runaway detector
+  with a deliberately generous default (1500 tokens), and since 2026-08-15 it has a field under
+  Settings > Chat > Experiments — 0 switches it off, which had to be reachable, because this is the
+  one setting in the app that can abort a generation already in flight.
 
 ## Closed
 

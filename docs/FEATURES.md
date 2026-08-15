@@ -198,7 +198,7 @@ NVIDIA NIM and Groq are both OpenAI-chat-schema-compatible, so they slot into th
 
 <br />
 
-On by default (`knowledgeBankEnabled`, the one flag whose default is `true`). When a run has a project folder, Metis builds or reuses a cached local embeddings index over that project's files and retrieves the most relevant chunks to prepend as context.
+On by default (`knowledgeBankEnabled`, the one flag whose default is `true`), with its toggle and its amount under **Settings > Chat > Knowledge banks**. When a run has a project folder, Metis builds or reuses a cached local embeddings index over that project's files and retrieves the most relevant chunks to prepend as context.
 
 Concrete parameters, all in `main.ts`: embeddings via Ollama's `/api/embeddings` using `nomic-embed-text`, chunks of 1500 characters, up to 200 chunks indexed, top 4 retrieved, similarity floor 0.3, context block capped at 6000 characters. The index is cached to app data and keyed by a signature over file sizes and modification times, so it rebuilds only when the project actually changed.
 
@@ -213,6 +213,8 @@ The flag is therefore no longer a global on/off. It is an amount, chosen from th
 | Local over 32B, and every cloud model | Four chunks — unchanged, and this is where retrieval actually pays |
 
 Nobody else can do this, because everybody else has one model behind the curtain. When the amount is reduced, the **"Grounded on N chunks"** row says why, so a retrieval that returns one chunk is never mistaken for a knowledge bank that has broken.
+
+The table above is the **Automatic** setting. You can override it to Minimal, Conservative or Full for every reader. Full is offered, and the control says in the same breath that on a model under 10B it is measurably worse than off — an override that hides what it costs is worse than no override.
 
 When retrieval succeeds you get a **"Grounded on N chunks"** row in the run, and it carries per-chunk provenance: file, chunk ordinal, and a snippet of each chunk. That is deliberate. You can spot a wrong or stale chunk steering an answer instead of wondering where a claim came from.
 
@@ -413,7 +415,7 @@ This is where "cheapest" comes from. A pipeline where every turn hits your stron
 - The thinking budget is **local-only**. Ollama is the one provider whose reasoning Metis sees token by token; a cloud model's thinking can only be measured after you have been billed for it.
 - It fires only while thinking is *all* the model has produced. Once an answer has started the deliberation is over, and cutting the stream then would throw away a real answer to punish a long preamble.
 - It promotes **once**. The retry has no ceiling of its own, or one hard prompt could walk the whole ladder paying for a call at every rung, and a turn already on the deepest rung fails rather than re-running the same model to reproduce the same failure.
-- The ceiling is 1500 tokens with no settings UI — a runaway detector with a deliberately generous default, adjustable only by writing the `thinkTokenCeiling` store key.
+- The ceiling is 1500 tokens, a deliberately generous runaway detector, in **Settings > Chat > Experiments**. Set it to 0 to switch it off — worth knowing this is the one setting in the app that can abort a generation already in flight.
 </details>
 
 <details>

@@ -12,6 +12,35 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Added (2026-08-16)
+
+- **The two settings that had no screen now have one**, plus a third that
+  never had one at all. Settings > Chat gains a **Knowledge banks** panel — the
+  bank's own on/off, and how much to retrieve — and the **Experiments** panel
+  gains the Depths thinking budget.
+
+  `knowledgeBankEnabled` has been read by the main process since the day
+  knowledge banks shipped and was documented as "on by default", with no
+  control anywhere. `thinkTokenCeiling` and the retrieval postures shipped
+  earlier the same day, both recorded in LIMITATIONS as having no UI. All three
+  were settings only a text editor could change, which is the same failure in
+  three places: logic with no screen to reach it.
+
+  Every default is exactly what the main process already assumed, so opening
+  Settings for the first time changes nothing. A control that alters behaviour
+  on first render is a different change and would have been a worse one.
+
+  Two decisions in the wording. The retrieval choices live in
+  `shared/retrieval-policy.ts` beside the rule they describe, so a label cannot
+  promise something `retrievalPlanFor` does not do. And **Full** is offered
+  while saying plainly that on a model under 10B it re-enables the measured
+  42–57% destruction of answers the model already knew — an override that hides
+  what it costs is worse than no override.
+
+  A new guard in `12-doc-honesty` pins all three keys as reachable and their
+  defaults as matching main's, because "shipped but unreachable" is not
+  something any other check in this repo could catch.
+
 ### Changed (2026-08-15)
 
 - **Background work reaches the window now, instead of the window asking.**

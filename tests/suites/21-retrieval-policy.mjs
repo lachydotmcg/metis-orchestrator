@@ -28,9 +28,12 @@ const {
   retrievalPostureFor,
   retrievalPlanFor,
   describeRetrievalPosture,
+  isRetrievalOverride,
   RETRIEVAL_SMALL_MODEL_B,
   RETRIEVAL_LARGE_MODEL_B,
-  RETRIEVAL_MINIMAL_FLOOR
+  RETRIEVAL_MINIMAL_FLOOR,
+  RETRIEVAL_OVERRIDE_DEFAULT,
+  RETRIEVAL_OVERRIDE_CHOICES
 } = await fromBuild("shared/retrieval-policy.js");
 
 const DEFAULTS = { richTopK: 4, baseFloor: 0.3 };
@@ -100,6 +103,41 @@ section("An unknown reader changes nothing");
   const none = retrievalPlanFor(undefined, DEFAULTS);
   check("same posture", none.posture, "rich");
   check("same numbers", [none.topK, none.similarityFloor], [DEFAULTS.richTopK, DEFAULTS.baseFloor]);
+}
+
+section("An explicit choice beats the size rule");
+{
+  // The measurements are strong but they are averages, and the person watching
+  // their own answers get worse knows something this function does not.
+  const forced = retrievalPlanFor({ provider: "ollama", model: "qwen3:8b" }, DEFAULTS, "rich");
+  check("a small local model can be forced to full", [forced.posture, forced.topK], ["rich", DEFAULTS.richTopK]);
+  const trimmed = retrievalPlanFor({ provider: "anthropic", model: "claude-opus-5" }, DEFAULTS, "minimal");
+  check("and a cloud model can be forced down", [trimmed.posture, trimmed.topK], ["minimal", 1]);
+  // "auto" is the default, so an install that never opens the control behaves
+  // exactly as it did before the control existed.
+  check("auto is the size rule", retrievalPlanFor({ provider: "ollama", model: "qwen3:8b" }, DEFAULTS, "auto").posture, "minimal");
+  check("so is an absent override", retrievalPlanFor({ provider: "ollama", model: "qwen3:8b" }, DEFAULTS).posture, "minimal");
+  check("the default is auto", RETRIEVAL_OVERRIDE_DEFAULT, "auto");
+  // The store is a plain JSON file anyone could have written. Junk must fall
+  // back to the size rule, not to whichever branch a bare comparison reached.
+  check("junk falls back to the rule", retrievalPlanFor({ provider: "ollama", model: "qwen3:8b" }, DEFAULTS, "enormous").posture, "minimal");
+  check("so does a non-string", retrievalPlanFor({ provider: "ollama", model: "qwen3:8b" }, DEFAULTS, 4).posture, "minimal");
+  ok("and the validator agrees", isRetrievalOverride("rich") && !isRetrievalOverride("enormous") && !isRetrievalOverride(null));
+  // An override also applies when the caller could not name the reader.
+  check("an unknown reader can still be trimmed", retrievalPlanFor(undefined, DEFAULTS, "minimal").posture, "minimal");
+}
+
+section("The Settings rows tell the truth about what they do");
+{
+  // Kept beside the rule rather than in App.tsx, so a label cannot promise
+  // something retrievalPlanFor does not do.
+  check("one row per setting", RETRIEVAL_OVERRIDE_CHOICES.map((choice) => choice.value), ["auto", "minimal", "conservative", "rich"]);
+  ok("every row explains itself", RETRIEVAL_OVERRIDE_CHOICES.every((choice) => choice.hint.length > 20));
+  // The one that matters. Forcing full retrieval onto a small local model
+  // re-enables the measured harm, and an override that hides that is worse
+  // than no override.
+  const full = RETRIEVAL_OVERRIDE_CHOICES.find((choice) => choice.value === "rich");
+  ok("full retrieval warns about the harm it re-enables", /42–57%|worse than off/.test(full.hint));
 }
 
 section("A shrunken retrieval says why");
