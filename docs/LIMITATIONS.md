@@ -240,12 +240,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 20 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 21 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach
   into the store, the conversation-store race, the SVG render gate, the live model-catalogue
-  mappers, the loop walkthrough, the think-token ceiling, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
+  mappers, the loop walkthrough, the think-token ceiling, the per-reader retrieval policy, and the honesty of this documentation itself. They cover the adversarially-important slices, not the breadth of `src/`.
 - ~~**An SVG only renders when the model labels the fence `svg`.**~~ Fixed 2026-08-14. Found in
   first live use: Qwen3 8B answered a chart request with a correct, complete SVG inside an
   ```xml fence and it printed as code, because the renderer tested the LABEL and never reached
@@ -300,6 +300,21 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 - **The Auto Router classifies by keyword rules plus a length rule**, not a learned model. The
   confidence numbers are fixed constants, so read them as a category label rather than a calibrated
   probability.
+- ~~**The knowledge bank gave every model the same four chunks.**~~ Fixed 2026-08-15: how much
+  retrieved context a run gets is now chosen from the model about to read it — one chunk over a 0.55
+  floor under 10B, two chunks to 32B and for a local model whose tag does not state a size, and the
+  existing four for everything larger and for every cloud model. `knowledgeBankEnabled` defaulting
+  to true was a *measured* loss on small local models: given a perfect oracle passage a 7B extracted
+  the right answer ~15% of the time, adding retrieved context destroyed 42–57% of answers it had
+  previously got right unaided, and net expected accuracy from deploying RAG at 7B is −2.9 points
+  (docs/MEMORY_AND_LINKS.md).
+  **What it does not do.** It keys on the reader, never on the Depths judgement — Depths is off by
+  default, so a depth-keyed policy would have done nothing for most installs while the harm applied
+  to all of them. Size comes from the model **tag**, because Ollama's byte size folds quantisation
+  in and a 4-bit 30B looks like an 8-bit 13B; a tag with no size gets the middle posture rather than
+  either extreme. And there is still no UI for any of it: the flag in Settings remains a single
+  on/off, and the postures are not configurable. The 10B line is the paper's own; the 32B line and
+  the 0.55 floor are judgement calls that no study reaches.
 - ~~**Depths guesses once and never revisits.**~~ Partly fixed 2026-08-15: a turn routed to a
   **local** rung under Depths now carries a thinking budget, and a model that spends the whole
   budget without starting an answer has its stream cut and the turn re-run one rung deeper. That is

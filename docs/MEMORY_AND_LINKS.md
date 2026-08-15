@@ -69,6 +69,37 @@ defaults to **true**, and per the evidence that is a net loss when a small local
 model is answering. The flag should not be a global on/off — it should be a
 per-tier policy.
 
+### Built, 2026-08-15
+
+`src/shared/retrieval-policy.ts` plus a `reader` argument on
+`retrieveKnowledgeForPrompt`, passed at all three prompt-assembly sites (chat,
+edit, and the Oracle prewarm). Suite 21.
+
+Three decisions, one of which departs from the framing above:
+
+- **It keys on the READER, not on Depths.** The table above is indexed by
+  reader and the measured effect is about a model's ability to use retrieved
+  text, so difficulty is a proxy at best: a trivial question answered by a
+  frontier model can still take rich context, and a hard one answered by an 8B
+  still cannot. The deciding argument is that **Depths is off by default** — a
+  depth-keyed policy would have done nothing at all for most installs while the
+  harm it exists to prevent applied to every one of them.
+- **Minimal is one chunk, not zero.** Nothing measured says retrieval is
+  worthless at 7B, only that four loose chunks are worse than none. One chunk
+  over a 0.55 floor is the version the evidence still supports, and zero would
+  make the knowledge bank silently inert on the tier Metis routes to most.
+- **Unknown size gets the middle.** Ollama's byte size folds quantisation in, so
+  the tag is the only signal, and plenty of tags omit it. Rich on a hidden 7B
+  reproduces the harm; minimal on someone's 70B silently disables a working
+  feature. Two chunks is the answer that is never badly wrong.
+
+One constraint found by building it: the Oracle prewarm path assembles the same
+prompt the real send will use and serves a draft only on a byte-identical hash,
+so the policy has to apply identically there or every exact-match serve stops
+landing — silently. That is also why `localModelParams` treats whitespace as a
+tag boundary: the picker's display name ("Qwen3 8B") has to read the same size
+as the tag ("qwen3:8b").
+
 ---
 
 ## The design

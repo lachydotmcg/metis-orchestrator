@@ -14,6 +14,40 @@ engine referenced below.
 
 ### Changed (2026-08-15)
 
+- **The knowledge bank now gives each model as much as it can actually use.**
+  Retrieval used to hand every reader the same four chunks. It is now an amount
+  chosen from the model about to read it: one chunk over a much stricter match
+  floor under 10B, two chunks to 32B and for a local model whose tag does not
+  state a size, and the existing four for anything larger and for every cloud
+  model.
+
+  This inverts the obvious plan. "Local models have small context, so retrieval
+  matters more" is backwards — the problem is not that a 7B cannot *fit* a
+  knowledge base, it is that a 7B cannot *use* what it retrieves. Handed a
+  perfect oracle passage, a 7B extracted the right answer about 15% of the time
+  on questions it did not already know, and adding retrieved context
+  **destroyed 42–57% of answers it had previously got right unaided**. Net
+  expected accuracy from deploying RAG at 7B: −2.9 points. `knowledgeBankEnabled`
+  defaults to true, so the shipped default was a measured loss for exactly the
+  reader Metis is proudest of routing to.
+
+  Nobody else can build this, because everybody else has one model behind the
+  curtain.
+
+  Three decisions worth keeping. It keys on the **reader**, not on the Depths
+  judgement — difficulty is a proxy at best for a model's ability to use
+  retrieved text, and Depths is off by default, so a depth-keyed policy would
+  have done nothing for most installs while the harm applied to all of them.
+  Minimal is **one chunk, not zero**: nothing measured says retrieval is
+  worthless at 7B, only that four loose chunks are worse than none, and zero
+  would leave the knowledge bank silently inert on the tier Metis routes to
+  most. And an **unknown size gets the middle** posture, because guessing rich
+  on a hidden 7B reproduces the harm while guessing minimal on someone's 70B
+  disables something that was working.
+
+  When the amount is reduced the "Grounded on N chunks" row says why, so one
+  chunk is never mistaken for a knowledge bank that has broken.
+
 - **Depths can notice when it guessed wrong.** A turn routed to a local rung now
   carries a thinking budget. A model that spends the whole budget without
   starting an answer has its stream cut and the turn re-run one rung deeper,

@@ -176,7 +176,7 @@ There is no separate lint script and there are no tests. `typecheck`, `build`, a
 One person building in the open. The core is real: it routes, it writes files into folders you
 choose, it backs up what it touches, and it can be handed a goal it works on by itself.
 
-Two things a sceptical reader should know. There is an offline test suite (`npm test`, 20 suites,
+Two things a sceptical reader should know. There is an offline test suite (`npm test`, 21 suites,
 no network or API keys needed), run by CI on every push, so `npm run typecheck`, `npm run build`
 and `npm test` are the gates. And the latest tag is `v1.2.0`, from 2026-08-14, which is current
 with everything described on this page. Anything landing on `main` after that date is ahead of the

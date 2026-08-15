@@ -148,6 +148,7 @@ import {
 } from "../shared/intent-and-paths.js";
 import { lineDiffCounts } from "../shared/line-diff.js";
 import { pickDepthRung } from "../shared/depth-stack.js";
+import { describeRetrievalPosture, retrievalPlanFor, type RetrievalPlan } from "../shared/retrieval-policy.js";
 import {
   DEFAULT_THINK_TOKEN_CEILING,
   ThinkBudgetExceededError,
@@ -6868,7 +6869,12 @@ function cosineSimilarity(a: number[], b: number[]): number {
  *  index for `query`. Returns [] on ANY failure or when the index/embedding
  *  is unavailable, or when nothing clears the similarity floor — [] is the
  *  required no-op signal for callers (no prompt change, no operation line). */
-async function retrieveKnowledge(root: string, query: string, topK: number = KNOWLEDGE_TOP_K): Promise<RetrievedKnowledgeChunk[]> {
+async function retrieveKnowledge(
+  root: string,
+  query: string,
+  topK: number = KNOWLEDGE_TOP_K,
+  similarityFloor: number = KNOWLEDGE_SIMILARITY_FLOOR
+): Promise<RetrievedKnowledgeChunk[]> {
   try {
     const index = await buildOrLoadKnowledgeIndex(root);
     if (!index || index.chunks.length === 0) return [];
@@ -6877,7 +6883,7 @@ async function retrieveKnowledge(root: string, query: string, topK: number = KNO
     const queryVector = queryVectors[0];
     const scored = index.chunks
       .map((chunk) => ({ path: chunk.path, ordinal: chunk.ordinal, text: chunk.text, score: cosineSimilarity(queryVector, chunk.vector) }))
-      .filter((chunk) => chunk.score >= KNOWLEDGE_SIMILARITY_FLOOR)
+      .filter((chunk) => chunk.score >= similarityFloor)
       .sort((a, b) => b.score - a.score);
     return scored.slice(0, topK);
   } catch {
@@ -6898,8 +6904,13 @@ function knowledgeContextBlock(chunks: RetrievedKnowledgeChunk[]): string {
 /** Builds the "Grounded on N chunks" AgentOperation for a successful
  *  retrieval. Callers only build/emit this when chunks.length > 0 — an empty
  *  retrieval must never produce an operation line. */
-function knowledgeGroundingOperation(root: string, chunks: RetrievedKnowledgeChunk[]): AgentOperation {
+function knowledgeGroundingOperation(root: string, chunks: RetrievedKnowledgeChunk[], plan?: RetrievalPlan): AgentOperation {
   const distinctFiles = Array.from(new Set(chunks.map((chunk) => chunk.path)));
+  // Why this turn got one chunk instead of four, said out loud. A retrieval
+  // that quietly shrinks is indistinguishable from a knowledge bank that has
+  // stopped working, and the whole point of the policy is that it is a
+  // deliberate choice about this reader rather than a failure.
+  const postureNote = plan && plan.posture !== "rich" ? ` · ${describeRetrievalPosture(plan)}` : "";
   return {
     id: randomUUID(),
     kind: "context_load",
@@ -6908,7 +6919,7 @@ function knowledgeGroundingOperation(root: string, chunks: RetrievedKnowledgeChu
     status: "complete",
     charCount: chunks.reduce((sum, chunk) => sum + chunk.text.length, 0),
     permission: "filesystem.read",
-    detail: distinctFiles.join(", ").slice(0, 400),
+    detail: `${distinctFiles.join(", ").slice(0, 400)}${postureNote}`,
     // Provenance (docs/DRILL_PLAN.md I9.7): one entry PER CHUNK - file, chunk
     // ordinal, and a one-line preview - so the expandable op row answers
     // "grounded on WHAT exactly", not just how many. Trust feature: the user
@@ -6922,16 +6933,25 @@ function knowledgeGroundingOperation(root: string, chunks: RetrievedKnowledgeChu
  *  store toggle), and returns both the context block to prepend and the
  *  operation to emit — or null when there is nothing to ground on (the
  *  required no-op path: unchanged prompt, no operation, no timeline line). */
-async function retrieveKnowledgeForPrompt(root: string | undefined, query: string): Promise<{ block: string; operation: AgentOperation } | null> {
+async function retrieveKnowledgeForPrompt(
+  root: string | undefined,
+  query: string,
+  reader?: { provider: string; model: string }
+): Promise<{ block: string; operation: AgentOperation } | null> {
   if (!root) return null;
   try {
     const knowledgeEnabled = await readStoreValue<boolean>("knowledgeBankEnabled", true);
     if (!knowledgeEnabled) return null;
-    const chunks = await retrieveKnowledge(root, query);
+    // How much this particular reader should be handed
+    // (shared/retrieval-policy.ts). The flag was a global on/off, and at 7B
+    // "on" is measurably worse than "off" — so the honest control is not a
+    // switch but an amount, chosen from who is about to read it.
+    const plan = retrievalPlanFor(reader, { richTopK: KNOWLEDGE_TOP_K, baseFloor: KNOWLEDGE_SIMILARITY_FLOOR });
+    const chunks = await retrieveKnowledge(root, query, plan.topK, plan.similarityFloor);
     if (chunks.length === 0) return null;
     const block = knowledgeContextBlock(chunks);
     if (!block) return null;
-    return { block, operation: knowledgeGroundingOperation(root, chunks) };
+    return { block, operation: knowledgeGroundingOperation(root, chunks, plan) };
   } catch {
     return null;
   }
@@ -9588,7 +9608,14 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       // with no METIS.md.
       const editMetisBlock = await metisFilePromptBlock(metisFile ?? null);
       if (editMetisBlock) editPrompt = `${editMetisBlock}\n\n${editPrompt}`;
-      const editKnowledge = await retrieveKnowledgeForPrompt(writable?.path, prompt);
+      // The edit stage's own leading model, not the run's — this prompt is
+      // assembled for that stage and nothing else reads it.
+      const editReader = editConfig?.chain?.[0];
+      const editKnowledge = await retrieveKnowledgeForPrompt(
+        writable?.path,
+        prompt,
+        editReader ? { provider: editReader.provider, model: editReader.model } : undefined
+      );
       if (editKnowledge) {
         editPrompt = `${editKnowledge.block}${editPrompt}`;
         metisOperations.push(editKnowledge.operation);
@@ -9974,7 +10001,10 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   if (chatDesignSeed) emitTimeline(stream, timelineText(designSeedTimelineText(chatDesignSeed)));
   const chatConversationContext = await recentConversationContext(input.conversationId);
   const knowledgeStart = Date.now();
-  const chatKnowledge = fastLane ? null : await retrieveKnowledgeForPrompt(writableWorkspace?.path, prompt);
+  // The reader is known by now — depth routing, the pin and the policy route
+  // have all resolved above — so retrieval can be sized for whoever is about to
+  // read it rather than for an average nobody (shared/retrieval-policy.ts).
+  const chatKnowledge = fastLane ? null : await retrieveKnowledgeForPrompt(writableWorkspace?.path, prompt, { provider, model });
   const knowledgeMs = Date.now() - knowledgeStart;
   if (chatKnowledge) {
     metisOperations.push(chatKnowledge.operation);
@@ -12310,7 +12340,7 @@ type PrewarmContext = { conversationId?: string; projectPath?: string };
  *  retrieval queries the draft rather than the final prompt (the retrieved
  *  chunks rarely change across the last few keystrokes). Fails soft: null on
  *  any error, and the caller falls back to warming the raw draft. */
-async function assembleChatPrewarmPrompt(draft: string, context?: PrewarmContext): Promise<string | null> {
+async function assembleChatPrewarmPrompt(draft: string, context?: PrewarmContext, reader?: { provider: string; model: string }): Promise<string | null> {
   if (!context) return null;
   try {
     const decision = await decidePolicy({ prompt: draft });
@@ -12324,7 +12354,11 @@ async function assembleChatPrewarmPrompt(draft: string, context?: PrewarmContext
     const projectSnapshot = !fastLane && workspace ? await buildProjectSnapshot(workspace.path) : undefined;
     const metisFile = await loadProjectMetisFile(workspace?.path ?? context.projectPath);
     const conversationContext = await recentConversationContext(context.conversationId);
-    const knowledge = fastLane ? null : await retrieveKnowledgeForPrompt(workspace?.path, draft);
+    // The reader MUST be passed here for the same reason this whole function
+    // exists: Oracle serves a draft only on a byte-identical prompt hash, so a
+    // retrieval policy applied on the live path and not here would silently
+    // stop every exact-match serve rather than fail loudly.
+    const knowledge = fastLane ? null : await retrieveKnowledgeForPrompt(workspace?.path, draft, reader);
     return sessionProviderPrompt(
       draft,
       effectiveDecision,
@@ -12390,7 +12424,7 @@ async function prewarmModel(model: string, draft: string, context?: PrewarmConte
       // so Ollama's prompt cache prefix-matches at send time and prefill
       // reduces to the trailing keystrokes. Falls back to the raw draft
       // (model-residency benefit only) when assembly is unavailable.
-      const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context);
+      const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context, { provider: "ollama", model: trimmedModel });
       await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -12632,7 +12666,7 @@ async function draftModel(
       // same context the real run will (conversation continuity, project
       // snapshot, instructions), which both makes the preview representative
       // and shares the warmed prefix with the eventual real call.
-      const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context);
+      const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context, { provider: "ollama", model: trimmedModel });
       const sentPrompt = assembled ?? trimmedDraft;
       // O4 (v0.3): default sampling, NO temperature override — the draft must
       // be generated exactly the way the real streaming call generates so a
@@ -12805,7 +12839,7 @@ async function draftCloudModel(model: string, draft: string, context?: PrewarmCo
       cloudDraftAbort.controller.abort();
       cloudDraftAbort = null;
     }
-    const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context);
+    const assembled = await assembleChatPrewarmPrompt(trimmedDraft, context, { provider: ORACLE_CLOUD_PROVIDER, model: resolved });
     if (!assembled) return null;
     const controller = new AbortController();
     cloudDraftAbort = { controller, hash };

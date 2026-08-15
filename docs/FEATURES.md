@@ -191,9 +191,23 @@ On by default (`knowledgeBankEnabled`, the one flag whose default is `true`). Wh
 
 Concrete parameters, all in `main.ts`: embeddings via Ollama's `/api/embeddings` using `nomic-embed-text`, chunks of 1500 characters, up to 200 chunks indexed, top 4 retrieved, similarity floor 0.3, context block capped at 6000 characters. The index is cached to app data and keyed by a signature over file sizes and modification times, so it rebuilds only when the project actually changed.
 
+**How much you get depends on who is reading it.** The intuition that local models need retrieval *more* is backwards. The problem is not that a 7B cannot fit a knowledge base; it is that a 7B cannot use what it retrieves. Handed a perfect oracle passage, a 7B extracted the right answer about 15% of the time on questions it did not already know, and adding retrieved context **destroyed 42–57% of answers it had previously got right unaided** — net expected accuracy from deploying RAG at 7B, −2.9 points. So "on" was measurably worse than "off" for exactly the reader Metis is proudest of routing to.
+
+The flag is therefore no longer a global on/off. It is an amount, chosen from the model about to read it:
+
+| Reader | What it gets |
+| --- | --- |
+| Local under 10B | One chunk, and only on a near-exact match (floor 0.55). At this size the question is not "is this the best chunk" but "is this so obviously the answer that it beats the model's own knowledge" |
+| Local 10–32B, or a local model whose size the tag does not state | Two chunks at the ordinary floor |
+| Local over 32B, and every cloud model | Four chunks — unchanged, and this is where retrieval actually pays |
+
+Nobody else can do this, because everybody else has one model behind the curtain. When the amount is reduced, the **"Grounded on N chunks"** row says why, so a retrieval that returns one chunk is never mistaken for a knowledge bank that has broken.
+
 When retrieval succeeds you get a **"Grounded on N chunks"** row in the run, and it carries per-chunk provenance: file, chunk ordinal, and a snippet of each chunk. That is deliberate. You can spot a wrong or stale chunk steering an answer instead of wondering where a claim came from.
 
 **Honest limits:** this needs Ollama running with `nomic-embed-text` pulled. Without it the flag is on and nothing is retrieved. Every function in the path fails soft, returning null or an empty array on any error, so if embeddings are unavailable the run is byte-identical to one with no knowledge bank at all. It changes nothing and says nothing, which is correct behaviour but does mean a silent no-op is indistinguishable from "nothing relevant was found" unless you check that the model is pulled.
+
+On the per-reader policy specifically: the size comes from the model **tag** (`qwen3:8b`), because Ollama's reported byte size folds quantisation in and a 4-bit 30B looks like an 8-bit 13B. A tag that does not state a size gets the middle posture rather than either extreme, since guessing rich on a hidden 7B reproduces the harm and guessing minimal on someone's 70B silently disables something that was working. The 10B line is the paper's own; the 32B line and the 0.55 floor are judgement calls, and the studies stop well before either.
 </details>
 
 <details>
