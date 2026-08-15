@@ -51,6 +51,13 @@ export interface WalkthroughTurn {
   reason?: string;
   error?: string;
   summary?: string;
+  /** Who answered the continue-or-stop question, when it was asked as a
+   *  separate call. Printed because "a different model checked this" is a
+   *  claim, and a claim in a report that cannot be traced to a name is
+   *  decoration. `independent` is a stored fact rather than something inferred
+   *  from the name here — only the caller knows whether that model is also the
+   *  one that did the work. */
+  judgedBy?: { model: string; independent: boolean; note?: string };
   routing?: WalkthroughRouting;
   files?: WalkthroughFile[];
   evidence?: { label: string; status: "complete" | "warning" | "error"; exitCode?: number; detail?: string }[];
@@ -292,6 +299,19 @@ function turnsSection(input: WalkthroughInput): string[] {
         ? "Asked for nothing, so the loop stopped — continuing is an explicit act."
         : `Decided **${turn.decision}**${turn.reason ? `: ${turn.reason}` : "."}`;
     lines.push(verdict, "");
+    // Named, or explicitly not. Silence here would read as "an independent
+    // judge checked it" on the turns where nothing of the kind happened.
+    if (!turn.judgedBy) {
+      lines.push("_Not independently judged — this turn carried its own decision._", "");
+    } else {
+      const note = turn.judgedBy.note ? ` (${cell(turn.judgedBy.note)})` : "";
+      lines.push(
+        turn.judgedBy.independent
+          ? `Judged by **${cell(turn.judgedBy.model)}**, which did not do the work.${note}`
+          : `Judged by **${cell(turn.judgedBy.model)}** — the same model that did the work.${note}`,
+        ""
+      );
+    }
   }
   return lines;
 }

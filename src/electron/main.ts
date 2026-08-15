@@ -5783,6 +5783,57 @@ function followupInvokerFor(providerResult?: ProviderInvokeResult): (prompt: str
   };
 }
 
+/** The loop's verdict call, given to a model that did NOT do the work
+ *  (docs/COMPETITIVE_SWEEP.md, shortlist item 2).
+ *
+ *  It used to be `followupInvokerFor(providerResult)`, which sent the question
+ *  to whatever had just answered the work turn: the model that made the mistake
+ *  voting on whether it was finished. Metis is the one product that does not
+ *  have to pay for a second opinion — the local router is already resident and
+ *  its tokens are free — so the judge is the local rung.
+ *
+ *  It FALLS BACK to the working model rather than failing. A cloud-only user
+ *  with no Ollama would otherwise get a placeholder from the local call, and a
+ *  null decision ends the loop: every loop that did real work would stop after
+ *  one turn, which is the exact failure decideLoopContinuation was written to
+ *  fix. An independent judge is better than a self-judge; a self-judge is much
+ *  better than no loop.
+ *
+ *  Returns the invoker together with a `judgedBy()` reader, so the record can
+ *  say which model actually answered rather than which one was asked first —
+ *  a behaviour change nobody can see is one nobody can check. */
+function loopJudgeInvoker(providerResult?: ProviderInvokeResult): {
+  invoke: (prompt: string) => Promise<{ output: string; source: string }>;
+  judgedBy: () => LoopIterationRecord["judgedBy"];
+} {
+  const local = localStageRef();
+  const worker: StageModelRef | null =
+    providerResult && providerResult.source !== "placeholder" ? { provider: providerResult.provider, model: providerResult.model } : null;
+  const localIsWorker = Boolean(worker && worker.provider === local.provider && worker.model === local.model);
+  let served: LoopIterationRecord["judgedBy"];
+  return {
+    judgedBy: () => served,
+    invoke: async (prompt: string) => {
+      const first = await invokeProvider({ provider: local.provider, model: local.model, prompt });
+      if (first.source !== "placeholder") {
+        served = {
+          model: local.model,
+          independent: !localIsWorker,
+          // A local-only setup can route the work to the same model the judge
+          // runs on. Nothing is wrong with that, but calling it independent
+          // would be a lie the report repeats forever.
+          ...(localIsWorker ? { note: "the loop routed its work to the local model too" } : {})
+        };
+        return { output: first.output, source: first.source };
+      }
+      if (!worker) return { output: first.output, source: first.source };
+      const second = await invokeProvider({ provider: worker.provider, model: worker.model, prompt });
+      served = { model: worker.model, independent: false, note: "no local model was reachable, so the worker judged itself" };
+      return { output: second.output, source: second.source };
+    }
+  };
+}
+
 /** CORE.1: attaches model-written follow-ups to a completed run. Never
  *  throws, never blocks a real answer for long, and attaches nothing rather
  *  than guessing. Skipped entirely for runs with no real answer (a failed or
@@ -11223,6 +11274,7 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   // stopped after exactly one turn.
   let decision = runError ? null : extractLoopDecision(assistantText);
   let decisionAsked = false;
+  let judgedBy: LoopIterationRecord["judgedBy"];
   // Re-measured AFTER the work turn: runSessionTracked just appended this
   // turn's ledger rows, and the budget must count the spend that already
   // happened, not the total as of one turn ago.
@@ -11233,11 +11285,16 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
   const alreadyTerminal = loopTerminalReason({ ...loaded, iterations: index }, new Date(), spentAfter) !== null;
   if (!runError && !decision && !alreadyTerminal) {
     decisionAsked = true;
-    decision = await decideLoopContinuation(followupInvokerFor(providerResultForDecision), {
+    const judge = loopJudgeInvoker(providerResultForDecision);
+    decision = await decideLoopContinuation(judge.invoke, {
       goal: loaded.goal,
       whatHappened: summariseTurn(assistantText, 600),
-      turnsLeft: Math.max(0, loaded.maxIterations - index)
+      turnsLeft: Math.max(0, loaded.maxIterations - index),
+      // The judge grades against what ran, not against the turn's own account
+      // of itself. Same evidence the next wake prompt gets, one turn earlier.
+      evidence: turnEvidence
     });
+    judgedBy = judge.judgedBy();
   }
   const entry: LoopIterationRecord = {
     index,
@@ -11258,7 +11315,10 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
     // walkthrough can say "not judged" instead of inventing a routing row for a
     // turn that did not route.
     routing: turnRouting && Object.keys(turnRouting).length ? turnRouting : undefined,
-    files: turnFiles.length ? turnFiles : undefined
+    files: turnFiles.length ? turnFiles : undefined,
+    // Absent when the work turn carried its own decision block — that turn
+    // graded itself, and saying nothing is the honest record of that.
+    judgedBy
   };
 
   const finishedAt = new Date();

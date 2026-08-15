@@ -244,6 +244,15 @@ export interface LoopIterationRecord {
   /** Files this turn wrote. See filesFromOperations for why these are kept
    *  apart from evidence. */
   files?: WalkthroughFile[];
+  /** Who actually answered the continue-or-stop question, when it was asked as
+   *  a separate call.
+   *
+   *  Recorded because the point of asking a DIFFERENT model (see
+   *  loopJudgeInvoker) is unverifiable otherwise: a behaviour change nobody can
+   *  see is one nobody can check. Absent when the work turn carried its own
+   *  decision block — that turn graded itself, and an empty field is the honest
+   *  record of that rather than a gap. */
+  judgedBy?: { model: string; independent: boolean; note?: string };
 }
 
 export interface LoopRecord {
@@ -551,29 +560,65 @@ export type LoopDecisionInvoke = (prompt: string) => Promise<{ output: string; s
  * SILENCE STILL STOPS THE LOOP. This is a second chance to say continue, never
  * a default toward continuing. Any failure, any unparseable answer, any
  * placeholder result returns null and the caller ends the loop.
+ *
+ * THE JUDGE IS NOT THE WORKER (docs/COMPETITIVE_SWEEP.md, shortlist item 2).
+ * This used to be handed `followupInvokerFor(providerResult)` — the model that
+ * had just done the work, grading its own homework, which is exactly the
+ * arrangement where a confident wrong answer survives. The caller now supplies
+ * an independent judge (see loopJudgeInvoker in main). Two things follow from
+ * that and both are in the prompt above:
+ *
+ *  - The judge is TOLD it did not do the work, because a model handed a
+ *    first-person account defaults to accepting it.
+ *  - The judge sees the turn's EVIDENCE, not only its prose. "I have added the
+ *    comments" is what a model writes whether or not it did; an exit code is
+ *    not. Grading against evidence is the whole difference between an
+ *    independent judge and a second opinion from the same voice.
+ *
+ * And it can answer BLOCKED, which finally has a precise definition: *what I
+ * was shown does not tell me either way*. Without it the only two answers both
+ * assert an outcome, so a judge with no evidence had to invent one.
  */
 export async function decideLoopContinuation(
   invoke: LoopDecisionInvoke,
-  input: { goal: string; whatHappened: string; turnsLeft: number }
+  input: { goal: string; whatHappened: string; turnsLeft: number; evidence?: LoopEvidence[] }
 ): Promise<LoopDecision | null> {
   try {
+    // What the turn PROVED, above what it SAID about itself. A turn's own prose
+    // is the thing least worth trusting when the question is whether that turn
+    // succeeded: "I have added the comments" is what a model writes whether or
+    // not it did. An exit code is not.
+    const evidenceLines: string[] = [];
+    if (input.evidence?.length) {
+      evidenceLines.push("WHAT ACTUALLY RAN, AND HOW IT ENDED:");
+      for (const item of input.evidence) {
+        const code = typeof item.exitCode === "number" ? ` (exit ${item.exitCode})` : "";
+        evidenceLines.push(`- ${item.label}: ${item.status}${code}${item.detail ? ` — ${item.detail}` : ""}`);
+      }
+      evidenceLines.push("");
+    }
+
     const prompt = [
       "A background task just finished one turn of work. Decide whether it needs another turn.",
+      "You did not do this work. Judge it on what you are shown, not on how confident it sounds.",
       "",
       "THE GOAL:",
       input.goal,
       "",
-      "WHAT THIS TURN DID:",
+      "WHAT THIS TURN SAID IT DID:",
       input.whatHappened || "(nothing was reported)",
       "",
+      ...evidenceLines,
       `Turns remaining if you continue: ${input.turnsLeft}`,
       "",
       "Answer with ONE line and nothing else:",
       "  CONTINUE <seconds> <short reason>     if the goal is not finished yet",
       "  STOP <short reason>                   if the goal is met, or another turn cannot help",
+      "  BLOCKED <short reason>                if what you were shown cannot tell you either way",
       "",
       "Example: CONTINUE 60 four functions still need comments",
-      "Example: STOP every function now has a comment"
+      "Example: STOP every function now has a comment",
+      "Example: BLOCKED nothing was run that would show whether the tests pass"
     ].join("\n");
 
     const result = await invoke(prompt);
@@ -592,13 +637,25 @@ export async function decideLoopContinuation(
     const candidates = cleaned
       .split("\n")
       .map((entry) => entry.trim())
-      .filter((entry) => /^(continue|stop)\b/i.test(entry))
+      .filter((entry) => /^(continue|stop|blocked)\b/i.test(entry))
       // Small models echo the option menu before answering, and the menu lists
       // CONTINUE first, so an echo used to win outright. A line still carrying
       // the prompt's placeholders is a quotation, not a decision.
       .filter((entry) => !/<seconds>|<short reason>/i.test(entry));
 
     if (!candidates.length) return null;
+
+    // BLOCKED OUTRANKS EVERYTHING, including stop. Both halt the loop, so this
+    // is not about safety — it is about which claim is true. `stop` asserts the
+    // goal was met; `blocked` says the judge could not tell. A model that emits
+    // both has told us it could not tell, and recording that as a completed
+    // goal is the one wrong answer here that reads as success. Same reason the
+    // status exists at all: the other two verdicts both assert an outcome.
+    const blockedLine = candidates.find((entry) => /^blocked\b/i.test(entry));
+    if (blockedLine) {
+      const reason = blockedLine.replace(/^blocked\b[\s:.-]*/i, "").trim();
+      return { decision: "blocked", reason: reason || undefined };
+    }
 
     // AMBIGUITY RESOLVES TOWARD STOPPING, the same rule extractLoopDecision
     // follows. Any stop line wins, even alongside a continue: we cannot tell
@@ -745,6 +802,24 @@ export function composeWakePrompt(loop: LoopRecord): string {
       lines.push(`- ${item.label}: ${item.status}${code}${item.detail ? ` — ${item.detail}` : ""}`);
     }
     lines.push(")", "");
+  }
+
+  // WHY THIS TURN IS RUNNING, in the judge's own words. The last continue
+  // carried a reason ("four functions still need comments") and until now that
+  // string reached the panel and the tray and never the model, so every wake
+  // re-derived the remaining work from a digest of what was already done. The
+  // judge is the one thing in the loop that looked at the goal and the evidence
+  // together; its sentence is the most specific instruction available and it
+  // was being thrown away (docs/COMPETITIVE_SWEEP.md, shortlist item 2).
+  //
+  // Same neutral wording rule as the rest of this scaffolding, and placed
+  // directly above the protocol block so it cannot outweigh the goal at the
+  // top: routing classifies from prompt text, and a directive full of nouns
+  // from the goal is exactly the kind of line that once turned a read into a
+  // build.
+  const lastContinue = loop.history[loop.history.length - 1];
+  if (lastContinue?.decision === "continue" && lastContinue.reason) {
+    lines.push(`(Why another turn was asked for: ${lastContinue.reason})`, "");
   }
 
   lines.push(loopDecisionPromptBlock());

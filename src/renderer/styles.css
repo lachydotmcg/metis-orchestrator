@@ -14722,6 +14722,17 @@ a:focus-visible,
   color: var(--faint);
   font-style: italic;
 }
+/* Who decided the turn was done. Quieter than the reason it gave: the reason is
+   the content, this is the provenance. Its own line so a model id never runs
+   into the sentence above it. */
+.loop-turn-judge {
+  display: block;
+  margin-top: 2px;
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+  opacity: 0.8;
+}
 
 /* Empty state. Quieter than a populated panel: it is documentation, not status. */
 .loops-panel-empty {

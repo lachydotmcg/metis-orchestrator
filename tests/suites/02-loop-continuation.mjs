@@ -79,6 +79,58 @@ await delayOf("a bare number is still seconds", "CONTINUE 300 four files remain"
 await delayOf("CONTINUE 90s", "CONTINUE 90s more to do", 90);
 await delayOf("no number falls back to the floor", "CONTINUE more work remains", 60);
 
+console.log("\nBLOCKED: THE VERDICT THAT CLAIMS NOTHING");
+await check("plain blocked", ask("BLOCKED nothing was run that would show the tests pass"), "blocked");
+await check("lowercase blocked", ask("blocked I cannot tell from this"), "blocked");
+// Both verdicts halt the loop, so this is not a safety ordering — it is about
+// which claim is TRUE. `stop` asserts the goal was met; `blocked` says the
+// judge could not tell. A model that said both has told us it could not tell,
+// and recording that as a met goal is the one wrong answer that reads as
+// success.
+await check("blocked outranks stop", ask("STOP looks done\nBLOCKED but I never saw it run"), "blocked");
+await check("blocked outranks continue", ask("CONTINUE 60 keep going\nBLOCKED I cannot verify"), "blocked");
+await check("an echoed BLOCKED placeholder is not a verdict", ask("BLOCKED <short reason>"), null);
+total += 1;
+{
+  const r = await ask("BLOCKED the build never ran");
+  if (r && r.reason === "the build never ran") { pass += 1; console.log("  PASS  the blocked reason survives"); }
+  else console.log(`  FAIL  the blocked reason survives, got ${r && r.reason}`);
+}
+
+console.log("\nTHE JUDGE IS SHOWN EVIDENCE, NOT ONLY PROSE");
+total += 1;
+{
+  // The whole point of an independent judge is that it grades against what
+  // RAN. If the evidence never reaches the prompt, the judge is just a second
+  // opinion on the same paragraph.
+  let seen = "";
+  await decideLoopContinuation(
+    (prompt) => { seen = prompt; return Promise.resolve({ output: "STOP done", source: "ollama" }); },
+    {
+      goal: "make the tests pass",
+      whatHappened: "I fixed the failing test",
+      turnsLeft: 2,
+      evidence: [{ label: "npm test", status: "error", exitCode: 1, detail: "1 failing" }]
+    }
+  );
+  const hasEvidence = seen.includes("npm test") && seen.includes("exit 1") && seen.includes("1 failing");
+  const disownsTheWork = /did not do this work/i.test(seen);
+  if (hasEvidence && disownsTheWork) { pass += 1; console.log("  PASS  evidence and the not-your-work framing both reach the judge"); }
+  else console.log(`  FAIL  evidence reached: ${hasEvidence}, framing reached: ${disownsTheWork}`);
+}
+total += 1;
+{
+  // No evidence must not fabricate an empty section that reads as "nothing
+  // failed".
+  let seen = "";
+  await decideLoopContinuation(
+    (prompt) => { seen = prompt; return Promise.resolve({ output: "STOP done", source: "ollama" }); },
+    { goal: "g", whatHappened: "w", turnsLeft: 1 }
+  );
+  if (!seen.includes("WHAT ACTUALLY RAN")) { pass += 1; console.log("  PASS  no evidence means no evidence section"); }
+  else console.log("  FAIL  an empty evidence section was rendered");
+}
+
 console.log("\nSILENCE STILL STOPS THE LOOP");
 await check("no decision at all", ask("I have finished the work."), null);
 await check("empty reply", ask(""), null);

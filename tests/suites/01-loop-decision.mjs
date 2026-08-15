@@ -121,6 +121,25 @@ check("goal still leads with history", p2.split("\n")[0], "g");
 check("replays prior work", p2.includes("read the files") && p2.includes("listed the functions"), true);
 check("says do not redo", p2.includes("do not redo"), true);
 check("counts the turn", p2.includes("Loop turn 3 of 3"), true);
+// The judge's reason is the most specific instruction the loop has: it is the
+// only sentence written by something that looked at the goal and the evidence
+// together. It used to reach the panel and the tray and never the model.
+{
+  const steered = { ...base, iterations: 1, history: [
+    { index: 1, at: "", summary: "commented two functions", decision: "continue", reason: "four functions still need comments" }] };
+  const p3 = composeWakePrompt(steered);
+  check("the last continue's reason is replayed as a directive", p3.includes("four functions still need comments"), true);
+  check("the goal still leads it", p3.split("\n")[0], "g");
+  // Scaffolding is a routing signal, so a directive must not outweigh the goal
+  // or read as a request to write something.
+  check("the directive adds no build verbs", /\b(build|make|create|write)\b/i.test(p3), false);
+  // A stop or a blocked verdict is not a directive for a turn that will never
+  // run, and replaying one on a restart would steer the loop with a sentence
+  // about why it ended.
+  const stopped = { ...base, iterations: 1, history: [
+    { index: 1, at: "", summary: "done", decision: "stop", reason: "every function now has a comment" }] };
+  check("a stop reason is not replayed as a directive", composeWakePrompt(stopped).includes("Why another turn was asked for"), false);
+}
 
 console.log("\nFLOWCHART STEPS (currentLoopStep + wake prompt)");
 {

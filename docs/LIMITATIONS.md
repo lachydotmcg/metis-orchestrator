@@ -68,6 +68,19 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   control rather than at a specific backup. And helper turns are named but have no row, because a
   helper runs in its own conversation — so the cost total understates whenever helpers ran, which
   the file says outright rather than quietly.
+- ~~**The model that did the work decided whether the work was done.**~~ Fixed 2026-08-15: the
+  continue-or-stop call goes to the local rung instead of to whatever answered the work turn, it is
+  told it did not do the work, and it is shown the turn's evidence rather than only the turn's
+  prose about itself. It can also answer `BLOCKED` — *what I was shown does not tell me either way*
+  — which outranks `STOP` when a reply contains both, because a judge that said both has told us it
+  could not tell, and filing that as a met goal is the one wrong answer that reads as success.
+  **Two edges.** With no local model reachable it falls back to the working model, since a null
+  decision ends the loop and a self-judge beats no loop; the fallback is recorded on the turn and
+  shown in the panel and the walkthrough rather than passed off as independent. And a turn that
+  answers inline with its own `metis-loop` block still grades itself — the judge only runs on the
+  fallback path. That is the low-stakes half by construction: a turn doing real work routes to the
+  build pipeline, whose reply cannot carry a block, so the judge runs on exactly the turns where
+  self-grading was dangerous.
 - **The capability check is a heuristic, and it warns rather than blocks.** It reads what models
   are AVAILABLE, since a loop routes through the Auto Router at each tick and the answering model
   is not knowable at creation. It cannot promise that a model above the ~7B bar will follow the

@@ -17283,6 +17283,16 @@ function ActiveLoopsPanel(): JSX.Element | null {
                         </span>
                         <span className="loop-turn-text">{entry.error ?? entry.summary}</span>
                         {entry.reason && !entry.error ? <em className="loop-turn-reason">{entry.reason}</em> : null}
+                        {/* Who decided that. A verdict from a model that did not do the work is
+                            worth more than one from the model that did, and the difference is
+                            invisible unless the panel says which happened. */}
+                        {entry.judgedBy && !entry.error ? (
+                          <em className="loop-turn-judge">
+                            {entry.judgedBy.independent ? "judged by " : "self-judged by "}
+                            {entry.judgedBy.model}
+                            {entry.judgedBy.note ? ` — ${entry.judgedBy.note}` : ""}
+                          </em>
+                        ) : null}
                       </li>
                     ))}
                   </ol>

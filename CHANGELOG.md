@@ -12,6 +12,49 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Changed (2026-08-15)
+
+- **The model that did the work no longer decides whether the work is done.**
+  A loop's continue-or-stop call used to go to whatever had just answered the
+  work turn: the model that made the mistake voting on whether it was
+  finished. It goes to the local rung now. Metis is the one product that does
+  not have to pay for a second opinion — the local router is already resident
+  and its tokens are free, where Claude Code spends Haiku tokens on exactly
+  this check.
+
+  Swapping the model reference would have been a rename. Three things make it
+  a different check:
+
+  The judge is **told it did not do the work**, because a model handed a
+  first-person account of a task defaults to accepting it.
+
+  The judge sees the turn's **evidence** — the exit codes and console errors
+  the tick already collects — and not only the turn's prose about itself. "I
+  have added the comments" is what a model writes whether or not it did. An
+  exit code is not. That is the whole difference between an independent judge
+  and a second opinion in the same voice.
+
+  And it can answer **`BLOCKED`**, which finally has a precise definition:
+  *what I was shown does not tell me either way*. It outranks `STOP` when a
+  reply contains both — not for safety, since both halt the loop, but because
+  a judge that said both has told you it could not tell, and filing that as a
+  met goal is the one wrong answer that reads as success.
+
+  The judge's **reason becomes the next turn's directive**. It is the only
+  sentence in the loop written by something that looked at the goal and the
+  evidence together, and until now it reached the panel, the tray and the
+  phone page and never the model.
+
+  Two honest edges, both visible rather than buried. With no local model
+  reachable it falls back to the working model — a null decision ends the
+  loop, and a self-judge beats no loop — and it records that it did rather
+  than passing it off as independent. And a turn that answers inline with its
+  own `metis-loop` block still grades itself; the judge runs on the fallback
+  path, which is by construction the path every turn that does real work
+  takes. Which model decided each turn is shown in the Loops panel and named
+  in the walkthrough, because a behaviour change nobody can see is one nobody
+  can check.
+
 ### Added (2026-08-15)
 
 - **A finished loop writes down what it did.** When a loop settles it writes

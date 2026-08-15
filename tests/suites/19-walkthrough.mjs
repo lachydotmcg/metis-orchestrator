@@ -179,6 +179,25 @@ section("Every terminal status reads as itself");
   ok("exhausted says it ran out", formatWalkthrough({ ...RUN, status: "exhausted" }).includes("Ran out of room"));
 }
 
+section("The walkthrough names the judge, or says there wasn't one");
+{
+  const judged = formatWalkthrough({
+    ...RUN,
+    history: [
+      { ...RUN.history[0], judgedBy: { model: "qwen3:8b", independent: true } },
+      { ...RUN.history[1], judgedBy: { model: "claude-opus-5", independent: false, note: "no local model was reachable" } }
+    ]
+  });
+  ok("an independent judge is named and claimed", judged.includes("Judged by **qwen3:8b**, which did not do the work."));
+  // The dangerous half. A fallback to the working model is still a verdict,
+  // but calling it independent would be a lie the report repeats forever.
+  ok("a self-judge is named and NOT claimed", judged.includes("**claude-opus-5** — the same model that did the work"));
+  ok("with the reason it fell back", judged.includes("no local model was reachable"));
+  // A turn that emitted its own decision block was never judged by anything.
+  // Silence would read as "an independent judge checked this".
+  ok("an unjudged turn says so", formatWalkthrough(RUN).includes("Not independently judged"));
+}
+
 section("A pipe in a model name or a step does not break the table");
 {
   const text = formatWalkthrough({

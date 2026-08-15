@@ -235,8 +235,39 @@ quietly does a fraction of the job.
 
 So the tick asks for the block first, since a plain chat turn answers inline and that costs nothing
 extra, and falls back to a separate small call when there is none: the goal, what this turn
-actually did, and how many turns remain, answered as a single line. `decideLoopContinuation` in
-loops.ts. It reuses `followupInvokerFor` so the question goes to the model that just did the work.
+actually did, what actually RAN, and how many turns remain, answered as a single line.
+`decideLoopContinuation` in loops.ts.
+
+**The judge is not the worker.** That call originally reused `followupInvokerFor(providerResult)`,
+which sent the question to whatever had just answered — the model that made the mistake voting on
+whether it was finished. Since 2026-08-15 it goes to the local rung instead (`loopJudgeInvoker` in
+main.ts), because Metis is the one product that does not have to pay for a second opinion: the
+local router is already resident and its tokens are free, where Claude Code spends Haiku tokens on
+exactly this check.
+
+Three things make that more than a swapped model reference:
+
+- The judge is **told it did not do the work**. A model handed a first-person account of a task
+  defaults to accepting it.
+- The judge sees the turn's **evidence**, not only its prose. "I have added the comments" is what a
+  model writes whether or not it did; an exit code is not. This is the difference between an
+  independent judge and a second opinion in the same voice.
+- It can answer **BLOCKED**, which now has a precise definition: *what I was shown does not tell me
+  either way*. Without it the only two answers both assert an outcome, so a judge with no evidence
+  had to invent one. `BLOCKED` outranks `STOP` when a reply contains both — not for safety (both
+  halt the loop) but because a judge that said both has told us it could not tell, and filing that
+  as a met goal is the one wrong answer that reads as success.
+
+It **falls back to the working model** when no local model is reachable, and records that it did.
+A cloud-only user with no Ollama would otherwise get a placeholder, a null decision, and a loop
+that stops after one turn — the exact failure this whole call exists to fix. An independent judge
+beats a self-judge; a self-judge beats no loop. Which model actually answered is stored on the
+turn and shown in the Loops panel and the walkthrough, because a behaviour change nobody can see
+is one nobody can check.
+
+The judge's *reason* is also kept: it is replayed into the next wake prompt as the directive for
+that turn. It is the only sentence in the loop written by something that looked at the goal and the
+evidence together, and it used to reach the panel and the tray and never the model.
 
 This does not weaken the governing rule. The second call is a second chance to say continue, never
 a default toward continuing: a failed call, an unparseable answer, or a placeholder result (Ollama

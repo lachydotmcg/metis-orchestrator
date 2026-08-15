@@ -104,6 +104,34 @@ not verify this from what I was shown.*
 Claude Code pays Haiku tokens for exactly this check. Metis's judge is already
 resident. Largest behavioural change per line touched anywhere in the repo.
 
+**Built, 2026-08-15.** `loopJudgeInvoker` in main.ts, the prompt and the
+`BLOCKED` verdict in `decideLoopContinuation`, the directive in
+`composeWakePrompt`, and the provenance line in both the Loops panel and the
+walkthrough. Suite 02 grew from 21 to 29 checks.
+
+What the note above underrated, and what it missed:
+
+- **The invoker swap alone would have been a regression.** A cloud-only user
+  with no Ollama gets a placeholder from the local call, which returns null,
+  which ends the loop — the exact "every working loop stops after one turn"
+  failure `decideLoopContinuation` was written to fix. It falls back to the
+  working model and *says so on the record*.
+- **The completion contract was the wrong half to build first.** `outcome` /
+  `verification` / `stop_when` drafted from the goal is a model drafting a
+  standard for itself before any work exists. Handing the judge the turn's
+  real EVIDENCE — the exit codes the tick already collects and already puts in
+  the next wake prompt — is the same idea a step later and needed no new
+  collection at all.
+- **The reason was already being thrown away.** `lastReason` reached the panel,
+  the tray and the phone page and never the model. The judge is the only thing
+  in the loop that looks at the goal and the evidence together; its sentence is
+  the most specific instruction available anywhere in the system.
+
+**Still self-graded:** a turn that answers inline with its own `metis-loop`
+block never reaches the judge. That is the low-stakes half — a turn doing real
+work routes to the build pipeline, which cannot emit a block, so the judge
+always runs on exactly the turns where self-grading was dangerous.
+
 ### 3. Think-token ceiling per rung, overrun promotes the turn
 
 Cap thinking tokens on the local rung; when the stream crosses it, abort and
