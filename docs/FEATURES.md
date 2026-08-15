@@ -378,11 +378,17 @@ This is where "cheapest" comes from. A pipeline where every turn hits your stron
 
 **The node shows this, rather than hiding it.** A depths-enabled node displays all three rungs with their providers instead of a single model name, because a node captioned "Fable 5" while L3 is pinned to Opus 4.8 tells you the opposite of the truth about your hardest tasks. Rungs you pinned read bright, inherited ones read quieter but stay legible, since an unset level is not an empty slot.
 
+**And it can now notice when it guessed wrong.** A turn routed to a *local* rung carries a thinking budget. If the model spends the whole budget without starting an answer, the stream is cut and the turn is re-run one rung deeper, with a line in the timeline saying so. That is the only place routing corrects itself: everything else in Metis that recovers (fallback chains, the critic loop, the loop judge) reacts to something that already failed, and routing had no failure signal at all. A model that will not stop thinking is free information about difficulty, and it arrives *before* you pay for the answer.
+
 **Honest limits:**
 
 - It is off by default (`depthRoutingEnabled`), and the toggle lives on the node's own Depths panel.
 - The node's stack mirrors into a single global `depthRoutes` store that the shipped engine reads, so with several depths-enabled nodes the last one projected wins. True per-node consumption inside the pipeline is the noted follow-up.
 - A stack configured while the flag is off is shown greyed out and labelled as inert, rather than pretending it is live.
+- The thinking budget is **local-only**. Ollama is the one provider whose reasoning Metis sees token by token; a cloud model's thinking can only be measured after you have been billed for it.
+- It fires only while thinking is *all* the model has produced. Once an answer has started the deliberation is over, and cutting the stream then would throw away a real answer to punish a long preamble.
+- It promotes **once**. The retry has no ceiling of its own, or one hard prompt could walk the whole ladder paying for a call at every rung, and a turn already on the deepest rung fails rather than re-running the same model to reproduce the same failure.
+- The ceiling is 1500 tokens with no settings UI — a runaway detector with a deliberately generous default, adjustable only by writing the `thinkTokenCeiling` store key.
 </details>
 
 <details>

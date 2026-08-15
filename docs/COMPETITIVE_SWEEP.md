@@ -147,6 +147,27 @@ free information about difficulty, available *before* you pay for the answer.
 The plumbing exists: `invokeOllamaProviderStream` already parses `thought_delta`
 and already accepts an `AbortSignal`.
 
+**Built, 2026-08-15.** `src/shared/think-budget.ts` (the rule), a ceiling check
+inside the Ollama stream reader, and a promotion branch at the chat path's
+provider call. Suite 20.
+
+Two corrections to the note above:
+
+- **Not a flat cap.** The ceiling fires only while thinking is ALL the model has
+  produced. A model that has started writing has finished deliberating, and
+  killing it then discards a real answer to punish a long preamble. The overrun
+  that carries information is the one where nothing is coming.
+- **Not the `AbortSignal`.** That signal belongs to the user's Stop button, and
+  reusing it would make a promotion indistinguishable from a cancellation at
+  every catch site in the run path — where cancellation specifically means "do
+  not retry". The reader is cancelled directly and a distinct
+  `ThinkBudgetExceededError` is thrown, so the three outcomes that reach the
+  same catch (stopped, provider died, overran) stay three.
+
+It promotes once and the retry is uncapped: otherwise one hard prompt walks the
+whole ladder, paying for a call per rung. A turn already on the deepest rung
+fails rather than re-running the same model to reproduce the same failure.
+
 ### 4. The rung ledger, with an honest counterfactual
 
 Badge each message with the rung that produced it; per-loop and lifetime totals.

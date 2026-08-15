@@ -148,6 +148,14 @@ import {
 } from "../shared/intent-and-paths.js";
 import { lineDiffCounts } from "../shared/line-diff.js";
 import { pickDepthRung } from "../shared/depth-stack.js";
+import {
+  DEFAULT_THINK_TOKEN_CEILING,
+  ThinkBudgetExceededError,
+  isThinkBudgetError,
+  promotedDepth,
+  shouldPromoteForThinking,
+  thinkCeilingChars
+} from "../shared/think-budget.js";
 import { generateConversationTitle, generateFollowups } from "./followups.js";
 import { builtinRouteDecision } from "./builtinRouter.js";
 import { agentToolsPromptBlock, executeAgentTool, parseAgentToolCall } from "./agentTools.js";
@@ -1253,6 +1261,16 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
     if (typeof payload.prompt_eval_count === "number") promptEvalCount = payload.prompt_eval_count;
     if (typeof payload.eval_count === "number") evalCount = payload.eval_count;
   };
+  // The think-token ceiling (docs/COMPETITIVE_SWEEP.md item 3). Checked here
+  // rather than after the fact because the whole value is acting BEFORE the
+  // answer is paid for: a model that will not stop thinking is telling us the
+  // rung was wrong, and that is only useful while it is still talking.
+  //
+  // Enforced by cancelling the reader rather than by an AbortSignal — the
+  // signal belongs to the user's Stop button, and reusing it would make a
+  // promotion indistinguishable from a cancellation at every catch site above.
+  const thinkCeiling = thinkCeilingChars(input.thinkTokenCeiling ?? 0);
+  let overran = false;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -1263,6 +1281,14 @@ async function invokeOllamaProviderStream(input: ProviderInvokeInput, stream: Se
       if (!line.trim()) continue;
       handleChunk(JSON.parse(line) as OllamaStreamChunk);
     }
+    if (shouldPromoteForThinking({ thoughtChars: thoughts.length, outputChars: output.length, ceilingChars: thinkCeiling })) {
+      overran = true;
+      break;
+    }
+  }
+  if (overran) {
+    await reader.cancel().catch(() => undefined);
+    throw new ThinkBudgetExceededError(thoughts.length);
   }
   buffer += decoder.decode();
   if (buffer.trim()) {
@@ -9842,6 +9868,13 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
   // this whole block is a no-op so behavior is byte-identical to before.
   let routeDepth: RouteDepth | undefined;
   let depthRoute: StageModelRef | null = null;
+  // The think-token ceiling and where an overrun goes (COMPETITIVE_SWEEP item
+  // 3). Both stay 0/undefined unless depth routing is on, the rung resolved to
+  // a LOCAL model, and there is a deeper rung to promote onto — the ceiling is
+  // a routing correction, so it has no business firing when there is no ladder.
+  let thinkCeiling = 0;
+  let promoteTarget: RouteDepth | null = null;
+  let depthPromotedFrom: RouteDepth | undefined;
   if (!input.modelOverride && !forceBuildPipeline && (await readStoreValue<boolean>("depthRoutingEnabled", false))) {
     // A fast-lane-eligible turn is DETERMINISTICALLY trivial (short, plain
     // general_chat, no build/edit intent — the same gate that already skips
@@ -9859,6 +9892,14 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       // counts L1 as the hardest tier so future L4/L5 can extend the cheap
       // end. 4 - depth maps between them; run.depth keeps the internal value.
       emitTimeline(stream, timelineText(`Level L${4 - routeDepth} routing: ${providerInfo[depthRoute.provider].label} (${depthRoute.model}).`));
+      // Only a local rung is metered. Every cloud provider bills for reasoning
+      // Metis never sees token by token, so a ceiling there could only be
+      // enforced after the money was already spent — which is the opposite of
+      // the point. Ollama is the one provider whose thinking streams.
+      promoteTarget = depthRoute.provider === "ollama" ? promotedDepth(routeDepth) : null;
+      if (promoteTarget) {
+        thinkCeiling = await readStoreValue<number>("thinkTokenCeiling", DEFAULT_THINK_TOKEN_CEILING);
+      }
     }
   }
   const route = effectiveDecision.selected_route;
@@ -10036,20 +10077,64 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
       ttftMs: Date.now() - providerStart
     };
   } else try {
-    providerResult = await invokeProvider({ provider, model, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
+    providerResult = await invokeProvider(
+      { provider, model, prompt: sessionPrompt, images: chatImages, ...(thinkCeiling ? { thinkTokenCeiling: thinkCeiling } : {}) },
+      stream,
+      cancelScope
+    );
   } catch (error) {
     // A Stop-button cancellation must end the run immediately — never trigger
     // the pinned-model fallback below, which would otherwise treat an abort
     // as "this model failed" and quietly retry against the default model.
     if (isCancellationError(error)) throw error;
-    if (!override) throw error;
-    // A pinned model can be a hand-typed custom entry — fall back to the provider default instead of failing the run.
-    const fallbackModel = providerInfo[provider].defaultModel ?? "auto";
-    overrideWarnings.push(
-      `Failed to call ${overrideDisplayLabel(override)} (${error instanceof Error ? error.message : String(error)}), falling back to ${providerInfo[provider].label} (${fallbackModel}).`
-    );
-    emitTimeline(stream, timelineText(`Couldn’t reach ${overrideDisplayLabel(override)} — falling back to ${providerInfo[provider].label} (${fallbackModel}).`));
-    providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
+    // A blown thinking budget is the one error here that means "try HIGHER"
+    // rather than "give up" or "try the same tier's default", so it is caught
+    // before both. This is the only place in the app where routing corrects
+    // itself: pickDepthRung judges once and never revisits, so without this a
+    // turn misjudged as trivial just produces a bad cheap answer and nothing
+    // notices (docs/COMPETITIVE_SWEEP.md item 3).
+    if (isThinkBudgetError(error) && routeDepth && promoteTarget) {
+      const promotedRoute = await depthRouteFor(promoteTarget);
+      const promotedProvider = promotedRoute ? promotedRoute.provider : provider;
+      const promotedModel = promotedRoute ? resolveGraphStageModel(promotedRoute.provider, promotedRoute.model) : model;
+      emitTimeline(
+        stream,
+        timelineText(
+          `L${4 - routeDepth} spent its whole thinking budget without starting an answer — promoting this turn to L${4 - promoteTarget}: ${providerInfo[promotedProvider].label} (${promotedModel}).`
+        )
+      );
+      await appendAudit("info", "session.depth.promote", `A turn was promoted from L${4 - routeDepth} to L${4 - promoteTarget} after overrunning its thinking budget.`, {
+        from: { provider, model },
+        to: { provider: promotedProvider, model: promotedModel },
+        thoughtChars: error instanceof Error && "thoughtChars" in error ? (error as { thoughtChars: number }).thoughtChars : undefined
+      });
+      depthPromotedFrom = routeDepth;
+      routeDepth = promoteTarget;
+      // No ceiling on the retry. The promoted rung is the answer to the
+      // overrun, and capping it too would let one hard prompt walk the whole
+      // ladder burning a call per rung.
+      // Assigning here is all that is needed: the catch block ends and the
+      // ordinary post-call path below runs unchanged. A promoted turn is an
+      // ordinary turn that took two calls, not a special kind of run.
+      providerResult = await invokeProvider(
+        { provider: promotedProvider, model: promotedModel, prompt: sessionPrompt, images: chatImages },
+        stream,
+        cancelScope
+      );
+    } else {
+      // Nowhere to promote to (already on the deepest rung, or depth routing is
+      // off) means a blown budget is just a failure: retrying the same rung
+      // would double the bill to reproduce it.
+      if (isThinkBudgetError(error)) throw error;
+      if (!override) throw error;
+      // A pinned model can be a hand-typed custom entry — fall back to the provider default instead of failing the run.
+      const fallbackModel = providerInfo[provider].defaultModel ?? "auto";
+      overrideWarnings.push(
+        `Failed to call ${overrideDisplayLabel(override)} (${error instanceof Error ? error.message : String(error)}), falling back to ${providerInfo[provider].label} (${fallbackModel}).`
+      );
+      emitTimeline(stream, timelineText(`Couldn’t reach ${overrideDisplayLabel(override)} — falling back to ${providerInfo[provider].label} (${fallbackModel}).`));
+      providerResult = await invokeProvider({ provider, model: fallbackModel, prompt: sessionPrompt, images: chatImages }, stream, cancelScope);
+    }
   }
   // P10.2 tool-call loop: when the model replied with an mcp_tool_call JSON
   // directive, execute it against the connected server, feed the result back
@@ -10315,6 +10400,11 @@ async function runSession(input: SessionRunInput, stream?: SessionStreamControll
     loopTurn: input.loopTurn,
     oracleNearMatch: servedSimilarity ?? undefined,
     depth: routeDepth,
+    // Present only when the first rung blew its thinking budget. `depth` is the
+    // rung that actually answered, so without this the promotion is invisible
+    // and the routing trace would report a turn as though it had been judged
+    // correctly the first time.
+    depthPromotedFrom,
     projectResult,
     operations: [...metisOperations, ...projectCommandOperations, ...(projectResult ? operationsForProject(projectResult) : [])],
     steps,
@@ -11294,6 +11384,7 @@ async function fireLoopTickInner(id: string, loaded: LoopRecord): Promise<LoopRe
       ...(run.providerResult?.provider ? { provider: run.providerResult.provider } : {}),
       ...(run.providerResult?.model ? { model: run.providerResult.model } : {}),
       ...(run.depth ? { depth: run.depth } : {}),
+      ...(run.depthPromotedFrom ? { promotedFrom: run.depthPromotedFrom } : {}),
       ...(typeof run.providerResult?.usage?.inputTokens === "number" ? { inputTokens: run.providerResult.usage.inputTokens } : {}),
       ...(typeof run.providerResult?.usage?.outputTokens === "number" ? { outputTokens: run.providerResult.usage.outputTokens } : {}),
       ...(run.providerResult?.usage?.estimated ? { estimated: true } : {}),

@@ -29,6 +29,10 @@ export interface WalkthroughRouting {
    *  the run was pinned — which is itself worth printing, because "not judged"
    *  and "judged trivial" are different facts about a run. */
   depth?: 1 | 2 | 3;
+  /** The rung this turn started on before a blown thinking budget promoted it
+   *  (shared/think-budget.ts). The one row in this table where the router
+   *  admits it was wrong, so it is printed rather than smoothed over. */
+  promotedFrom?: 1 | 2 | 3;
   inputTokens?: number;
   outputTokens?: number;
   estimated?: boolean;
@@ -116,9 +120,14 @@ function seconds(ms: number | undefined): string {
 /** "deep (L3)" or, when Depths was off, "not judged" — never a blank, because a
  *  blank in the difficulty column reads as though the judge said nothing when
  *  in fact it was never asked. */
-function depthLabel(depth: number | undefined): string {
+function depthLabel(depth: number | undefined, promotedFrom?: number): string {
   if (depth === undefined) return "not judged";
-  return `${DEPTH_WORDS[depth] ?? "unknown"} (L${depth})`;
+  const now = `${DEPTH_WORDS[depth] ?? "unknown"} (L${depth})`;
+  // A promoted turn reports BOTH rungs. Printing only the one that answered
+  // would hide the only moment routing ever discovers it guessed wrong, which
+  // is the most interesting line the table can carry.
+  if (promotedFrom === undefined || promotedFrom === depth) return now;
+  return `${DEPTH_WORDS[promotedFrom] ?? "unknown"} → ${now}, promoted`;
 }
 
 /** Cost for one turn, using the caller's pricing table and the same rules the
@@ -177,7 +186,7 @@ function routingSection(input: WalkthroughInput): string[] {
     const routing = turn.routing;
     const model = routing?.model ? `${routing.model}${routing.provider ? ` (${routing.provider})` : ""}` : DASH;
     lines.push(
-      `| ${turn.index} | ${cell(turn.step)} | ${depthLabel(routing?.depth)} | ${cell(model)} | ` +
+      `| ${turn.index} | ${cell(turn.step)} | ${depthLabel(routing?.depth, routing?.promotedFrom)} | ${cell(model)} | ` +
         `${tokens(routing?.inputTokens, routing?.estimated)} | ${tokens(routing?.outputTokens, routing?.estimated)} | ` +
         `${turnCost(routing, input.pricing)} | ${seconds(routing?.durationMs)} |`
     );

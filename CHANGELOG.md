@@ -14,6 +14,37 @@ engine referenced below.
 
 ### Changed (2026-08-15)
 
+- **Depths can notice when it guessed wrong.** A turn routed to a local rung now
+  carries a thinking budget. A model that spends the whole budget without
+  starting an answer has its stream cut and the turn re-run one rung deeper,
+  with a line in the timeline saying so.
+
+  This is the only place routing corrects itself. Everything else in Metis that
+  recovers — fallback chains, the critic loop, the loop judge — reacts to
+  something that already failed. Routing had no failure signal at all:
+  `pickDepthRung` judged a turn once, sent it, and never revisited, so a turn
+  misjudged as trivial just produced a bad cheap answer and nothing anywhere
+  noticed. A model that will not stop thinking is free information about
+  difficulty, and it arrives *before* the answer is paid for.
+
+  Four limits, none of them incidental. **Local only:** Ollama is the one
+  provider whose reasoning Metis sees token by token, and a cloud model's
+  thinking can only be measured after you have been billed for it. **Only while
+  thinking is all it has produced:** once an answer has started the deliberation
+  is over, and cutting the stream then would discard a real answer to punish a
+  long preamble. **Once:** the retry carries no ceiling of its own, or one hard
+  prompt walks the whole ladder paying for a call per rung, and a turn already
+  on the deepest rung fails rather than re-running the same model to reproduce
+  the same failure. And **no settings UI** — 1500 tokens, a deliberately
+  generous runaway detector, adjustable only through the `thinkTokenCeiling`
+  store key.
+
+  A promoted turn says so where it matters: the timeline while it happens, the
+  audit log, `depthPromotedFrom` on the run, and a `trivial → standard (L2),
+  promoted` cell in the loop walkthrough's routing table. That cell is the one
+  row where the router admits it was wrong, and reporting only the rung that
+  answered would hide it.
+
 - **A loop runs where you started it.** Type `/loop` in a conversation and its
   turns now land in that conversation, appearing as it finishes them. Before
   this they went into a hidden thread of the loop's own, so the loop existed in

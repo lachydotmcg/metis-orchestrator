@@ -594,6 +594,12 @@ export interface ProviderInvokeInput {
   /** Optional reference images for this single call. Undefined/empty means
    *  byte-identical behaviour to before this field existed. */
   images?: ProviderImageInput[];
+  /** Thinking allowed before this call is abandoned as misrouted
+   *  (docs/COMPETITIVE_SWEEP.md item 3, shared/think-budget.ts). Only the
+   *  streaming Ollama path can honour it — it is the one provider whose
+   *  reasoning Metis sees token by token rather than being billed for after
+   *  the fact — and 0 or absent means no ceiling at all. */
+  thinkTokenCeiling?: number;
 }
 
 export interface ProviderInvokeResult {
@@ -995,6 +1001,12 @@ export interface SessionRun {
    *  straight to the configured frontier tier). Only set when the
    *  depthRoutingEnabled flag was on and the run was Auto (not pinned). */
   depth?: 1 | 2 | 3;
+  /** The rung this turn STARTED on, when it blew its thinking budget there and
+   *  was promoted (shared/think-budget.ts). `depth` is always the rung that
+   *  actually answered, so without this a corrected turn would read as one that
+   *  had been judged right the first time — which would hide the only evidence
+   *  the router ever gets that it was wrong. */
+  depthPromotedFrom?: 1 | 2 | 3;
   projectResult?: ProjectToolResult;
   operations?: AgentOperation[];
   timeline?: SessionTimelineEvent[];
