@@ -14938,3 +14938,30 @@ a:focus-visible,
   font-size: 10.5px;
   line-height: 1.4;
 }
+
+/* The browser client's "not connected" strip. Fixed rather than in flow so it
+   cannot push a layout it was never designed into, and high-contrast amber
+   rather than the app's own palette so it reads as a notice about the app
+   instead of a part of it. */
+.browser-preview-strip {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  z-index: 9000;
+  max-width: min(720px, calc(100vw - 32px));
+  padding: 9px 16px;
+  border: 1px solid rgba(255, 176, 66, 0.42);
+  border-radius: 999px;
+  background: rgba(38, 26, 8, 0.94);
+  color: #ffd8a3;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.46);
+  pointer-events: none;
+}
+
+.browser-preview-strip strong {
+  color: #ffc76b;
+}

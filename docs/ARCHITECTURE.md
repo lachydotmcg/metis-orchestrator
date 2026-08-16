@@ -193,7 +193,29 @@ touching `runSession` or the build pipeline.
   is auto-generated on first use and persisted under the `gatewayToken`
   store key (`readOrCreateGatewayToken()`), checked with a constant-time
   `timingSafeEqual` comparison (`gatewayTokenMatches()`) - a missing or
-  invalid token gets a `401` before any handler runs.
+  invalid token gets a `401` before any handler runs. **One exception**, and
+  it is deliberate: `GET /app/assets/*` is served with no token at all
+  (`gatewayAppAssetPath()`, `gateway-app-shell.ts`). A `<script src>` cannot
+  carry an Authorization header, so the renderer bundle either goes out
+  unauthenticated or the gateway grows a cookie - and a cookie is an *ambient*
+  credential, which would hand every other page in the browser a CSRF path to
+  `POST /v1/chat/completions`, the route that spends money. The bundle is the
+  app's own compiled code, byte-identical to what is inside the public
+  installer, carrying no key and no user data; serving it to another loopback
+  process discloses a public artifact. Every JSON route keeps the bearer check
+  unchanged, and the gateway still has no ambient credential.
+- The HTML pages (`/`, `/loops`, `/app/`) additionally accept the token as a
+  `?token=` query parameter, because a link you type or scan cannot carry a
+  header. The page's first act is to move it into `sessionStorage` and strip it
+  from the address bar. Never accepted on a JSON route.
+- `GET /app/` serves the **desktop renderer itself** - the same Vite bundle
+  Electron loads, from `dist/`, unchanged. `/app` without the trailing slash
+  `301`s to `/app/`, because Vite is `base: "./"` and the relative asset paths
+  resolve to `/assets/` otherwise. An inline classic script is injected after
+  `<head>` (`gatewayAppShell()`); it runs before the deferred module bundle and
+  sets `window.__METIS_CLIENT__ = "browser"`, which is how the renderer knows to
+  cut the surfaces that would lie with no bridge. **It renders, it does not
+  work** - see the browser-client entry in [`LIMITATIONS.md`](LIMITATIONS.md).
 - Every handler is wrapped to fail soft: a bad request, a downstream
   provider error, or a bind failure resolves to an OpenAI-shaped JSON error
   instead of throwing out of the server. One audit line per request

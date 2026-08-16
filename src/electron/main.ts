@@ -99,6 +99,14 @@ import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
 import {
+  GATEWAY_APP_PREFIX,
+  gatewayAppAssetPath,
+  gatewayAppMissingBuildPage,
+  gatewayAppShell,
+  isGatewayAppDocument,
+  isGatewayAppRedirect
+} from "./gateway-app-shell.js";
+import {
   LOOP_MAX_AGE_HOURS,
   LOOP_MAX_ITERATIONS_CEILING,
   LOOP_MAX_SPAWNED_TOTAL,
@@ -4866,6 +4874,20 @@ function mimeTypeFor(path: string): string {
   if (ext === ".js") return "text/javascript; charset=utf-8";
   if (ext === ".json") return "application/json; charset=utf-8";
   if (ext === ".svg") return "image/svg+xml";
+  // Added for /app/: the renderer ships provider logos as PNG and a woff2 or
+  // two. A stylesheet or module served as octet-stream is REFUSED outright by
+  // strict MIME checking, and an octet-stream image is a download prompt in
+  // some browsers rather than a picture — so this list is load-bearing for the
+  // browser client in a way it never was for the local static preview.
+  if (ext === ".png") return "image/png";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".gif") return "image/gif";
+  if (ext === ".ico") return "image/x-icon";
+  if (ext === ".woff2") return "font/woff2";
+  if (ext === ".woff") return "font/woff";
+  if (ext === ".ttf") return "font/ttf";
+  if (ext === ".map") return "application/json; charset=utf-8";
   return "application/octet-stream";
 }
 
@@ -14653,14 +14675,37 @@ async function handleGatewayRequest(req: IncomingMessage, res: ServerResponse): 
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const token = await readOrCreateGatewayToken();
     const authHeader = req.headers.authorization ?? "";
+
+    // The ONE branch that runs before the bearer check, and the reasoning is in
+    // gateway-app-shell.ts: a <script src> cannot carry an Authorization
+    // header, so the renderer bundle either gets served unauthenticated or the
+    // gateway grows an ambient cookie credential — and an ambient credential
+    // hands every other page in the browser a CSRF path to the route that
+    // spends money. The bundle is the app's own compiled code, identical to
+    // what is inside the public installer, carrying no key and no user data.
+    // Disclosing it to another loopback process discloses a public artifact.
+    // Scoped to /app/assets/ so a file appearing at the dist root later is not
+    // served by default, and served through serveStaticFile so it inherits the
+    // isPathInside + realpath containment rather than a second hand-rolled one.
+    const assetPath = req.method === "GET" ? gatewayAppAssetPath(url.pathname) : null;
+    if (assetPath) {
+      await serveStaticFile(join(__dirname, "../../dist"), assetPath, res);
+      return;
+    }
+
     // A browser cannot attach an Authorization header to a URL you type or
     // scan, so the page has one bootstrap route in: ?token=. Deliberately
-    // narrow — only the HTML page accepts it, never the JSON routes, and the
+    // narrow — only the HTML pages accept it, never the JSON routes, and the
     // page's first act is to move the token into sessionStorage and strip it
     // from the address bar. A token in a URL lands in history and in any
     // proxy log, which is survivable for a loopback service reached over a
     // private tunnel and would not be for a public one.
-    const pageBootstrap = req.method === "GET" && (url.pathname === "/" || url.pathname === "/loops");
+    const pageBootstrap =
+      req.method === "GET" &&
+      (url.pathname === "/" ||
+        url.pathname === "/loops" ||
+        isGatewayAppRedirect(url.pathname) ||
+        isGatewayAppDocument(url.pathname));
     const provided = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1] ?? (pageBootstrap ? (url.searchParams.get("token") ?? "") : "");
     if (!gatewayTokenMatches(provided, token)) {
       writeGatewayJson(res, 401, gatewayErrorPayload("Missing or invalid bearer token.", "invalid_api_key"));
@@ -14717,6 +14762,26 @@ async function handleGatewayRequest(req: IncomingMessage, res: ServerResponse): 
       const token = await readOrCreateGatewayToken();
       if (!res.headersSent) res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       res.end(gatewayLoopsPage(token));
+      return;
+    }
+
+    // The desktop renderer, served unchanged. /app WITHOUT the trailing slash
+    // has to redirect: the bundle's asset paths are relative (Vite `base:
+    // "./"`), so at /app they resolve to /assets/ and every one of them 404s.
+    // 301 rather than 308 because this is a GET-only surface and 301 is the one
+    // browsers and QR readers cache without asking.
+    if (req.method === "GET" && isGatewayAppRedirect(url.pathname)) {
+      const query = url.searchParams.toString();
+      res.writeHead(301, { location: `${GATEWAY_APP_PREFIX}/${query ? `?${query}` : ""}` });
+      res.end();
+      return;
+    }
+    if (req.method === "GET" && isGatewayAppDocument(url.pathname)) {
+      const token = await readOrCreateGatewayToken();
+      const raw = await readFile(join(__dirname, "../../dist/index.html"), "utf8").catch(() => null);
+      const shell = raw === null ? null : gatewayAppShell(raw, token);
+      if (!res.headersSent) res.writeHead(shell ? 200 : 503, { "content-type": "text/html; charset=utf-8" });
+      res.end(shell ?? gatewayAppMissingBuildPage());
       return;
     }
 

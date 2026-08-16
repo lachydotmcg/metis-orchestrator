@@ -30,7 +30,7 @@
  *  a bracket. This is here because that is a property of one caller, not of
  *  this function, and per-device pairing tokens with user-chosen labels are
  *  already sketched in the roadmap. */
-function scriptSafeJson(value: unknown): string {
+export function scriptSafeJson(value: unknown): string {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 

@@ -65,6 +65,16 @@ declare global {
   }
 
   interface Window {
+    /** Which client is hosting this bundle. Absent under Electron (the preload
+     *  never sets it, so "no answer" means desktop); set to "browser" by the
+     *  inline bootstrap the gateway injects when serving the same build at
+     *  /app/. Every other member here is a BRIDGE and is undefined in a
+     *  browser — this one is the flag that says why. */
+    __METIS_CLIENT__?: "browser";
+    /** The gateway bearer token, moved out of the URL by that same bootstrap.
+     *  Nothing reads it yet; the authorized read-only fetches are the next
+     *  stage. Present only in the browser client. */
+    __METIS_GATEWAY_TOKEN__?: string;
     metisPolicy?: {
       getSampleDecision: () => Promise<RouteDecision>;
       getStatus: (profilePath?: string) => Promise<PolicyStatus>;

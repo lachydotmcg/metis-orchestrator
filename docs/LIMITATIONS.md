@@ -258,6 +258,31 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   model-authored HTML is stripped rather than executed and nothing untrusted runs in that origin.
   Closed in the same audit: the generic store channel no longer reaches the `secrets` key
   (`13-store-key-guard`).
+- **The browser client renders the real app and is not connected to it.** `GET /app/` serves the
+  same Vite bundle Electron loads, unchanged — so what you see in a browser is the actual interface,
+  not a mock of it. Nothing behind it works. Every component calls the Electron preload bridge
+  (`window.metisX`) directly, and over HTTP there is no preload, so all 31 namespaces are
+  `undefined`: no models, no conversations, no settings that persist anywhere but `localStorage`,
+  and nothing that sends. The renderer is told which client it is in
+  (`window.__METIS_CLIENT__ === "browser"`) and says so in a strip on the page rather than letting
+  empty panels read as bugs. **The benchmark wizard is cut entirely in that client**, because it is
+  the one surface that would *lie* rather than sit empty: its run is a `setInterval` over four
+  hardcoded strings and its GPU table is a constant, so with no bridge behind it it completes
+  anyway, unlocks the whole navigation, and recommends local models for a graphics card it never
+  read. The first-run gate is unlocked alongside it — not satisfied, just not enforced by a wizard
+  the browser cannot honestly run. Making the surfaces real means re-exposing handlers as
+  individually-authorized HTTP routes (`shared/bridge-manifest.ts` classifies all 104), because
+  `installIpcSenderGuard` authenticates frame *topology* and an HTTP caller has no `senderFrame` —
+  there is no shim that makes the bridge work over a network. Guarded by `28-gateway-app-shell`.
+- **`/app/assets/*` is served with no token, and that is the design.** A `<script src>` cannot carry
+  an `Authorization` header. The alternative was a cookie, which would give the gateway an *ambient*
+  credential and hand every other page in the browser a CSRF path to `POST /v1/chat/completions` —
+  the route that spends money. The bundle is the app's own compiled code, byte-identical to what
+  ships inside the public installer, with no key and no user data in it. Every JSON route keeps its
+  bearer check unchanged. Scoped to `/app/assets/` rather than the whole `dist/` tree, and OS
+  metadata (`desktop.ini`, `Thumbs.db`, dotfiles) is refused — `dist/` is not purely build output,
+  because Vite copies `public/*` in verbatim and a OneDrive checkout had Explorer metadata sitting
+  in it. The suite found that; nobody predicted it.
 - **The phone page is watch-and-stop only, and that is a boundary rather than a milestone.** The
   gateway serves `/v1/loops`, `/v1/loops/:id` and `/v1/loops/:id/stop` plus a page that polls them.
   There is deliberately no route that STARTS a run: starting one spends money and carries a
@@ -295,7 +320,7 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 27 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 28 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach

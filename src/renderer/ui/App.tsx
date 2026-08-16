@@ -199,12 +199,43 @@ type NodeKind = "router" | "agent" | "skill";
  *  pulse      - depends on a remote feed that is still mostly empty. */
 const V1_HIDDEN_NAV = new Set<NavKey>(["manager", "marketplace", "routines", "gallery", "graph", "todo", "pulse"]);
 
+/** True when this exact bundle is being served over the Metis Gateway at /app/
+ *  instead of loaded by Electron. The gateway injects the flag in a classic
+ *  inline script, which runs before this deferred module bundle, so the value
+ *  is settled before any component mounts — which is why it can be read at
+ *  module scope rather than threaded through a provider.
+ *
+ *  Deliberately NOT `!window.metisSession`. A desktop window whose preload
+ *  failed would fail that test too, and the two cases want opposite handling:
+ *  a broken desktop preload is a bug to surface loudly, a browser with no
+ *  bridge is the expected state of a preview. Asking who is serving the page
+ *  answers the question that is actually being asked. */
+const METIS_BROWSER_CLIENT = typeof window !== "undefined" && window.__METIS_CLIENT__ === "browser";
+
+/** Cut from the browser client because they LIE without a bridge rather than
+ *  merely being empty.
+ *
+ *  Benchmark is the whole list and the whole reason this set exists. Its run is
+ *  a `setInterval` ticking a progress number over four hardcoded strings, its
+ *  GPU table is a constant, and completing it just writes `status: "complete"`.
+ *  On the desktop that is honest — the real hardware read and the real model
+ *  pulls happen through `window.metisOllama` alongside it. Served with no
+ *  bridge, none of that runs, so the simulation completes anyway, gates itself
+ *  open, and recommends local models for a graphics card it never looked at.
+ *  An empty panel tells the truth; this one does not, so it does not render.
+ *
+ *  Same idiom as V1_HIDDEN_NAV: the surface unmounts, the code stays. When the
+ *  browser client can read the desktop's REAL benchmark result over the
+ *  gateway, this set goes back to empty. */
+const BROWSER_HIDDEN_NAV = new Set<NavKey>(["benchmark"]);
+
 /** The floating Manager widget (FAB + draggable chat shell). Cut per Lachy
  *  2026-07-21 — the hidden Manager tab keeps the same chat, so this is a
  *  surface removal, not a feature removal. Flip to true to bring it back. */
 const MANAGER_WIDGET_ENABLED = false;
 
 function isNavVisible(key: NavKey): boolean {
+  if (METIS_BROWSER_CLIENT && BROWSER_HIDDEN_NAV.has(key)) return false;
   return !V1_HIDDEN_NAV.has(key);
 }
 
@@ -1878,7 +1909,7 @@ function conversationProjectMatchesPath(conversation: ConversationRecord, projec
 }
 
 export function App(): JSX.Element {
-  const [activeNav, setActiveNav] = useState<NavKey>("benchmark");
+  const [activeNav, setActiveNav] = useState<NavKey>(METIS_BROWSER_CLIENT ? "orchestration" : "benchmark");
   // Sidebar expansion (Lachy: "I want them to stay expanded if you expand
   // them") - a SET of open project names, not a single active one, persisted
   // so the shape of your sidebar survives restarts. Opening one no longer
@@ -2055,7 +2086,14 @@ export function App(): JSX.Element {
   const [benchmarkWizard, setBenchmarkWizard, benchmarkLoaded] = useAppStoreState("benchmarkWizard", DEFAULT_BENCHMARK_STATE);
   const [galleryBoards, setGalleryBoards] = useAppStoreState("galleryBoards", DEFAULT_GALLERY_BOARDS);
   const [pinnedConversationIds, setPinnedConversationIds] = useAppStoreState("pinnedConversationIds", [] as string[]);
-  const benchmarkGateLocked = !benchmarkLoaded || benchmarkWizard.status !== "complete";
+  // The first-run gate is a DESKTOP gate: it exists to stop you reaching the
+  // canvas before you have picked local models, which is a real setup step with
+  // real pulls behind it. The browser client cannot perform that step and its
+  // wizard is hidden (BROWSER_HIDDEN_NAV), so leaving the gate armed would
+  // bounce every navigation to a tab that no longer renders — a dead app. It is
+  // unlocked here rather than satisfied: nothing claims the browser client is
+  // set up, only that it is not held behind a wizard it cannot honestly run.
+  const benchmarkGateLocked = METIS_BROWSER_CLIENT ? false : !benchmarkLoaded || benchmarkWizard.status !== "complete";
   // Gallery boards are always part of orchestration now (docs/FABLE_PLANS.md section 23) —
   // no per-board "linked" toggle, every board's title feeds the skills palette.
   const linkedGallerySkills = useMemo(() => galleryBoards.map((board) => `Gallery: ${board.title}`), [galleryBoards]);
@@ -2194,6 +2232,10 @@ export function App(): JSX.Element {
   }
 
   useEffect(() => {
+    // Every branch below routes to "benchmark", which the browser client does
+    // not render. Skipping the effect wholesale is the correct handling rather
+    // than an omission: the gate it enforces is already off there.
+    if (METIS_BROWSER_CLIENT) return;
     if (!benchmarkLoaded) {
       setActiveNav("benchmark");
       return;
@@ -2213,6 +2255,17 @@ export function App(): JSX.Element {
 
   return (
     <div className="app-root">
+      {/* The browser client renders the real UI over a bridge that is not
+          there. Without this strip that reads as a broken app rather than an
+          unfinished one, and somebody would reasonably file every empty panel
+          as a bug. Position-fixed so it cannot disturb a layout it was not
+          designed into. It goes when the read-only routes land. */}
+      {METIS_BROWSER_CLIENT ? (
+        <div className="browser-preview-strip" role="status">
+          <strong>Browser preview.</strong> This is the real interface served over the Metis Gateway, but it is not connected to
+          Metis yet — no models, no conversations, nothing sends. Use the desktop app to actually run anything.
+        </div>
+      ) : null}
       <Titlebar
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed((current) => !current)}
@@ -2271,7 +2324,13 @@ export function App(): JSX.Element {
       {activeNav === "graph" ? (
         <MemoryGraphWorkspace onConversationOpen={openConversationById} />
       ) : null}
-      {activeNav === "benchmark" ? <BenchmarkWorkspace locked={benchmarkGateLocked} onComplete={() => setActiveNav("orchestration")} onWizardChange={setBenchmarkWizard} wizard={benchmarkWizard} /> : null}
+      {/* isNavVisible as well as the activeNav check, so the one surface that
+          would LIE without a bridge cannot mount even if some future caller
+          sets activeNav directly. Today five separate facts make that
+          impossible — the gate is off, the effect is skipped, and the three
+          gate-guarded setters cannot fire — and an invariant that needs five
+          facts held at once is one that breaks on the sixth edit. */}
+      {activeNav === "benchmark" && isNavVisible("benchmark") ? <BenchmarkWorkspace locked={benchmarkGateLocked} onComplete={() => setActiveNav("orchestration")} onWizardChange={setBenchmarkWizard} wizard={benchmarkWizard} /> : null}
       {activeNav === "gallery" ? <GalleryWorkspace boards={galleryBoards} onBoardsChange={setGalleryBoards} /> : null}
       {activeNav === "marketplace" ? <MarketplaceWorkspace onNavigate={setActiveNav} /> : null}
       {activeNav === "routines" ? <RoutinesWorkspace onConversationOpen={openConversationById} /> : null}
@@ -3159,8 +3218,15 @@ function Sidebar({
         {isNavVisible("marketplace") ? <NavButton active={activeNav === "marketplace"} disabled={benchmarkLocked} icon={<Cable size={16} />} label="Marketplace" onClick={() => onSelect("marketplace")} /> : null}
         {/* Benchmark is the only member of the old More group that ships in v1
             (docs/SHIP_V1.md), so it sits inline rather than behind a disclosure
-            that would expand to reveal a single item. */}
-        <NavButton active={activeNav === "benchmark"} icon={<Cpu size={16} />} label="Benchmark" onClick={() => onSelect("benchmark")} />
+            that would expand to reveal a single item.
+            Guarded even though it is a v1 item, unlike the three siblings around
+            it: the browser client cuts it (BROWSER_HIDDEN_NAV), and this button
+            is the ONLY way to reach it. Rendering it unconditionally is how the
+            cut passed a source check and shipped visible anyway — isNavVisible
+            returning false is not the same fact as the button being gone. */}
+        {isNavVisible("benchmark") ? (
+          <NavButton active={activeNav === "benchmark"} icon={<Cpu size={16} />} label="Benchmark" onClick={() => onSelect("benchmark")} />
+        ) : null}
         {moreOpen ? (
           <>
             {isNavVisible("routines") ? <NavButton active={activeNav === "routines"} disabled={benchmarkLocked} icon={<CalendarClock size={16} />} label="Routines" onClick={() => onSelect("routines")} /> : null}

@@ -45,6 +45,26 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **`/app/assets/*` is served with no bearer token, and that is the design.** A
+  `<script src>` cannot carry an `Authorization` header, so the renderer bundle
+  either goes out unauthenticated or the gateway grows a cookie. The cookie was
+  rejected: it is an *ambient* credential, and an ambient credential hands every
+  other page in the browser a CSRF path to `POST /v1/chat/completions` — the
+  route that spends real money. `SameSite=Strict` would block that, but the
+  reason the gateway is safe today is that it has no ambient credential to
+  steal, and keeping it that way is worth more than the alternative costs. The
+  alternative costs nothing: the bundle is the app's own compiled code,
+  byte-identical to what ships inside the public installer, with no key, no
+  conversation and no user data in it. Every JSON route keeps its bearer check
+  exactly as it was, and the suite asserts the asset branch is the *only* thing
+  that runs before the check.
+- **The served tree is scoped to `/app/assets/`, and refuses OS metadata.**
+  `dist/` is not purely build output — Vite copies `public/*` in verbatim, and a
+  OneDrive checkout had a `desktop.ini` sitting in the screenshots folder that
+  the first version of this branch would have served. The suite found that by
+  walking the real tree with the real policy rather than checking a list of
+  extensions someone typed. Nothing in it was sensitive; the shape of the
+  problem is that whatever the OS drops into a copied directory gets served.
 - **A loop's walkthrough names the backups now, and says which one you can
   actually reach.** Every turn that wrote files gets its snapshot id and the
   folder holding the originals.
@@ -101,6 +121,32 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **The gateway serves the desktop renderer at `/app/`.** Not a second client
+  and not a mock: the same Vite bundle Electron loads, from `dist/`, unchanged,
+  so the browser can never drift from the desktop. `/app` without the trailing
+  slash `301`s to `/app/` — Vite is `base: "./"`, so the relative asset paths
+  resolve to `/assets/` otherwise and every one of them 404s behind a `200`.
+  Assets go through the existing `serveStaticFile`, inheriting its `isPathInside`
+  and realpath containment rather than a second hand-rolled check, and
+  `mimeTypeFor` grew the extensions a real bundle actually emits (a stylesheet
+  served as `octet-stream` is refused outright by strict MIME checking).
+  `28-gateway-app-shell`, 60 assertions.
+- **It renders. It does not work, and it says so.** Every component calls the
+  Electron preload bridge directly, and over HTTP there is no preload, so all 31
+  namespaces are `undefined` — no models, no conversations, nothing that sends.
+  An inline classic script injected after `<head>` sets
+  `window.__METIS_CLIENT__ = "browser"` before the deferred module bundle runs,
+  and a strip on the page says plainly that it is not connected, so empty panels
+  read as unfinished rather than broken.
+- **The benchmark wizard is cut in the browser client, because it is the one
+  surface that would lie rather than sit empty.** Its run is a `setInterval` over
+  four hardcoded strings and its GPU table is a constant, so with no bridge
+  behind it it completes *anyway*, unlocks the whole navigation, and recommends
+  local models for a graphics card it never read. The first-run gate is unlocked
+  in the same client — hiding the tab while the gate stayed armed would bounce
+  every navigation to a tab that no longer renders, so the suite asserts both
+  halves as a pair. Not satisfied, just not enforced by a wizard the browser
+  cannot honestly run.
 - **Every channel the renderer can reach is now classified.**
   `src/shared/bridge-manifest.ts` carries one entry per channel — namespace,
   method, kind, and an **exposure class** saying what it would mean to reach it

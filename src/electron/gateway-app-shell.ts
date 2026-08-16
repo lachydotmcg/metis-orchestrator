@@ -1,0 +1,167 @@
+/** Serving the DESKTOP renderer over the gateway, at /app/.
+ *
+ *  The loops page next door is a second, tiny client written by hand. This is
+ *  the opposite bet: the same Vite bundle Electron loads, handed to a browser
+ *  unchanged. Nothing is rewritten and nothing is forked, so the browser can
+ *  never drift from the desktop — it is byte-for-byte the same build.
+ *
+ *  What that buys and what it does not:
+ *
+ *  The bundle renders. It does NOT work. Every component in the renderer calls
+ *  `window.metisX` — the Electron preload bridge — directly, and over HTTP
+ *  there is no preload, so all 31 namespaces are `undefined`. The survey that
+ *  motivated this found why a shim cannot paper over it: `installIpcSenderGuard`
+ *  authenticates frame TOPOLOGY (`senderFrame.parent !== null`), not identity,
+ *  so an HTTP caller has no `senderFrame` and no handler inherits any
+ *  protection once reached over HTTP. Parity means re-exposing handlers as
+ *  individually-authorized routes — 104 of them, classified in
+ *  `shared/bridge-manifest.ts` — not swapping a transport. That is the work
+ *  after this file, not inside it.
+ *
+ *  So this stage ships a UI preview and says so, out loud, in the page. The
+ *  renderer is told which client it is running in (`__METIS_CLIENT__`) so it
+ *  can refuse to render the surfaces that would LIE without a bridge — the
+ *  benchmark wizard above all, whose "run" is a setInterval over hardcoded
+ *  strings and which therefore passes, unlocks the whole navigation, and
+ *  recommends models to a machine it never looked at.
+ *
+ *  AUTH, and why the bundle is public.
+ *
+ *  A `<script src>` cannot carry an Authorization header. The loops page got
+ *  around that with a `?token=` bootstrap, but a bootstrap only helps the
+ *  document — the twelve requests the document then makes for its own JS, CSS
+ *  and PNGs have no way to be authorized, and they would each take a bare 401
+ *  while the HTML itself returned 200. The page would be blank.
+ *
+ *  Two ways out: set a cookie on the bootstrap, or stop pretending the bundle
+ *  is a secret. A cookie is the worse one. It introduces an AMBIENT credential
+ *  to a service that currently has none, which hands every other page in the
+ *  browser a CSRF path to `POST /v1/chat/completions` — a route that spends
+ *  real money. SameSite=Strict blocks that, but the whole reason the gateway is
+ *  safe today is that it has no ambient credential to steal, and that is worth
+ *  more than the alternative costs.
+ *
+ *  The alternative costs nothing, because the bundle is not a secret. It is the
+ *  app's own compiled code, identical to the JavaScript inside the installer
+ *  anyone can download from the releases page. It contains no key, no
+ *  conversation, no file path and no user data of any kind. Serving it
+ *  unauthenticated to another process on 127.0.0.1 discloses a public artifact.
+ *  So: everything under /app/assets/ is served with no token, every JSON route
+ *  keeps the exact bearer check it has today, and the gateway acquires no
+ *  ambient credential.
+ *
+ *  The token on the /app/ DOCUMENT is therefore not protecting the bundle. It
+ *  is the bootstrap — the only way the token reaches the page at all, and what
+ *  the next stage's authorized fetches will use.
+ */
+
+import { scriptSafeJson } from "./gateway-loops-page.js";
+
+/** The mount point. Not `/` — that is already the loops page, and displacing a
+ *  shipped surface to make room for an unfinished one is the wrong trade. */
+export const GATEWAY_APP_PREFIX = "/app";
+
+/** The one directory Vite emits. `dist/` holds exactly `index.html` and
+ *  `assets/` — Vite copies `public/*` into the out dir root, so the repo's
+ *  `public/assets/providers/*.png` land under `dist/assets/` too. Pinning the
+ *  public branch to this prefix rather than "anything that is not the document"
+ *  means a file that appears at the dist ROOT later (a sourcemap, a manifest,
+ *  a stray `.env` copied by a misconfigured plugin) is NOT served by default. */
+const ASSET_PREFIX = `${GATEWAY_APP_PREFIX}/assets/`;
+
+/** The asset path relative to `dist/`, or null when this is not an /app/ asset
+ *  request. Callers pass the result straight to `serveStaticFile`, which owns
+ *  the containment checks (`isPathInside` plus a realpath pass for symlinks) —
+ *  this function decides POLICY, that one enforces the boundary. */
+export function gatewayAppAssetPath(pathname: string): string | null {
+  if (!pathname.startsWith(ASSET_PREFIX)) return null;
+  // `dist/` is not purely build output, which the suite found rather than
+  // predicted: Vite copies `public/*` in verbatim, and on a OneDrive-synced
+  // checkout that included a `desktop.ini` Explorer had written into the
+  // screenshots folder. Nothing in it was sensitive, but it proves the shape of
+  // the problem — whatever the OS drops into a copied directory gets served.
+  // These files are never referenced by a bundle, so refusing them costs
+  // nothing and stops the served tree from being whatever the filesystem
+  // happens to contain.
+  const name = pathname.slice(pathname.lastIndexOf("/") + 1).toLowerCase();
+  if (name.startsWith(".") || name === "desktop.ini" || name === "thumbs.db") return null;
+  return pathname.slice(GATEWAY_APP_PREFIX.length);
+}
+
+/** True for the bare `/app`, which must redirect to `/app/`.
+ *
+ *  Vite is configured `base: "./"`, so the built index.html asks for
+ *  `./assets/index-<hash>.js`. Resolved against `/app/` that is
+ *  `/app/assets/...` and correct; resolved against `/app` — no trailing slash —
+ *  the last segment is treated as a FILE name and it becomes `/assets/...`,
+ *  which this gateway does not serve. Same for the renderer's runtime-built
+ *  paths (`"assets/providers/qwen.png"`, App.tsx). One missing slash is the
+ *  difference between the app and a blank page with twelve 404s. */
+export function isGatewayAppRedirect(pathname: string): boolean {
+  return pathname === GATEWAY_APP_PREFIX;
+}
+
+/** True for the document itself. */
+export function isGatewayAppDocument(pathname: string): boolean {
+  return pathname === `${GATEWAY_APP_PREFIX}/` || pathname === `${GATEWAY_APP_PREFIX}/index.html`;
+}
+
+/** The bootstrap script, injected into the built index.html.
+ *
+ *  It must run BEFORE the bundle. Vite emits `<script type="module">`, which is
+ *  deferred and executes after the document is parsed; a classic inline script
+ *  executes the moment the parser reaches it. So injecting immediately after
+ *  `<head>` guarantees `__METIS_CLIENT__` is settled before a single line of
+ *  React runs, which is what lets the flag be read at MODULE scope in the
+ *  renderer rather than plumbed through a provider. */
+function bootstrapScript(token: string): string {
+  return `
+window.__METIS_CLIENT__ = "browser";
+(function () {
+  // Same bootstrap the loops page uses: the token arrives in the URL because a
+  // link you type or scan cannot carry a header, and the page's first act is to
+  // move it out of the address bar so it does not sit in history.
+  var url = new URL(window.location.href);
+  var fromUrl = url.searchParams.get("token");
+  if (fromUrl) {
+    try { sessionStorage.setItem("metis-gateway-token", fromUrl); } catch (e) {}
+    url.searchParams.delete("token");
+    history.replaceState(null, "", url.pathname + url.search);
+  }
+  var injected = ${scriptSafeJson(token)};
+  try { window.__METIS_GATEWAY_TOKEN__ = sessionStorage.getItem("metis-gateway-token") || injected; }
+  catch (e) { window.__METIS_GATEWAY_TOKEN__ = injected; }
+})();
+`.trim();
+}
+
+/** Injects the bootstrap into the built index.html.
+ *
+ *  Returns null if `<head>` is absent rather than appending blindly — a build
+ *  output this function does not recognise is a build output it should not be
+ *  guessing about, and a caller that gets null can say so instead of serving a
+ *  page whose flag never ran. */
+export function gatewayAppShell(indexHtml: string, token: string): string | null {
+  const head = /<head[^>]*>/i.exec(indexHtml);
+  if (!head) return null;
+  const at = head.index + head[0].length;
+  return `${indexHtml.slice(0, at)}\n    <script>${bootstrapScript(token)}</script>${indexHtml.slice(at)}`;
+}
+
+/** Shown when `dist/` is missing — `npm run dev` runs the renderer from Vite on
+ *  5177 and never writes `dist/`, so a developer hitting /app/ mid-dev-session
+ *  gets a stale build or none at all. Saying which is kinder than a bare 404,
+ *  and this is the only case where /app/ answers without the real bundle. */
+export function gatewayAppMissingBuildPage(): string {
+  return `<!doctype html>
+<html lang="en"><head><meta charset="utf-8" /><title>Metis — no build</title>
+<style>body{background:#0d0f14;color:#e6e8ee;font:15px/1.6 system-ui,sans-serif;margin:0;display:grid;place-items:center;height:100vh}
+main{max-width:32rem;padding:2rem}code{background:#1a1d26;padding:.15rem .4rem;border-radius:4px}</style>
+</head><body><main>
+<h1>No renderer build to serve</h1>
+<p>The gateway serves <code>dist/</code>, which Vite only writes on a real build.
+<code>npm run dev</code> runs the renderer from its dev server instead and leaves
+<code>dist/</code> stale or absent.</p>
+<p>Run <code>npm run build</code>, then reload.</p>
+</main></body></html>`;
+}
