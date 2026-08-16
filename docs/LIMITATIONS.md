@@ -168,6 +168,24 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 - **Key encryption depends on the OS.** `safeStorage` where the platform provides it, base64 on
   disk where it does not. The app shows you which one is in use rather than implying encryption it
   does not have.
+- ~~**The generic store channel reached pooled account credentials.**~~ Fixed 2026-08-16. The
+  renderer guard blocked exactly the key `secrets`, while pooled per-account credentials are written
+  to `account-secrets` — a different key, and `storeKeyPattern` accepts a hyphen, so
+  `metis-store:get("account-secrets")` passed `assertRendererMayReachStoreKey` and returned
+  `StoredSecret` blobs, whose `plain-local` tier is base64 on disk wherever the platform has no
+  `safeStorage`. Precisely the second unguarded path `shared/store-keys.ts` was written to close,
+  reopened by a sibling key added later. `gatewayToken` (the whole HTTP surface's auth) and
+  `permissions` (writing it grants filesystem access with no audit line) were open the same way and
+  are blocked too; `providerAccounts` deliberately stays open because it holds a `keyRef` and never
+  a key.
+  **The structural half matters more than the four entries.** A denylist cannot fail safe here — its
+  failure mode is silence, and nobody learns a key was missed until it is read. So every key the
+  main process writes now carries an owner in `STORE_KEY_OWNERS`, and `13-store-key-guard` fails the
+  build on an unclassified one. The decision becomes mandatory rather than remembered.
+  **Still narrower than it sounds:** this was not reachable by anything untrusted. The chat renders
+  through react-markdown with no `rehype-raw`, so model-authored HTML is stripped rather than
+  executed, and nothing untrusted runs in the renderer's origin. It was a latent hole, and it would
+  have stopped being latent the moment any part of the renderer was served over HTTP.
 - ~~**The permission ceiling bound loops and nothing else.**~~ Fixed 2026-08-05: `clampPermissionMode`
   was applied only in `createLoop`, so `resolvePermissionMode` handed the renderer's requested mode
   straight to `gatePermission`, which short-circuits on `bypass` for every scope. The clamp now sits

@@ -12,6 +12,37 @@ engine referenced below.
 
 ## [Unreleased]
 
+### Security (2026-08-16)
+
+- **The generic store channel could read pooled account credentials.** The
+  renderer guard blocked exactly one key, `secrets`. Pooled per-account
+  credentials are written to `account-secrets` — a *different* key — and
+  `storeKeyPattern` accepts a hyphen, so `metis-store:get("account-secrets")`
+  passed the guard and came back with `StoredSecret` blobs. Their `plain-local`
+  tier is base64 on disk wherever the platform has no `safeStorage`.
+
+  That is exactly the second unguarded path `shared/store-keys.ts` exists to
+  close, reopened by a sibling key added later. `gatewayToken` — the auth for
+  the entire HTTP surface — and `permissions` — writing it grants filesystem
+  access with no audit line — were open the same way. All three are blocked now.
+  `providerAccounts` deliberately stays open: it holds a `keyRef` and never a
+  key, and the renderer reads it to draw the account pool.
+
+  **The structural half is the actual fix.** A denylist cannot fail safe here,
+  because its failure mode is silence — nobody learns a key was missed until it
+  is read, and `gatewayToken` shows a `/secret/i` pattern would not have caught
+  it either. Every key the main process writes now carries an owner in
+  `STORE_KEY_OWNERS`, and `13-store-key-guard` fails the build on an
+  unclassified one. Adding a credential-bearing key without deciding who may
+  reach it is now impossible rather than merely unlikely.
+
+  **Not reachable by anything untrusted**, and worth saying so plainly rather
+  than overstating it: the chat renders through react-markdown with no
+  `rehype-raw`, so model-authored HTML is stripped rather than executed, and
+  nothing untrusted runs in the renderer's origin. This was latent. It would
+  have stopped being latent the moment any part of the renderer was served over
+  HTTP — which is the work that turned it up.
+
 ### Changed (2026-08-16)
 
 - **A loop's walkthrough names the backups now, and says which one you can
