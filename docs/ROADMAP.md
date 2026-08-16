@@ -112,6 +112,34 @@ below came out of that, in his priority order.
   be reused: `App.tsx` is ~18k lines with one export and 284 direct calls to the
   Electron preload bridge across 29 namespaces.
 
+  **Surveyed 2026-08-16, and that last sentence is right about the coupling and
+  wrong about the conclusion.** The renderer reaches the bridge through
+  `window.metis*` and never imports `ipcRenderer`, so a shim installed before
+  React mounts intercepts everything without editing a call site. The numbers
+  are now 104 channels across 31 namespaces, 103 members — `metisSession.runStream`
+  owns two — and **93 of 104 are thin `invoke` wrappers**.
+
+  Two findings kill the shim idea anyway, and both are worth having written down:
+
+  - **`installIpcSenderGuard` cannot be proxied.** It authenticates frame
+    topology (`senderFrame.parent !== null`), and an HTTP caller has no
+    `senderFrame`. No handler inherits any protection once reached over HTTP, so
+    parity means re-exposing handlers as individually-authorized routes. Not a
+    transport swap.
+  - **The 11 non-uniform members are the app.** Five push subscriptions and six
+    fire-and-forget sends, carrying: streaming a run, cancelling a run,
+    answering a permission prompt, answering a question. A shim covering the
+    other 93 produces a client that lists what already happened and can start
+    nothing, watch nothing, answer nothing.
+
+  There is also a honesty hazard in serving the bundle naively: the benchmark
+  wizard is a **client-side simulation** — hardcoded strings on a timer — so in a
+  browser with no bridge it passes and unlocks the entire nav. Serving `dist/`
+  without handling that ships an app that looks like it works.
+
+  The surface is now enumerated in `src/shared/bridge-manifest.ts` with an
+  exposure class per channel, guarded by `27-bridge-manifest`.
+
 - ~~**Composer hints belong inside the prompt box, not above it.**~~ **Fixed
   2026-08-15.** *"The recommendations for when you're using /loop or whatever
   should be inside the prompt box not above it."* This was the same correction

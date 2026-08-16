@@ -101,6 +101,37 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **Every channel the renderer can reach is now classified.**
+  `src/shared/bridge-manifest.ts` carries one entry per channel — namespace,
+  method, kind, and an **exposure class** saying what it would mean to reach it
+  from something that is not the desktop renderer: `read`, `write`, `reduce`,
+  `decision`, `host`, `never`. `27-bridge-manifest` checks the table against the
+  real preload and the real handler registrations, and fails the build on a
+  channel that has no class.
+
+  This is the groundwork for serving the app in a browser, and it exists because
+  of what a survey of that idea turned up. The transport is nearly uniform — 93
+  of 104 channels are thin `invoke` wrappers — but `installIpcSenderGuard`
+  authenticates frame *topology*, and an HTTP caller has no `senderFrame`. No
+  handler inherits any protection once reached over HTTP. So parity is
+  re-exposing handlers as individually-authorized routes, which makes the
+  exposed surface a 104-item decision — and a 104-item decision made from memory
+  is one that goes wrong quietly. It already did once, one layer down, in the
+  store-key guard below.
+
+  Three facts the table pins that were not written down anywhere. The bridge is
+  **103 members across 104 channels**: `metisSession.runStream` owns two,
+  minting a correlation id in the preload and filtering a subscription on it,
+  which is the least mechanical thing in the bridge and the one carrying run
+  streaming. `metisProject.setConversationProject` owns a `metis-conversations:*`
+  channel — the single cross-namespace pair, so a channel can never be derived
+  from its namespace by convention. And `metis-loops:stop` and
+  `metis-routines:run-now` resolve to `T | undefined`, which IPC transports and
+  JSON does not.
+
+  Nothing reads it at runtime yet, deliberately: the classification has to be
+  right before anything is built on it.
+
 - **`review x3` fans a step into three parallel instances that are not clones.**
   One written step becomes three run steps, named `review 1of3` upward, and each
   is told it is one of three working on the same material at the same time.
