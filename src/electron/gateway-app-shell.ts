@@ -7,23 +7,27 @@
  *
  *  What that buys and what it does not:
  *
- *  The bundle renders. It does NOT work. Every component in the renderer calls
- *  `window.metisX` — the Electron preload bridge — directly, and over HTTP
- *  there is no preload, so all 31 namespaces are `undefined`. The survey that
- *  motivated this found why a shim cannot paper over it: `installIpcSenderGuard`
- *  authenticates frame TOPOLOGY (`senderFrame.parent !== null`), not identity,
- *  so an HTTP caller has no `senderFrame` and no handler inherits any
- *  protection once reached over HTTP. Parity means re-exposing handlers as
- *  individually-authorized routes — 104 of them, classified in
- *  `shared/bridge-manifest.ts` — not swapping a transport. That is the work
- *  after this file, not inside it.
+ *  The bundle renders, and it READS. It does not write and it does not run
+ *  anything. Every component calls `window.metisX` — the Electron preload
+ *  bridge — directly, and over HTTP there is no preload, so `gatewayBridgeShim()`
+ *  rebuilds those namespaces out of `fetch`.
  *
- *  So this stage ships a UI preview and says so, out loud, in the page. The
- *  renderer is told which client it is running in (`__METIS_CLIENT__`) so it
- *  can refuse to render the surfaces that would LIE without a bridge — the
- *  benchmark wizard above all, whose "run" is a setInterval over hardcoded
- *  strings and which therefore passes, unlocks the whole navigation, and
- *  recommends models to a machine it never looked at.
+ *  What it does NOT do is proxy the bridge, and the reason is worth keeping:
+ *  `installIpcSenderGuard` authenticates frame TOPOLOGY
+ *  (`senderFrame.parent !== null`), not identity, so an HTTP caller has no
+ *  `senderFrame` and no handler inherits any protection once reached over HTTP.
+ *  There is no transport swap that preserves the guarantee. So the routes call
+ *  the same named functions the handlers call — `readConversations()`,
+ *  `computeUsageSummary()` — and carry their own authorization, per member,
+ *  against the classification in `shared/bridge-manifest.ts`.
+ *
+ *  26 members read. The rest of the surface is honest about being absent: see
+ *  `gatewayBridgeShim()` for how a namespace that is partly there differs from
+ *  one that is not there at all. The renderer is told which client it is in
+ *  (`__METIS_CLIENT__`) so it can also cut the one surface that would LIE
+ *  rather than sit empty — the benchmark wizard, whose "run" is a setInterval
+ *  over hardcoded strings and which therefore passes, unlocks the whole
+ *  navigation, and recommends models to a machine it never looked at.
  *
  *  AUTH, and why the bundle is public.
  *
@@ -56,6 +60,7 @@
  */
 
 import { scriptSafeJson } from "./gateway-loops-page.js";
+import { BRIDGE_CHANNELS, bridgeMemberIsHttpReadable } from "../shared/bridge-manifest.js";
 
 /** The mount point. Not `/` — that is already the loops page, and displacing a
  *  shipped surface to make room for an unfinished one is the wrong trade. */
@@ -132,6 +137,7 @@ window.__METIS_CLIENT__ = "browser";
   try { window.__METIS_GATEWAY_TOKEN__ = sessionStorage.getItem("metis-gateway-token") || injected; }
   catch (e) { window.__METIS_GATEWAY_TOKEN__ = injected; }
 })();
+${gatewayBridgeShim()}
 `.trim();
 }
 
@@ -164,4 +170,90 @@ main{max-width:32rem;padding:2rem}code{background:#1a1d26;padding:.15rem .4rem;b
 <code>dist/</code> stale or absent.</p>
 <p>Run <code>npm run build</code>, then reload.</p>
 </main></body></html>`;
+}
+
+/** The bridge shim: `window.metisX` objects that fetch instead of using IPC.
+ *
+ *  Generated from BRIDGE_CHANNELS rather than hand-written, so a channel added
+ *  to the preload appears here automatically and a channel reclassified stops
+ *  being reachable without anyone remembering to edit a second list. The
+ *  renderer is not modified at all — it keeps calling `window.metisUsage.summary()`
+ *  and neither knows nor cares that the call became an HTTP request.
+ *
+ *  Three kinds of member, and the distinction between them is the honesty of
+ *  the whole client:
+ *
+ *  **Readable** members POST to `/v1/bridge` and return real data.
+ *
+ *  **Everything else in a namespace that has at least one readable member** is
+ *  defined too, and REJECTS with a message naming itself. That is deliberate
+ *  and it is the subtle part: the renderer guards on `Boolean(window.metisX)`,
+ *  so defining a namespace makes every one of those guards pass. If the
+ *  unreadable members were simply absent, the guard would wave the code through
+ *  and it would die on `undefined is not a function` — a stack trace instead of
+ *  a sentence. A rejecting promise is the honest version of "this needs the
+ *  desktop app".
+ *
+ *  **Subscribe** members return a working unsubscribe and never fire, because
+ *  push needs an event stream and that is the next slice. A subscription that
+ *  never fires costs live updates, not correctness — the panel still renders
+ *  what its initial read returned.
+ *
+ *  A namespace with NO readable member is left undefined entirely, so its
+ *  panels take the existing not-present path and render nothing rather than a
+ *  row of errors. "This area is not here" and "this area is partly here" are
+ *  different facts and the client tells them apart.
+ */
+export function gatewayBridgeShim(): string {
+  const namespaces = new Map<string, Record<string, "read" | "no" | "subscribe">>();
+  for (const entry of BRIDGE_CHANNELS) {
+    const members = namespaces.get(entry.namespace) ?? {};
+    const member = `${entry.namespace}.${entry.method}`;
+    // runStream owns two channels; the invoke half decides, so never let the
+    // subscribe half overwrite a verdict already recorded for the same method.
+    const kind = bridgeMemberIsHttpReadable(member) ? "read" : entry.kind === "subscribe" ? "subscribe" : "no";
+    if (!(entry.method in members) || kind !== "subscribe") members[entry.method] = kind;
+    namespaces.set(entry.namespace, members);
+  }
+  const servable = [...namespaces.entries()].filter(([, members]) => Object.values(members).includes("read"));
+  const table = Object.fromEntries(servable);
+  return `
+(function () {
+  var NS = ${scriptSafeJson(table)};
+  function token() { return window.__METIS_GATEWAY_TOKEN__ || ""; }
+  function call(member, args) {
+    return fetch("/v1/bridge", {
+      method: "POST",
+      headers: { "content-type": "application/json", "authorization": "Bearer " + token() },
+      body: JSON.stringify({ member: member, args: Array.prototype.slice.call(args) })
+    }).then(function (res) {
+      return res.json().catch(function () { return null; }).then(function (body) {
+        if (!res.ok || !body || body.ok !== true) {
+          throw new Error((body && body.error && body.error.message) || ("Metis gateway returned " + res.status + " for " + member));
+        }
+        return body.value;
+      });
+    });
+  }
+  function unavailable(member) {
+    return function () {
+      return Promise.reject(new Error(member + " needs the desktop app. The browser client is read-only."));
+    };
+  }
+  function inertSubscription() { return function () {}; }
+  Object.keys(NS).forEach(function (name) {
+    var members = NS[name];
+    var api = {};
+    Object.keys(members).forEach(function (method) {
+      var kind = members[method];
+      var member = name + "." + method;
+      if (kind === "read") { api[method] = function () { return call(member, arguments); }; }
+      else if (kind === "subscribe") { api[method] = inertSubscription; }
+      else { api[method] = unavailable(member); }
+    });
+    window[name] = api;
+  });
+  window.__METIS_BRIDGE_SHIM__ = NS;
+})();
+`.trim();
 }

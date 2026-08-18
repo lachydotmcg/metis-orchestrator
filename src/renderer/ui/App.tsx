@@ -2255,15 +2255,16 @@ export function App(): JSX.Element {
 
   return (
     <div className="app-root">
-      {/* The browser client renders the real UI over a bridge that is not
-          there. Without this strip that reads as a broken app rather than an
-          unfinished one, and somebody would reasonably file every empty panel
-          as a bug. Position-fixed so it cannot disturb a layout it was not
-          designed into. It goes when the read-only routes land. */}
+      {/* The browser client reads real data and cannot write or run anything.
+          Without this strip, a button that rejects reads as a broken app rather
+          than a deliberately narrow one. The wording tracks what is actually
+          wired — it said "no models, no conversations" while that was true, and
+          saying it now that both load would be a lie in the other direction.
+          Position-fixed so it cannot disturb a layout it was not designed into. */}
       {METIS_BROWSER_CLIENT ? (
         <div className="browser-preview-strip" role="status">
-          <strong>Browser preview.</strong> This is the real interface served over the Metis Gateway, but it is not connected to
-          Metis yet — no models, no conversations, nothing sends. Use the desktop app to actually run anything.
+          <strong>Browser client, read-only.</strong> Your real conversations, models, loops and usage load over the Metis
+          Gateway. Nothing here can send a prompt, write a file or start a run — those need the desktop app.
         </div>
       ) : null}
       <Titlebar

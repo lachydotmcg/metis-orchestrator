@@ -45,6 +45,19 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **Four channels classified `read` are refused an HTTP route, by name and with
+  reasons, in the manifest.** `read` was assigned against the *desktop* threat
+  model — "this only reads, so the renderer may have it" — and four channels
+  pass that test while failing a different one once the caller is remote.
+  `metisRegistry.refresh` takes a `sourceUrl` the main process then fetches,
+  which is an SSRF primitive, and it sits one line under `metisRegistry.fetchUrl`
+  which is already `decision` for exactly that capability. `metisPolicy.decide`
+  runs the router on caller-supplied text and reaches a model when model-driven
+  routing is on. `metisPrewarm.route` returns void and causes background work.
+  `metisUpdates.check` reaches the internet. Serving
+  `bridgeChannelsSafeToServe()` mechanically — which is what the plan said to do
+  — would have shipped the first of them. Reading the list back before serving
+  it is what caught them.
 - **`/app/assets/*` is served with no bearer token, and that is the design.** A
   `<script src>` cannot carry an `Authorization` header, so the renderer bundle
   either goes out unauthenticated or the gateway grows a cookie. The cookie was
@@ -121,6 +134,25 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **The browser client reads real data.** `POST /v1/bridge` serves 26 of the
+  104 channels, allowlisted per member against the manifest, and
+  `gatewayBridgeShim()` rebuilds `window.metisX` out of `fetch` so the renderer
+  is not modified at all — it keeps calling `window.metisUsage.summary()` and
+  neither knows nor cares that the call became HTTP. Conversations, models,
+  loops, usage, providers, permissions and the audit log all load in a browser.
+  The routes call the **same named functions the IPC handlers call**
+  (`readConversations()`, `computeUsageSummary()`), so no IPC is involved and a
+  browser read and a desktop read cannot disagree.
+- **The shim tells "partly here" apart from "not here".** A namespace with at
+  least one readable member is defined *in full*: readable members fetch, the
+  rest reject with a message naming themselves. That is deliberate — the
+  renderer guards on `Boolean(window.metisX)`, so defining a namespace makes
+  every guard in it pass, and if the unreadable members were simply absent the
+  guard would wave the code through and it would die on `undefined is not a
+  function`. A rejecting promise is the honest version of "this needs the
+  desktop app". A namespace with *nothing* readable is left undefined entirely,
+  so its panels take the existing not-present path and render nothing rather
+  than a row of errors.
 - **The gateway serves the desktop renderer at `/app/`.** Not a second client
   and not a mock: the same Vite bundle Electron loads, from `dist/`, unchanged,
   so the browser can never drift from the desktop. `/app` without the trailing

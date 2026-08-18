@@ -258,12 +258,31 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   model-authored HTML is stripped rather than executed and nothing untrusted runs in that origin.
   Closed in the same audit: the generic store channel no longer reaches the `secrets` key
   (`13-store-key-guard`).
-- **The browser client renders the real app and is not connected to it.** `GET /app/` serves the
+- **The browser client reads, and cannot write or run anything.** `POST /v1/bridge` serves 26 of
+  the 104 channels, allowlisted per member, calling the same named functions the IPC handlers call.
+  Conversations, models, loops, usage, providers, permissions and the audit log all load. Nothing
+  sends a prompt, writes a file, installs anything or starts a run — those members are defined and
+  **reject with a message naming themselves**, rather than being absent, because the renderer guards
+  on `Boolean(window.metisX)` and an absent member would pass the guard and then die on `undefined
+  is not a function`. Five subscribe channels are inert: they return a working unsubscribe and never
+  fire, so panels render their initial read but do not update live. That needs an event stream.
+- **A wrong-shaped response can take the whole client down, and that is a real difference from the
+  desktop.** Found by serving a deliberately wrong shape: `metisPulse.feed()` returning null instead
+  of a `PulseFeed` destroyed a non-null fallback (`useState<PulseFeed>(FALLBACK_PULSE)` followed by
+  a blind `.then(setPulse)`), and the next `pulse.updated` threw during the titlebar render, so
+  **nothing mounted at all** — no sidebar, no error, a blank page. On the desktop that cannot happen:
+  the preload and the renderer share one set of types, so a handler returning the wrong shape is a
+  build error. Over HTTP the contract is JSON and nothing checks it at runtime. The existing
+  `.catch(() => undefined)` on these call sites handles a *failed* call correctly and does nothing
+  for a *successful* call that returns the wrong thing.
+- ~~**The browser client renders the real app and is not connected to it.**~~ Partly fixed
+  2026-08-16 by the read routes above: 26 members load real data. What remains true is everything
+  below — the writes, the runs, and the benchmark cut. `GET /app/` serves the
   same Vite bundle Electron loads, unchanged — so what you see in a browser is the actual interface,
-  not a mock of it. Nothing behind it works. Every component calls the Electron preload bridge
-  (`window.metisX`) directly, and over HTTP there is no preload, so all 31 namespaces are
-  `undefined`: no models, no conversations, no settings that persist anywhere but `localStorage`,
-  and nothing that sends. The renderer is told which client it is in
+  not a mock of it. Every component calls the Electron preload bridge
+  (`window.metisX`) directly, and over HTTP there is no preload, so the shim rebuilds the 21
+  namespaces that have at least one readable member and leaves the other 10 undefined. The renderer
+  is told which client it is in
   (`window.__METIS_CLIENT__ === "browser"`) and says so in a strip on the page rather than letting
   empty panels read as bugs. **The benchmark wizard is cut entirely in that client**, because it is
   the one surface that would *lie* rather than sit empty: its run is a `setInterval` over four

@@ -208,6 +208,25 @@ touching `runSession` or the build pipeline.
   `?token=` query parameter, because a link you type or scan cannot carry a
   header. The page's first act is to move it into `sessionStorage` and strip it
   from the address bar. Never accepted on a JSON route.
+- `POST /v1/bridge` is the **read surface the browser client runs on**. One
+  route, body `{ member, args }`, allowlisted per member against
+  `bridgeChannelsHttpReadable()` — 26 of the 104 channels. One route rather than
+  26 because the allowlist *is* the boundary and a single choke point is one
+  place to audit. It calls the SAME named functions the ipcMain handlers call
+  (`readConversations()`, `computeUsageSummary()`), so no IPC is involved and
+  the senderFrame problem is moot rather than worked around: a browser read and
+  a desktop read are the same call to the same function and cannot disagree.
+  The manifest is checked *before* the dispatch table is indexed, so a member
+  left wired after being reclassified is refused rather than quietly served.
+  - **35 channels are classified `read`; only 26 get a route.** Five are
+    subscribe channels (push, not request/response — they need an event stream).
+    Four more carry a `noHttp` reason: `metisRegistry.refresh` takes a
+    `sourceUrl` the main process then fetches, which is an SSRF primitive once
+    the caller is remote; `metisPolicy.decide` runs the router on caller-supplied
+    text and reaches a model when model-driven routing is on; `metisPrewarm.route`
+    returns void and causes background work; `metisUpdates.check` reaches the
+    internet. `read` was assigned against the *desktop* threat model, and those
+    four pass that test while failing a different one.
 - `GET /app/` serves the **desktop renderer itself** - the same Vite bundle
   Electron loads, from `dist/`, unchanged. `/app` without the trailing slash
   `301`s to `/app/`, because Vite is `base: "./"` and the relative asset paths

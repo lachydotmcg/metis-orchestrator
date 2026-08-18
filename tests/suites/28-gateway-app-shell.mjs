@@ -27,7 +27,11 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
+const { BRIDGE_CHANNELS, bridgeChannelsHttpReadable, bridgeMemberIsHttpReadable } =
+  await fromBuild("shared/bridge-manifest.js");
+
 const {
+  gatewayBridgeShim,
   GATEWAY_APP_PREFIX,
   gatewayAppAssetPath,
   gatewayAppShell,
@@ -286,8 +290,136 @@ section("The preview says it is a preview");
   // The renderer draws the real UI over a bridge that is not there. Without a
   // notice that reads as a broken app, and every empty panel is a bug report.
   ok("the strip renders only in the browser client", /METIS_BROWSER_CLIENT \? \(\s*<div className="browser-preview-strip"/.test(app));
-  ok("it says it is not connected", /not connected to\s+Metis yet/.test(app));
+  // The wording has to track what is actually wired. It said "no models, no
+  // conversations" while that was true; now that both load, the honest claim is
+  // read-only. A strip that undersells is a lie in the other direction, and a
+  // stale one is how a page ends up describing a version of itself that no
+  // longer exists.
+  // Scoped to the RENDERED element, not the file: the comment above it quotes
+  // the old wording to explain why it changed, and a whole-file match reads
+  // that comment as the live text. Caught by this assertion failing on its
+  // own explanation.
+  const strip = /<div className="browser-preview-strip"[\s\S]*?<\/div>/.exec(app);
+  ok("the strip's text is found", Boolean(strip));
+  ok("it says the client is read-only", /read-only/i.test(strip[0]));
+  ok("and names what still needs the desktop", /send a prompt, write a file or start a run/.test(strip[0]));
+  ok("and no longer claims nothing loads", !/no models, no conversations/.test(strip[0]));
   ok("the style exists", read("src", "renderer", "styles.css").includes(".browser-preview-strip"));
+}
+
+section("What gets an HTTP route is the manifest's decision, not the route file's");
+{
+  const readable = bridgeChannelsHttpReadable();
+  check("26 members read over HTTP", readable.length, 26);
+  // `read` alone returns 35. The gap is five SUBSCRIBE channels — push, not
+  // request/response — plus the four below. Pinned so a reclassification has to
+  // be looked at.
+  const safe = BRIDGE_CHANNELS.filter((entry) => entry.exposure === "read");
+  check("out of 35 classified read", safe.length, 35);
+  ok("no subscribe channel is HTTP-readable", readable.every((entry) => entry.kind === "invoke"));
+  ok("and every readable one is classified read", readable.every((entry) => entry.exposure === "read"));
+
+  // THE FOUR, BY NAME. `read` was assigned against the DESKTOP threat model —
+  // "this only reads, so the renderer may have it" — and these pass that test
+  // while failing a different one once the caller is remote. Serving
+  // bridgeChannelsSafeToServe() mechanically would have shipped the first of
+  // them, which is a straight SSRF primitive.
+  for (const member of ["metisRegistry.refresh", "metisPolicy.decide", "metisPrewarm.route", "metisUpdates.check"]) {
+    ok(`"${member}" is classified read but refused over HTTP`, !bridgeMemberIsHttpReadable(member));
+  }
+  const excluded = BRIDGE_CHANNELS.filter((entry) => entry.noHttp);
+  check("exactly four exclusions", excluded.length, 4);
+  ok("and every one says why", excluded.every((entry) => typeof entry.noHttp === "string" && entry.noHttp.length > 30));
+  // The one that matters most, spelled out: it sits one line under `fetchUrl`,
+  // which is already `decision` for the same capability.
+  ok(
+    "the SSRF reason names the mechanism, not just the verdict",
+    /sourceUrl/.test(BRIDGE_CHANNELS.find((entry) => entry.channel === "metis-registry:refresh")?.noHttp ?? "")
+  );
+
+  // Nothing that writes, spends, grants or touches the host is reachable.
+  for (const member of [
+    "metisStore.get",
+    "metisStore.set",
+    "metisGateway.getStatus",
+    "metisSession.run",
+    "metisLoops.create",
+    "metisFiles.write",
+    "metisPermissions.respond",
+    "metisRegistry.install"
+  ]) {
+    ok(`"${member}" is not readable over HTTP`, !bridgeMemberIsHttpReadable(member));
+  }
+}
+
+section("The wiring matches the policy, in BOTH directions");
+{
+  // A member wired but not permitted is a hole; a member permitted but not
+  // wired is a dead route that 501s. Neither is visible by reading one file.
+  const block = /const GATEWAY_BRIDGE_READS[\s\S]*?\n};/.exec(main);
+  ok("the dispatch table is found", Boolean(block));
+  const wired = [...block[0].matchAll(/"([a-zA-Z]+\.[a-zA-Z]+)":/g)].map((m) => m[1]).sort();
+  const permitted = bridgeChannelsHttpReadable().map((entry) => `${entry.namespace}.${entry.method}`).sort();
+  check("every permitted member is wired", permitted.filter((m) => !wired.includes(m)), []);
+  check("and nothing is wired that is not permitted", wired.filter((m) => !permitted.includes(m)), []);
+  // The manifest is checked BEFORE the table is indexed, so a member left in
+  // the table after being reclassified is refused rather than quietly served.
+  const handler = /async function handleGatewayBridgeRead[\s\S]*?\n}/.exec(main);
+  ok("the handler exists", Boolean(handler));
+  ok(
+    "the manifest check runs before the table lookup",
+    handler[0].indexOf("bridgeMemberIsHttpReadable") < handler[0].indexOf("GATEWAY_BRIDGE_READS[member]")
+  );
+  ok("undefined is collapsed to null for JSON", /value === undefined \? null : value/.test(handler[0]));
+  ok("the body reader is the shared one, with its cap", /readGatewayBody\(req, GATEWAY_MAX_BODY_BYTES\)/.test(handler[0]));
+
+  // The read route is a JSON route and takes the bearer check like every other
+  // one. The asset exemption is assets only — this is precisely the route that
+  // would make an ambient cookie credential dangerous.
+  const authAt = main.indexOf("Missing or invalid bearer token.");
+  ok("/v1/bridge is routed after the bearer check", main.indexOf('url.pathname === "/v1/bridge"') > authAt);
+}
+
+section("The shim tells 'partly here' apart from 'not here'");
+{
+  const shim = gatewayBridgeShim();
+  const table = JSON.parse(/var NS = (\{[\s\S]*?\});/.exec(shim)[1]);
+
+  ok("readable members fetch", table.metisUsage?.summary === "read");
+  ok("and so do the ones panels need most", table.metisConversations?.list === "read" && table.metisCatalog?.models === "read");
+
+  // The subtle one. The renderer guards on Boolean(window.metisX), so defining
+  // a namespace makes every guard in it pass. If the unreadable members were
+  // absent, the guard would wave the code through and it would die on
+  // "undefined is not a function" — a stack trace instead of a sentence.
+  ok("unreadable members in a served namespace are DEFINED, not missing", table.metisUsage?.setLimits === "no");
+  ok("and they reject rather than no-op", /needs the desktop app/.test(shim));
+  ok("with the member naming itself in the message", /member \+ " needs the desktop app/.test(shim));
+
+  // A namespace with nothing readable is left undefined entirely, so its panels
+  // take the existing not-present path and render nothing rather than a row of
+  // errors. "Not here" and "partly here" are different facts.
+  ok("metisGateway is absent entirely", table.metisGateway === undefined);
+  ok("metisStore is absent entirely", table.metisStore === undefined);
+  ok("metisFiles is absent entirely", table.metisFiles === undefined);
+  // Every namespace present must have earned it.
+  ok(
+    "every served namespace has at least one readable member",
+    Object.values(table).every((members) => Object.values(members).includes("read"))
+  );
+  // And nothing refused is reachable through a namespace that IS served.
+  ok("the SSRF member is present-but-rejecting, not readable", table.metisRegistry?.refresh === "no");
+  ok("metisRegistry.list beside it still reads", table.metisRegistry?.list === "read");
+
+  // Subscribe members return a working unsubscribe and never fire. That costs
+  // live updates, not correctness — the panel still renders its initial read.
+  ok("subscribe members are inert subscriptions", table.metisLoops?.onChanged === "subscribe");
+  ok("and hand back a real unsubscribe", /function inertSubscription\(\) \{ return function \(\) \{\}; \}/.test(shim));
+
+  // runStream owns two channels, invoke and subscribe. The invoke half decides.
+  ok("a two-channel member is not downgraded by its subscribe half", table.metisSession?.runStream === "no");
+
+  ok("the shim runs before the bundle", gatewayAppShell("<html><head></head><body></body></html>", "t").indexOf("var NS =") > 0);
 }
 
 const { passed, failed } = summary();

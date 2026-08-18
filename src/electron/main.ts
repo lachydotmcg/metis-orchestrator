@@ -98,6 +98,7 @@ import { formatWalkthrough, walkthroughFileName, type WalkthroughFile, type Walk
 import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
+import { bridgeMemberIsHttpReadable } from "../shared/bridge-manifest.js";
 import {
   GATEWAY_APP_PREFIX,
   gatewayAppAssetPath,
@@ -14666,6 +14667,100 @@ async function handleGatewayChatCompletions(req: IncomingMessage, res: ServerRes
   }
 }
 
+/** The read routes, member name to the function that answers it.
+ *
+ *  These are the SAME named functions the ipcMain handlers call — almost every
+ *  read handler is a one-line delegation (`() => readConversations()`), so the
+ *  gateway calls `readConversations()` directly and no IPC is involved at all.
+ *  That is what makes the senderFrame problem moot here rather than worked
+ *  around: there is no synthesised event to satisfy a guard, because there is no
+ *  guard in the path. It also means a browser read and a desktop read are the
+ *  same call to the same function, and cannot disagree.
+ *
+ *  The table is checked against `bridgeChannelsHttpReadable()` by the suite in
+ *  BOTH directions — a member here that the manifest does not permit is a hole,
+ *  and a member the manifest permits that is missing here is a dead route. The
+ *  manifest is the policy; this is only the wiring.
+ *
+ *  Args arrive as a JSON array and are passed positionally, matching how the
+ *  preload calls `ipcRenderer.invoke`. They are NOT validated per-member beyond
+ *  arity: every function here already treats its input as untrusted (the
+ *  renderer was never trusted either), and the two that take a path or a query
+ *  do their own containment. */
+const GATEWAY_BRIDGE_READS: Readonly<Record<string, (args: readonly unknown[]) => unknown>> = {
+  "metisPolicy.getSampleDecision": () => sampleDecision,
+  "metisPolicy.getStatus": (a) => getPolicyStatus(a[0] as string | undefined),
+  "metisSession.list": () => readSessionRuns(),
+  "metisBus.list": (a) => listSessionDirectives(a[0] as string | undefined),
+  "metisConversations.list": () => readConversations(),
+  "metisKnowledge.searchConversations": (a) => retrieveConversationContext(a[0] as string, a[1] as number | undefined),
+  "metisProfile.get": () => readUserProfile(),
+  "metisProject.getWorkspace": () => readProjectWorkspace(),
+  "metisProject.listResources": (a) => listProjectResources(a[0] as string | undefined),
+  "metisProject.lastSnapshot": () => readStoreValue<MetisProjectSnapshot | null>("lastProjectSnapshot", null),
+  "metisArtifacts.readImage": (a) => readGeneratedImage(a[0] as string),
+  "metisSecrets.list": () => listSecrets(),
+  "metisPermissions.list": () => listPermissions(),
+  "metisAudit.list": (a) => listAudit(a[0] as number | undefined),
+  "metisProviders.list": () => listProviders(),
+  "metisRegistry.list": () => listRegistry(),
+  "metisRegistry.listInstalled": () => listInstalledPackages(),
+  "metisCatalog.models": () => listModelCatalog(),
+  "metisPulse.feed": () => listPulseFeed(),
+  "metisUsage.summary": () => computeUsageSummary(),
+  "metisPreference.summary": () => computePreferenceSummary(),
+  "metisRoutines.list": () => listRoutines(),
+  "metisLoops.list": () => listLoops(),
+  "metisLoops.usage": (a) => loopUsageTotals(a[0] as string),
+  "metisOllama.list": () => listOllamaModels(),
+  "metisGallery.cards": () => listStyleCards()
+};
+
+/** `POST /v1/bridge` — one route for every read, allowlisted per member.
+ *
+ *  One route rather than 26 because the allowlist IS the security boundary and
+ *  a single choke point is one place to audit, not twenty-six. The member name
+ *  is data, checked against the manifest before anything is called; an
+ *  unrecognised or non-permitted member never reaches the table. */
+async function handleGatewayBridgeRead(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  // Same reader and the same size cap the chat route uses, rather than a second
+  // one that would drift from it.
+  const raw = await readGatewayBody(req, GATEWAY_MAX_BODY_BYTES).catch(() => "");
+  let body: { member?: unknown; args?: unknown } | null = null;
+  try {
+    body = raw ? (JSON.parse(raw) as { member?: unknown; args?: unknown }) : null;
+  } catch {
+    writeGatewayJson(res, 400, gatewayErrorPayload("Request body must be valid JSON.", "invalid_request_error"));
+    return;
+  }
+  const member = typeof body?.member === "string" ? body.member : "";
+  const args = Array.isArray(body?.args) ? body.args : [];
+  if (!member) {
+    writeGatewayJson(res, 400, gatewayErrorPayload("A member name is required, e.g. { member: \"metisUsage.summary\" }.", "invalid_request_error"));
+    return;
+  }
+  // The manifest decides, not the table. Checked first so a member that is
+  // wired but no longer permitted is refused rather than quietly served.
+  if (!bridgeMemberIsHttpReadable(member)) {
+    writeGatewayJson(res, 403, gatewayErrorPayload(`"${member}" is not readable over HTTP.`, "permission_error"));
+    return;
+  }
+  const handler = GATEWAY_BRIDGE_READS[member];
+  if (!handler) {
+    writeGatewayJson(res, 501, gatewayErrorPayload(`"${member}" is permitted but not wired.`, "not_found"));
+    return;
+  }
+  try {
+    const value = await handler(args);
+    // IPC transports `undefined`; JSON does not. Collapsing to null keeps a
+    // "nothing there" answer as a settled promise rather than a key that
+    // vanishes from the payload and reads as a hang on the other side.
+    writeGatewayJson(res, 200, { ok: true, value: value === undefined ? null : value });
+  } catch (error) {
+    writeGatewayJson(res, 500, gatewayErrorPayload(error instanceof Error ? error.message : String(error), "internal_error"));
+  }
+}
+
 /** Top-level request handler for the gateway HTTP server. Every path — auth
  *  failure, unknown route, thrown error — resolves to an OpenAI-shaped JSON
  *  error response; nothing here is allowed to propagate an exception back to
@@ -14717,6 +14812,14 @@ async function handleGatewayRequest(req: IncomingMessage, res: ServerResponse): 
     }
     if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
       await handleGatewayChatCompletions(req, res);
+      return;
+    }
+
+    // The read surface the browser client is built on. Bearer-checked like
+    // every other JSON route — the /app/assets/ exemption is assets only, and
+    // this is the route that would make an ambient credential dangerous.
+    if (req.method === "POST" && url.pathname === "/v1/bridge") {
+      await handleGatewayBridgeRead(req, res);
       return;
     }
 

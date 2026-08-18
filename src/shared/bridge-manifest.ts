@@ -65,6 +65,14 @@ export interface BridgeChannel {
    *  those two classes by the suite: a refusal without a reason is one somebody
    *  relaxes later without knowing what they are relaxing. */
   why?: string;
+  /** Set on a channel classified `read` that must still NOT get an HTTP route,
+   *  with the reason. `read` was assigned against the DESKTOP threat model —
+   *  "this only reads, so the renderer may have it" — and four channels that
+   *  pass that test fail a different one once the caller is remote. Reading the
+   *  list back before serving it is what caught them; serving
+   *  `bridgeChannelsSafeToServe()` mechanically would have shipped an SSRF
+   *  primitive. Required by the suite wherever it is set. */
+  noHttp?: string;
 }
 
 /** The one member that owns more than one channel, called out by name because
@@ -79,7 +87,7 @@ export const BRIDGE_MULTI_CHANNEL_MEMBERS: ReadonlyArray<string> = ["metisSessio
 export const BRIDGE_CHANNELS: ReadonlyArray<BridgeChannel> = [
   { namespace: "metisPolicy", method: "getSampleDecision", channel: "metis-policy:get-sample-decision", kind: "invoke", exposure: "read" },
   { namespace: "metisPolicy", method: "getStatus", channel: "metis-policy:get-status", kind: "invoke", exposure: "read" },
-  { namespace: "metisPolicy", method: "decide", channel: "metis-policy:decide", kind: "invoke", exposure: "read" },
+  { namespace: "metisPolicy", method: "decide", channel: "metis-policy:decide", kind: "invoke", exposure: "read", noHttp: "Runs the router on caller-supplied text, and reaches a model when model-driven routing is on. A decision, not a panel read." },
 
   { namespace: "metisStore", method: "get", channel: "metis-store:get", kind: "invoke", exposure: "never", why: "Generic key access; the key-level guard is a denylist and has already been outrun once by a sibling key." },
   { namespace: "metisStore", method: "set", channel: "metis-store:set", kind: "invoke", exposure: "never", why: "Same, and a write here can grant permissions or clear every provider key with no audit line." },
@@ -154,7 +162,11 @@ export const BRIDGE_CHANNELS: ReadonlyArray<BridgeChannel> = [
 
   { namespace: "metisRegistry", method: "fetchUrl", channel: "metis-registry:fetch", kind: "invoke", exposure: "decision", why: "Outbound network fetch on the machine's behalf." },
   { namespace: "metisRegistry", method: "list", channel: "metis-registry:list", kind: "invoke", exposure: "read" },
-  { namespace: "metisRegistry", method: "refresh", channel: "metis-registry:refresh", kind: "invoke", exposure: "read" },
+  // Sits one line under `fetchUrl`, which is `decision` for "Outbound network
+  // fetch on the machine's behalf" — and takes a `sourceUrl` it then fetches,
+  // which is the same capability wearing a read's name. Over HTTP that is an
+  // SSRF primitive: a caller names a URL and the MAIN PROCESS requests it.
+  { namespace: "metisRegistry", method: "refresh", channel: "metis-registry:refresh", kind: "invoke", exposure: "read", noHttp: "Takes a sourceUrl the main process then fetches — an SSRF primitive once the caller is remote." },
   { namespace: "metisRegistry", method: "listInstalled", channel: "metis-registry:list-installed", kind: "invoke", exposure: "read" },
   { namespace: "metisRegistry", method: "install", channel: "metis-registry:install", kind: "invoke", exposure: "never", why: "Installs a package onto the machine." },
   { namespace: "metisRegistry", method: "uninstall", channel: "metis-registry:uninstall", kind: "invoke", exposure: "decision", why: "Removes an installed package." },
@@ -192,14 +204,14 @@ export const BRIDGE_CHANNELS: ReadonlyArray<BridgeChannel> = [
   { namespace: "metisPrewarm", method: "draft", channel: "metis-prewarm:draft", kind: "invoke", exposure: "decision", why: "Runs a local model speculatively." },
   { namespace: "metisPrewarm", method: "draftCloud", channel: "metis-prewarm:draft-cloud", kind: "invoke", exposure: "decision", why: "Spends real money on every keystroke pause." },
   { namespace: "metisPrewarm", method: "onDraftDelta", channel: "metis-prewarm:draft-delta", kind: "subscribe", exposure: "read" },
-  { namespace: "metisPrewarm", method: "route", channel: "metis-prewarm:route", kind: "invoke", exposure: "read" },
+  { namespace: "metisPrewarm", method: "route", channel: "metis-prewarm:route", kind: "invoke", exposure: "read", noHttp: "Returns void and warms a route cache — it causes background work rather than reporting state, so nothing in a panel needs it." },
 
   { namespace: "metisManager", method: "chat", channel: "metis-manager:chat", kind: "invoke", exposure: "decision", why: "Calls a model." },
   { namespace: "metisManager", method: "chatStream", channel: "metis-manager:chat-stream", kind: "invoke", exposure: "decision", why: "Calls a model." },
   { namespace: "metisManager", method: "onChatStreamEvent", channel: "metis-manager:chat-stream-event", kind: "subscribe", exposure: "read" },
   { namespace: "metisManager", method: "runAction", channel: "metis-manager:action", kind: "invoke", exposure: "decision", why: "Executes a model-proposed action." },
 
-  { namespace: "metisUpdates", method: "check", channel: "metis-updates:check", kind: "invoke", exposure: "read" },
+  { namespace: "metisUpdates", method: "check", channel: "metis-updates:check", kind: "invoke", exposure: "read", noHttp: "Outbound egress to the releases API on request. Harmless, but nothing in a browser panel needs it, and a read route that reaches the internet is not a read." },
 
   { namespace: "metisGateway", method: "getStatus", channel: "metis-gateway:get-status", kind: "invoke", exposure: "never", why: "Returns the gateway's raw bearer token — the auth for every route the browser client would use." },
   { namespace: "metisGateway", method: "setEnabled", channel: "metis-gateway:set-enabled", kind: "invoke", exposure: "never", why: "A remote client must not be able to turn its own front door on, or off for everyone else." },
@@ -219,6 +231,28 @@ export const BRIDGE_CHANNELS: ReadonlyArray<BridgeChannel> = [
  *  somebody should make on purpose. */
 export function bridgeChannelsSafeToServe(): BridgeChannel[] {
   return BRIDGE_CHANNELS.filter((entry) => entry.exposure === "read");
+}
+
+/** The channels that actually get an HTTP route: `read`, request/response, and
+ *  not carrying a `noHttp` reason.
+ *
+ *  Three filters, and the second is the one that is easy to miss. `read` alone
+ *  returns 35 channels, five of which are SUBSCRIBE channels — push, not
+ *  request/response. A shim that treats `metisLoops.onChanged` as a callable
+ *  read gets a promise that never settles and a panel that never populates.
+ *  Those five need an event stream, which is its own slice.
+ *
+ *  The third filter is the one that matters most: see `noHttp`. */
+export function bridgeChannelsHttpReadable(): BridgeChannel[] {
+  return BRIDGE_CHANNELS.filter((entry) => entry.exposure === "read" && entry.kind === "invoke" && !entry.noHttp);
+}
+
+/** True when the MEMBER (`namespace.method`) has an HTTP route. The gateway
+ *  checks this per request and the shim generator uses it to decide which
+ *  members fetch and which reject. Keyed on the member rather than the channel
+ *  because a browser calls methods, and the two are not one-to-one. */
+export function bridgeMemberIsHttpReadable(member: string): boolean {
+  return bridgeChannelsHttpReadable().some((entry) => `${entry.namespace}.${entry.method}` === member);
 }
 
 /** True when this channel must not cross a network boundary at any point. */
