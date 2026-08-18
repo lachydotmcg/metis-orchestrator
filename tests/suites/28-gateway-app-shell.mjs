@@ -422,6 +422,44 @@ section("The shim tells 'partly here' apart from 'not here'");
   ok("the shim runs before the bundle", gatewayAppShell("<html><head></head><body></body></html>", "t").indexOf("var NS =") > 0);
 }
 
+section("A thrown render cannot blank the page any more");
+{
+  // There was no error boundary anywhere in this renderer, so every
+  // render-time throw unmounted the whole tree and left #root empty — no
+  // sidebar, no message, nothing. Found by serving a deliberately wrong shape:
+  // metisPulse.feed returning null destroyed a non-null fallback
+  // (useState(FALLBACK_PULSE) then a blind .then(setPulse)) and the next
+  // pulse.updated threw during the TITLEBAR render.
+  //
+  // The titlebar is shell, not panel, which is why the boundary wraps App
+  // rather than each workspace — a per-workspace boundary would have caught
+  // nothing. Verified in a browser against the real bundle: the same response
+  // that gave rootChildren 0 now renders the recovery screen.
+  const boundary = read("src", "renderer", "ui", "ErrorBoundary.tsx");
+  const entry = read("src", "renderer", "main.tsx");
+
+  ok("it is a real boundary, not a try/catch pretending", /static getDerivedStateFromError/.test(boundary));
+  ok("and it reports rather than only swallowing", /componentDidCatch/.test(boundary));
+  ok("it wraps App at the root", /<ErrorBoundary>[\s\S]*<App \/>[\s\S]*<\/ErrorBoundary>/.test(entry));
+  // Outside StrictMode: it has to survive whatever it is catching, so it sits
+  // above everything that could throw.
+  ok("outside StrictMode, so it is above what it catches", entry.indexOf("<ErrorBoundary>") < entry.indexOf("<React.StrictMode>"));
+
+  // This is the one component that must render when the rest could not, so it
+  // depends on nothing — no stylesheet class that may not have loaded, no
+  // store, no bridge. A recovery screen that can itself fail is not one.
+  ok("it is styled inline, depending on no stylesheet", /style=\{\{/.test(boundary));
+  ok("it imports no bridge, store or context", !/window\.metis[A-Z]/.test(boundary) && !/useAppStoreState/.test(boundary));
+  ok("it offers a way out", /window\.location\.reload\(\)/.test(boundary));
+  ok("it shows the actual error", /error\.message/.test(boundary));
+  // The browser client's most likely cause is a wrong-shaped gateway reply, and
+  // saying so points at the right layer. On the desktop that would be wrong, so
+  // the two messages differ.
+  ok("it names the likely cause in the browser client", /__METIS_CLIENT__ === "browser"/.test(boundary));
+  ok("and says the desktop app is unaffected", /desktop app is unaffected/.test(boundary));
+  ok("while the desktop message is about your work being safe", /not lost/.test(boundary));
+}
+
 const { passed, failed } = summary();
 console.log(`\n  ${passed} passed, ${failed} failed`);
 process.exit(failed === 0 ? 0 : 1);

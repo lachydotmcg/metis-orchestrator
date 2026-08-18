@@ -45,6 +45,35 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **A thrown render can no longer blank the app.** There was no error boundary
+  anywhere in this renderer, so every render-time throw unmounted the whole tree
+  and left `#root` empty — no sidebar, no message, nothing, which is
+  indistinguishable from "the app did not load" and sends you looking at the
+  wrong layer. It wraps `App` rather than each workspace, because the crash that
+  found it was in the **titlebar** — shell, not panel, so a per-workspace
+  boundary would have caught nothing. Styled inline and depending on no
+  stylesheet, store or bridge: a recovery screen that can itself fail to appear
+  is not a recovery screen. Not browser-specific — the same throw blanked the
+  desktop app too; the browser client only made it reachable.
+- **State seeded with a real fallback keeps it unless something usable arrives.**
+  `useState<PulseFeed>(FALLBACK_PULSE)` exists so the render can read
+  `pulse.updated` without a guard on every line, and a blind `.then(setPulse)`
+  threw that away the moment a call resolved with the wrong shape. An audit of
+  ~30 sites that feed bridge results into state found four in that class (both
+  `pulse` sites, `policyStatus`, `registry`) plus a Settings block whose
+  `nextRegistry.sourceUrl` bare-dereference threw *before* any of the sets could
+  help. All guarded by `orKeep`, which is deliberately shallow — null, undefined
+  and array/object mismatch, the whole of what was observed. On the desktop this
+  could not happen: preload and renderer share one set of types, so a wrong
+  shape is a build error. Over HTTP the contract is JSON and nothing checks it.
+- **The README no longer contradicts itself about having tests.** It said "there
+  are no tests" twenty lines above "an offline test suite (`npm test`, 28
+  suites)". Both sentences were written honestly and the existing count guard
+  could not see it, because the number it pins was in the sentence that was
+  right. `12-doc-honesty` now fails a doc that denies the suites it ships. The
+  scripts table also gained the `npm test` row it was missing, and the status
+  section now says plainly that `main` is ahead of `v1.2.0` rather than "current
+  with everything described on this page".
 - **Four channels classified `read` are refused an HTTP route, by name and with
   reasons, in the manifest.** `read` was assigned against the *desktop* threat
   model — "this only reads, so the renderer may have it" — and four channels

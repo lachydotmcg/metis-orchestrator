@@ -32,6 +32,27 @@ const read = (rel) => readFileSync(join(root, rel), "utf8");
 const README = read("README.md");
 const docFiles = readdirSync(join(root, "docs")).filter((f) => f.endsWith(".md"));
 
+section("A doc cannot claim both that tests exist and that they do not");
+{
+  // The README said "there are no tests" twenty lines above "an offline test
+  // suite (npm test, 28 suites)". Both sentences were written honestly, years
+  // apart in project time, and the count guard below could not see it because
+  // the count it pins was in the sentence that was RIGHT. A number being
+  // correct says nothing about the prose around it disagreeing with itself.
+  const suites = readdirSync(join(root, "tests", "suites")).filter((f) => f.endsWith(".mjs")).length;
+  // Narrow on purpose. A first pass also matched /untested/, which fired on
+  // "untested against real willingness-to-pay" in the business plan and on the
+  // roadmap's accurate note that the renderer has no machine tests of its own —
+  // neither is a denial that the suites exist. A guard that cries wolf on true
+  // sentences gets the whole section deleted.
+  const denials = [/there are no tests/i, /no test suite/i];
+  for (const [name, text] of [["README.md", README], ...docFiles.map((f) => [`docs/${f}`, read(join("docs", f))])]) {
+    for (const pattern of denials) {
+      ok(`${name} does not deny the ${suites} suites it ships`, !(suites > 0 && pattern.test(text)));
+    }
+  }
+}
+
 section("A claimed suite count is a number that can simply be wrong");
 {
   // The bug: the README said "8 suites" while ten existed. Nobody was lying;

@@ -77,7 +77,7 @@ v1 navigation is exactly four items: New session, Orchestration, Benchmark, Sett
 | **Oracle** `FLAG OFF` | Drafts your answer while you are still typing, and can serve it the instant you hit enter. |
 | **Depths** `FLAG OFF` | Routes each turn by how hard it is, so trivial work stays cheap. |
 | **Agentic tools** `FLAG OFF` | Lets a model read and edit your files instead of guessing at them. |
-| **Metis Gateway** `FLAG OFF` | A local OpenAI-compatible endpoint, so any tool can borrow Metis's routing. |
+| **Metis Gateway** `FLAG OFF` | A local OpenAI-compatible endpoint, so any tool can borrow Metis's routing. It also serves the app itself at `/app/` — the same build, in a browser, read-only. |
 | **MCP, both directions** `FLAG OFF` | Metis can call MCP tools, and be an MCP server. |
 | **Multi-agent fan-out** `FLAG OFF` | A build splits across named sub-agents, each claiming its own files. |
 | **Model-driven routing** `FLAG OFF` | Let a model do the classifying instead of keyword rules. |
@@ -150,11 +150,12 @@ Other scripts you will actually use:
 | `npm run dev` | Vite plus Electron, hot-reloading renderer. The everyday loop. |
 | `npm run build` | `typecheck`, then the renderer build, then the Electron main process. This is the gate that has to pass. |
 | `npm run typecheck` | Types only, both trees, no output written. |
+| `npm test` | The offline suites, each in its own process. No network, no API keys. `npm test 28` runs one. |
 | `npm start` | `build` then `electron .`, a production-mode launch. |
 | `npm run cli -- <subcommand>` | The headless harness. See the CLI section above. |
 | `npm run dist` | Full build plus installers under `release/`. |
 
-There is no separate lint script and there are no tests. `typecheck`, `build`, and the CLI harness are the gates.
+There is no separate lint script. The gates are `npm run typecheck`, `npm run build` and `npm test` — the last is an offline suite (no network, no API keys) that CI runs on every push.
 
 ---
 
@@ -178,9 +179,9 @@ choose, it backs up what it touches, and it can be handed a goal it works on by 
 
 Two things a sceptical reader should know. There is an offline test suite (`npm test`, 28 suites,
 no network or API keys needed), run by CI on every push, so `npm run typecheck`, `npm run build`
-and `npm test` are the gates. And the latest tag is `v1.2.0`, from 2026-08-14, which is current
-with everything described on this page. Anything landing on `main` after that date is ahead of the
-release you can install.
+and `npm test` are the gates. And the latest tag is `v1.2.0`, from 2026-08-14. **`main` is ahead of
+it** — the browser client described above landed after that tag, so it is not in the installer you
+can download yet. Everything else on this page is in `v1.2.0`.
 
 Everything else worth knowing before you rely on it is in
 [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md).

@@ -266,15 +266,29 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   on `Boolean(window.metisX)` and an absent member would pass the guard and then die on `undefined
   is not a function`. Five subscribe channels are inert: they return a working unsubscribe and never
   fire, so panels render their initial read but do not update live. That needs an event stream.
-- **A wrong-shaped response can take the whole client down, and that is a real difference from the
-  desktop.** Found by serving a deliberately wrong shape: `metisPulse.feed()` returning null instead
-  of a `PulseFeed` destroyed a non-null fallback (`useState<PulseFeed>(FALLBACK_PULSE)` followed by
-  a blind `.then(setPulse)`), and the next `pulse.updated` threw during the titlebar render, so
-  **nothing mounted at all** — no sidebar, no error, a blank page. On the desktop that cannot happen:
-  the preload and the renderer share one set of types, so a handler returning the wrong shape is a
-  build error. Over HTTP the contract is JSON and nothing checks it at runtime. The existing
-  `.catch(() => undefined)` on these call sites handles a *failed* call correctly and does nothing
-  for a *successful* call that returns the wrong thing.
+- ~~**A wrong-shaped response can take the whole client down.**~~ Fixed 2026-08-16, in two layers.
+  Found by serving a deliberately wrong shape: `metisPulse.feed()` returning null instead of a
+  `PulseFeed` destroyed a non-null fallback (`useState<PulseFeed>(FALLBACK_PULSE)` followed by a
+  blind `.then(setPulse)`), and the next `pulse.updated` threw during the **titlebar** render — so
+  nothing mounted at all. No sidebar, no error, a blank page. The existing `.catch(() => undefined)`
+  on those call sites handles a *failed* call correctly and does nothing for a *successful* call
+  that returns the wrong thing.
+  **Layer one, `orKeep`:** the sets that seed a slot the render then reads without a guard keep
+  their fallback unless something usable arrived. Deliberately shallow — it rejects null, undefined,
+  and an array/object mismatch, which is the whole of what was observed. It is not a schema
+  validator and does not pretend to be.
+  **Layer two, an error boundary:** there was none anywhere in the renderer, so *any* render-time
+  throw blanked the app — on the desktop too, not just in a browser. It wraps `App` rather than each
+  workspace because the crash was in the titlebar, which is shell rather than panel. Styled inline
+  and depending on no stylesheet, store or bridge, since a recovery screen that can itself fail to
+  appear is not one.
+  **Still narrower than it sounds.** An audit of ~30 call sites that feed bridge results into state
+  found four in the dangerous class (both `pulse` sites, `policyStatus`, `registry`) and about a
+  dozen more where an array fallback is replaced blindly. The four are guarded, along with the
+  Settings block that covers five of the others; the rest are covered by the boundary, which turns a
+  blank page into a message and a Reload button rather than preventing the throw. On the desktop the
+  underlying assumption still holds — preload and renderer share one set of types — so this is a
+  browser-client hazard that the desktop merely shares the blast radius of.
 - ~~**The browser client renders the real app and is not connected to it.**~~ Partly fixed
   2026-08-16 by the read routes above: 26 members load real data. What remains true is everything
   below — the writes, the runs, and the benchmark cut. `GET /app/` serves the

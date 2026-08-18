@@ -1328,6 +1328,31 @@ const FALLBACK_MODEL_CATALOG: ModelCatalogState = {
   status: "idle",
   models: []
 };
+/** Keep the fallback unless something usable actually arrived.
+ *
+ *  These state slots are seeded with a real object (FALLBACK_PULSE,
+ *  FALLBACK_POLICY_STATUS, FALLBACK_REGISTRY) precisely so the render can read
+ *  `pulse.updated` and `registry.packages.length` without a guard on every
+ *  line. A blind `setX(await …)` then throws that away the moment a call
+ *  resolves with something that is not the declared shape, and the next bare
+ *  property read crashes the render.
+ *
+ *  On the desktop that could not happen: the preload and the renderer share one
+ *  set of types, so a handler returning the wrong shape is a build error. The
+ *  browser client made it reachable — over HTTP the contract is JSON and
+ *  nothing checks it at runtime — but the fix belongs here rather than in the
+ *  transport, because the assumption being violated is this component's.
+ *
+ *  Deliberately shallow: it rejects null, undefined, and an array/object
+ *  mismatch, which is the whole of what was observed. It is not a schema
+ *  validator, and pretending otherwise would invite callers to trust it for
+ *  more than it checks. The error boundary is what covers the rest. */
+function orKeep<T>(next: unknown, current: T): T {
+  if (next === null || next === undefined) return current;
+  if (Array.isArray(current) !== Array.isArray(next)) return current;
+  return next as T;
+}
+
 const FALLBACK_PULSE: PulseFeed = {
   sourceUrl: "bundled-preview",
   status: "idle",
@@ -2695,7 +2720,10 @@ function Titlebar({
     if (!window.metisPulse) return;
     window.metisPulse
       .feed()
-      .then((feed) => setPulse(feed))
+      // Titlebar is mounted on every screen for the whole life of the app, so
+      // this is the single highest-consequence set in the file — it is the one
+      // that produced a blank page.
+      .then((feed) => setPulse((current) => orKeep(feed, current)))
       .catch(() => undefined);
   }, []);
 
@@ -2950,7 +2978,7 @@ function PulseWorkspace(): JSX.Element {
     setLoading(true);
     void window.metisPulse
       .feed()
-      .then(setPulse)
+      .then((feed) => setPulse((current) => orKeep(feed, current)))
       .catch(() => undefined)
       .finally(() => setLoading(false));
   }, []);
@@ -15908,15 +15936,23 @@ function SettingsWorkspace({
       window.metisRegistry?.listInstalled() ?? Promise.resolve<RegistryPackage[]>([]),
       window.metisGateway?.getStatus() ?? Promise.resolve<GatewayStatus | null>(null)
     ]);
-    setPolicyStatus(nextPolicy);
-    setProviders(nextProviders);
-    setSecrets(nextSecrets);
-    setPermissions(nextPermissions);
-    setAuditEvents(nextAudit);
-    setRegistry(nextRegistry);
-    setInstalledPackages(nextInstalled);
-    setRegistryUrl(nextRegistry.sourceUrl.startsWith("http") ? nextRegistry.sourceUrl : "");
-    setGatewayStatus(nextGateway);
+    // Every one of these seeds a slot the render then reads without a guard —
+    // policyStatus.available, registry.packages.length, secrets.map. A single
+    // reply that is not the declared shape used to take the whole app down, so
+    // each set keeps its fallback rather than trusting what arrived.
+    setPolicyStatus((current) => orKeep(nextPolicy, current));
+    setProviders((current) => orKeep(nextProviders, current));
+    setSecrets((current) => orKeep(nextSecrets, current));
+    setPermissions((current) => orKeep(nextPermissions, current));
+    setAuditEvents((current) => orKeep(nextAudit, current));
+    setRegistry((current) => orKeep(nextRegistry, current));
+    setInstalledPackages((current) => orKeep(nextInstalled, current));
+    // Read off the value only once it is known to be an object: this line
+    // bare-dereferenced nextRegistry, so it threw before any of the above could
+    // help.
+    const registrySource = typeof nextRegistry?.sourceUrl === "string" ? nextRegistry.sourceUrl : "";
+    setRegistryUrl(registrySource.startsWith("http") ? registrySource : "");
+    setGatewayStatus(nextGateway ?? null);
   }, []);
 
   useEffect(() => {
