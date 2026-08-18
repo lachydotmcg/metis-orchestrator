@@ -204,15 +204,44 @@ main{max-width:32rem;padding:2rem}code{background:#1a1d26;padding:.15rem .4rem;b
  *  row of errors. "This area is not here" and "this area is partly here" are
  *  different facts and the client tells them apart.
  */
+/** What the shim does with one member.
+ *
+ *  `read`   — POST /v1/bridge and resolve the value.
+ *  `live:X` — a real subscription, polling read member X and firing on change.
+ *  `inert`  — a subscription that returns a working unsubscribe and never fires,
+ *             because nothing a browser client is allowed to do can produce an
+ *             event on it. Distinct from `live` on purpose: "nothing to build"
+ *             is a different fact from "not built yet".
+ *  `no`     — reject, naming the member. */
+type ShimMemberKind = "read" | "no" | "inert" | `live:${string}`;
+
 export function gatewayBridgeShim(): string {
-  const namespaces = new Map<string, Record<string, "read" | "no" | "subscribe">>();
+  const namespaces = new Map<string, Record<string, ShimMemberKind>>();
   for (const entry of BRIDGE_CHANNELS) {
     const members = namespaces.get(entry.namespace) ?? {};
     const member = `${entry.namespace}.${entry.method}`;
     // runStream owns two channels; the invoke half decides, so never let the
     // subscribe half overwrite a verdict already recorded for the same method.
-    const kind = bridgeMemberIsHttpReadable(member) ? "read" : entry.kind === "subscribe" ? "subscribe" : "no";
-    if (!(entry.method in members) || kind !== "subscribe") members[entry.method] = kind;
+    // Three-way, not two: a subscribe channel that a remote client can actually
+    // receive is "live", one that could only ever carry replies to a call the
+    // browser is forbidden from making is "inert". Collapsing them would hide
+    // the difference between "not built yet" and "nothing to build".
+    const kind: ShimMemberKind = bridgeMemberIsHttpReadable(member)
+      ? "read"
+      : entry.kind === "subscribe"
+        ? entry.noStream
+          ? "inert"
+          : `live:${entry.namespace}.list`
+        : "no";
+    // The INVOKE half always wins for a member that owns both channels, and
+    // runStream is the one that does. Let its subscribe half win and the shim
+    // would define `runStream` as a no-op subscription returning an unsubscribe
+    // — so a caller that thinks it started a run gets silence instead of the
+    // rejection that tells it the browser client cannot start runs. A silent
+    // no-op on the member that spends money is the worst of the options.
+    const existing = members[entry.method];
+    const incomingIsSubscribe = entry.kind === "subscribe";
+    if (existing === undefined || !incomingIsSubscribe) members[entry.method] = kind;
     namespaces.set(entry.namespace, members);
   }
   const servable = [...namespaces.entries()].filter(([, members]) => Object.values(members).includes("read"));
@@ -241,6 +270,39 @@ export function gatewayBridgeShim(): string {
     };
   }
   function inertSubscription() { return function () {}; }
+  // A live subscription, done by polling its namespace's list read.
+  //
+  // Not SSE, and that is the repo's own precedent rather than a shortcut: the
+  // loops page next door polls on purpose, and says why — a loop's heartbeat is
+  // 60 seconds, so a 10-second poll is already six times finer than the thing it
+  // watches, and polling survives a laptop sleeping and a network switch with no
+  // reconnect protocol. Streaming is the right answer for a chat turn's tokens
+  // and the wrong one for a status list. It also needs no new route, no new auth
+  // surface, and no widening of the ?token= bootstrap that EventSource would
+  // have forced.
+  //
+  // metis-loops:changed carries NO payload — it means "re-read" — so a poll that
+  // fires the callback when the list actually changed satisfies the contract
+  // exactly rather than approximating it.
+  function livePoll(readMember) {
+    return function (cb) {
+      var stopped = false, timer = null, last = null;
+      function tick() {
+        call(readMember, []).then(function (value) {
+          if (stopped) return;
+          var signature = JSON.stringify(value);
+          // The first pass only records: firing on it would report a change
+          // that is really just the subscription starting.
+          if (last !== null && signature !== last) { try { cb(); } catch (e) {} }
+          last = signature;
+        }).catch(function () {}).then(function () {
+          if (!stopped) timer = setTimeout(tick, 10000);
+        });
+      }
+      tick();
+      return function () { stopped = true; if (timer) clearTimeout(timer); };
+    };
+  }
   Object.keys(NS).forEach(function (name) {
     var members = NS[name];
     var api = {};
@@ -248,7 +310,8 @@ export function gatewayBridgeShim(): string {
       var kind = members[method];
       var member = name + "." + method;
       if (kind === "read") { api[method] = function () { return call(member, arguments); }; }
-      else if (kind === "subscribe") { api[method] = inertSubscription; }
+      else if (kind.indexOf("live:") === 0) { api[method] = livePoll(kind.slice(5)); }
+      else if (kind === "inert") { api[method] = inertSubscription; }
       else { api[method] = unavailable(member); }
     });
     window[name] = api;

@@ -163,6 +163,26 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **The Loops panel updates live in the browser.** `metisLoops.onChanged` is a
+  real subscription now: the shim polls `metisLoops.list` every 10 seconds and
+  fires the callback when the list actually changed, with the first poll
+  recording rather than firing so a subscription starting is not reported as a
+  change. Polling rather than SSE on this repo's own precedent — the phone page
+  next door polls deliberately, because a loop's heartbeat is 60 seconds and
+  polling survives a laptop sleeping and a network switch with no reconnect
+  protocol. It also needs no new route and no widening of the `?token=`
+  bootstrap, which `EventSource` would have forced since it cannot send an
+  `Authorization` header.
+- **The other four subscribe channels are recorded as unstreamable, with the
+  reason.** They are `event.sender.send(...)` *replies* addressed to whoever
+  invoked something, and every one of their producers is `decision` — starts a
+  run, downloads gigabytes, spends money per keystroke pause, calls a model. A
+  browser client cannot make those calls, so a stream for them would carry
+  nothing forever. The plan for this slice was "an event stream so the 5
+  subscribe channels stop being inert"; four of them are inert because their
+  *producer* is forbidden, not because the transport is missing, and building
+  the pipe anyway is the "surface that pretends to work" failure with extra
+  steps. Now `noStream` in the manifest, guarded by name.
 - **The browser client reads real data.** `POST /v1/bridge` serves 26 of the
   104 channels, allowlisted per member against the manifest, and
   `gatewayBridgeShim()` rebuilds `window.metisX` out of `fetch` so the renderer

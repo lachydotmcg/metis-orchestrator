@@ -27,7 +27,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
-const { BRIDGE_CHANNELS, bridgeChannelsHttpReadable, bridgeMemberIsHttpReadable } =
+const { BRIDGE_CHANNELS, bridgeChannelsHttpReadable, bridgeMemberIsHttpReadable, bridgeChannelsLiveForRemote } =
   await fromBuild("shared/bridge-manifest.js");
 
 const {
@@ -411,13 +411,53 @@ section("The shim tells 'partly here' apart from 'not here'");
   ok("the SSRF member is present-but-rejecting, not readable", table.metisRegistry?.refresh === "no");
   ok("metisRegistry.list beside it still reads", table.metisRegistry?.list === "read");
 
-  // Subscribe members return a working unsubscribe and never fire. That costs
-  // live updates, not correctness — the panel still renders its initial read.
-  ok("subscribe members are inert subscriptions", table.metisLoops?.onChanged === "subscribe");
-  ok("and hand back a real unsubscribe", /function inertSubscription\(\) \{ return function \(\) \{\}; \}/.test(shim));
+  // ONE of the five subscribe channels can carry anything to a remote client,
+  // and the difference is not the transport. Four are `event.sender.send(...)`
+  // replies addressed to whoever invoked something, and every one of their
+  // producers is `decision` — so a browser client cannot cause a single event,
+  // and a stream for them would carry nothing forever. Only metis-loops:changed
+  // is ambient (broadcastLoopsChanged to every window, no payload).
+  ok("the ambient one is a real subscription", (table.metisLoops?.onChanged ?? "").startsWith("live:"));
+  ok("and it polls the read that answers it", table.metisLoops?.onChanged === "live:metisLoops.list");
+  for (const [ns, method] of [
+    ["metisOllama", "onPullProgress"],
+    ["metisSession", "runStream"]
+  ]) {
+    const verdict = table[ns]?.[method];
+    ok(`${ns}.${method} is not pretended to be live`, verdict === "inert" || verdict === "no");
+  }
+  ok("inert subscriptions still hand back a real unsubscribe", /function inertSubscription\(\) \{ return function \(\) \{\}; \}/.test(shim));
+  // The first poll records without firing: firing on it would report a change
+  // that is really just the subscription starting.
+  ok("the first poll does not fire a spurious change", /if \(last !== null && signature !== last\)/.test(shim));
+  ok("and the unsubscribe actually stops the timer", /stopped = true; if \(timer\) clearTimeout\(timer\)/.test(shim));
 
-  // runStream owns two channels, invoke and subscribe. The invoke half decides.
+  // runStream owns two channels, invoke and subscribe, and the INVOKE half must
+  // win. Caught by this assertion: adding the live/inert split made the
+  // subscribe half win, which would have defined runStream as a no-op
+  // subscription — so a caller that thinks it started a run gets silence
+  // instead of a rejection. A silent no-op on the member that spends money is
+  // the worst available outcome.
   ok("a two-channel member is not downgraded by its subscribe half", table.metisSession?.runStream === "no");
+  ok("so calling it rejects rather than silently doing nothing", /needs the desktop app/.test(shim));
+}
+
+section("Refusing to stream is recorded as data, with a reason");
+{
+  const live = bridgeChannelsLiveForRemote();
+  check("one of the five subscribe channels is live for a remote client", live.length, 1);
+  check("and it is the ambient one", live[0].channel, "metis-loops:changed");
+  const muted = BRIDGE_CHANNELS.filter((entry) => entry.noStream);
+  check("the other four say why", muted.length, 4);
+  ok("every reason is a reason, not a label", muted.every((entry) => entry.noStream.length > 40));
+  // The reason must name the MECHANISM — that the producers are decision-class —
+  // because "we did not build it" and "there is nothing to build" are different
+  // facts and only one of them should stop somebody building it later.
+  ok(
+    "and names the producer class rather than just the verdict",
+    muted.every((entry) => /decision/.test(entry.noStream))
+  );
+  ok("no noStream is set on a non-subscribe channel", muted.every((entry) => entry.kind === "subscribe"));
 
   ok("the shim runs before the bundle", gatewayAppShell("<html><head></head><body></body></html>", "t").indexOf("var NS =") > 0);
 }

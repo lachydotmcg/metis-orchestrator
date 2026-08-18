@@ -2039,7 +2039,7 @@ export function App(): JSX.Element {
   const draftToRealRef = useRef<Map<string, string>>(new Map());
 
   const refreshConversations = useCallback(() => {
-    if (window.metisConversations) void window.metisConversations.list().then(setStoredConversations);
+    if (window.metisConversations) void window.metisConversations.list().then((next) => setStoredConversations((current) => orKeep(next, current)));
   }, []);
 
   const openConversationById = useCallback(
@@ -2236,7 +2236,7 @@ export function App(): JSX.Element {
       })
     ]);
     if (window.metisConversations) {
-      void window.metisConversations.list().then(setStoredConversations);
+      void window.metisConversations.list().then((next) => setStoredConversations((current) => orKeep(next, current)));
     }
   }, []);
 
@@ -10864,9 +10864,9 @@ function MemoryGraphWorkspace({
   }, [graphNodes, degree]);
 
   const refreshRuntimeGraph = useCallback(() => {
-    if (window.metisConversations) void window.metisConversations.list().then(setRuntimeConversations);
-    if (window.metisSession) void window.metisSession.list().then(setRuntimeRuns);
-    if (window.metisRegistry) void window.metisRegistry.listInstalled().then(setInstalledPackages).catch(() => undefined);
+    if (window.metisConversations) void window.metisConversations.list().then((next) => setRuntimeConversations((current) => orKeep(next, current)));
+    if (window.metisSession) void window.metisSession.list().then((next) => setRuntimeRuns((current) => orKeep(next, current)));
+    if (window.metisRegistry) void window.metisRegistry.listInstalled().then((next) => setInstalledPackages((current) => orKeep(next, current))).catch(() => undefined);
     if (window.metisProject) {
       void window.metisProject
         .getWorkspace()
@@ -12958,7 +12958,7 @@ function MarketplaceWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => voi
     setApplyResults((current) => ({ ...current, [item.id]: result }));
     setApplyBusyId(null);
     if (result.ok) {
-      if (window.metisRegistry) void window.metisRegistry.listInstalled().then(setInstalledPackages).catch(() => undefined);
+      if (window.metisRegistry) void window.metisRegistry.listInstalled().then((next) => setInstalledPackages((current) => orKeep(next, current))).catch(() => undefined);
       onNavigate("orchestration");
     }
   }
@@ -14588,7 +14588,7 @@ function RoutinesWorkspace({ onConversationOpen }: { onConversationOpen?: (id: s
 
   useEffect(() => {
     if (!hasBridge) return;
-    void window.metisRoutines?.list().then(setRoutines);
+    void window.metisRoutines?.list().then((next) => setRoutines((current) => orKeep(next, current)));
     if (window.metisProject) {
       void window.metisProject.getWorkspace().then((workspace) => setCurrentProjectPath(workspace?.path));
     }
@@ -17562,7 +17562,7 @@ function ActiveLoopsPanel(): JSX.Element | null {
     let cancelled = false;
     const pull = () => {
       void window.metisLoops?.list().then((next) => {
-        if (!cancelled) setLoops(next);
+        if (!cancelled) setLoops((current) => orKeep(next, current));
       });
     };
     pull();

@@ -264,8 +264,23 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   sends a prompt, writes a file, installs anything or starts a run — those members are defined and
   **reject with a message naming themselves**, rather than being absent, because the renderer guards
   on `Boolean(window.metisX)` and an absent member would pass the guard and then die on `undefined
-  is not a function`. Five subscribe channels are inert: they return a working unsubscribe and never
-  fire, so panels render their initial read but do not update live. That needs an event stream.
+  is not a function`. **Four of the five subscribe channels can never carry anything to a browser, and that is
+  structural rather than unfinished.** `metis-session:stream-event`, `metis-ollama:pull-progress`,
+  `metis-prewarm:draft-delta` and `metis-manager:chat-stream-event` are emitted with
+  `event.sender.send(...)` — they are *replies* addressed to the WebContents that invoked
+  something — and every one of their producers is classified `decision` (starts a run, downloads
+  gigabytes, spends money per keystroke, calls a model). A browser client cannot make those calls,
+  so an event stream for them would carry nothing, forever. They stay inert, with the reason
+  recorded as `noStream` in the manifest so the empty pipe does not get built later.
+  The fifth, `metis-loops:changed`, *is* ambient — `broadcastLoopsChanged()` sends it to every
+  window with no payload, caused by loop lifecycle rather than by a caller — and it works: the shim
+  polls `metisLoops.list` every 10 seconds and fires the callback when the list actually changed.
+  **Polling rather than SSE, on the repo's own precedent:** the phone page next door polls
+  deliberately, because a loop's heartbeat is 60 seconds, polling survives a laptop sleeping and a
+  network switch with no reconnect protocol, and streaming is the right answer for a chat turn's
+  tokens and the wrong one for a status list. It also needs no new route and no widening of the
+  `?token=` bootstrap, which `EventSource` would have forced since it cannot send an
+  `Authorization` header.
 - ~~**A wrong-shaped response can take the whole client down.**~~ Fixed 2026-08-16, in two layers.
   Found by serving a deliberately wrong shape: `metisPulse.feed()` returning null instead of a
   `PulseFeed` destroyed a non-null fallback (`useState<PulseFeed>(FALLBACK_PULSE)` followed by a

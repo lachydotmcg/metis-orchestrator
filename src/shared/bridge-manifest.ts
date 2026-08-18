@@ -73,6 +73,20 @@ export interface BridgeChannel {
    *  `bridgeChannelsSafeToServe()` mechanically would have shipped an SSRF
    *  primitive. Required by the suite wherever it is set. */
   noHttp?: string;
+  /** Set on a SUBSCRIBE channel that has nothing to deliver to a remote client,
+   *  with the reason.
+   *
+   *  The distinction that matters, and it is not the transport. Four of the five
+   *  subscribe channels are emitted with `event.sender.send(...)` — they are
+   *  REPLIES to an invoke the caller itself made, addressed to the WebContents
+   *  that made it. Every one of their producers is classified `decision`, so a
+   *  browser client cannot make the call that would cause a single event. Give
+   *  those an event stream and it carries nothing, forever.
+   *
+   *  Only `metis-loops:changed` is ambient — `broadcastLoopsChanged()` sends it
+   *  to every window with no payload, caused by loop lifecycle rather than by a
+   *  caller. That one a remote client can legitimately receive. */
+  noStream?: string;
 }
 
 /** The one member that owns more than one channel, called out by name because
@@ -101,7 +115,7 @@ export const BRIDGE_CHANNELS: ReadonlyArray<BridgeChannel> = [
 
   { namespace: "metisSession", method: "run", channel: "metis-session:run", kind: "invoke", exposure: "decision", why: "Starts a run: spends money and carries a permission mode." },
   { namespace: "metisSession", method: "runStream", channel: "metis-session:run-stream", kind: "invoke", exposure: "decision", why: "Starts a run, streamed." },
-  { namespace: "metisSession", method: "runStream", channel: "metis-session:stream-event", kind: "subscribe", exposure: "read", why: "Watching is a read, but it is sender-addressed today so a second client sees nothing." },
+  { namespace: "metisSession", method: "runStream", channel: "metis-session:stream-event", kind: "subscribe", exposure: "read", why: "Watching is a read, but it is sender-addressed today so a second client sees nothing.", noStream: "event.sender.send to the caller that invoked runStream; both producers are decision, so a browser client can never cause one." },
   { namespace: "metisSession", method: "list", channel: "metis-session:list", kind: "invoke", exposure: "read" },
   { namespace: "metisSession", method: "cancel", channel: "metis-session:cancel", kind: "send", exposure: "reduce" },
   { namespace: "metisSession", method: "answerQuestion", channel: "metis-session:answer-question", kind: "send", exposure: "decision", why: "Answering for the owner from a device that cannot see what is being asked." },
@@ -198,17 +212,17 @@ export const BRIDGE_CHANNELS: ReadonlyArray<BridgeChannel> = [
 
   { namespace: "metisOllama", method: "list", channel: "metis-ollama:list", kind: "invoke", exposure: "read" },
   { namespace: "metisOllama", method: "pull", channel: "metis-ollama:pull", kind: "invoke", exposure: "decision", why: "Downloads gigabytes onto the machine." },
-  { namespace: "metisOllama", method: "onPullProgress", channel: "metis-ollama:pull-progress", kind: "subscribe", exposure: "read" },
+  { namespace: "metisOllama", method: "onPullProgress", channel: "metis-ollama:pull-progress", kind: "subscribe", exposure: "read", noStream: "Only metisOllama.pull emits these, and it is decision — downloads gigabytes onto the machine." },
 
   { namespace: "metisPrewarm", method: "warm", channel: "metis-prewarm:warm", kind: "invoke", exposure: "decision", why: "Runs a local model speculatively." },
   { namespace: "metisPrewarm", method: "draft", channel: "metis-prewarm:draft", kind: "invoke", exposure: "decision", why: "Runs a local model speculatively." },
   { namespace: "metisPrewarm", method: "draftCloud", channel: "metis-prewarm:draft-cloud", kind: "invoke", exposure: "decision", why: "Spends real money on every keystroke pause." },
-  { namespace: "metisPrewarm", method: "onDraftDelta", channel: "metis-prewarm:draft-delta", kind: "subscribe", exposure: "read" },
+  { namespace: "metisPrewarm", method: "onDraftDelta", channel: "metis-prewarm:draft-delta", kind: "subscribe", exposure: "read", noStream: "Only prewarm draft/draftCloud emit these, and both are decision — one spends real money per keystroke pause." },
   { namespace: "metisPrewarm", method: "route", channel: "metis-prewarm:route", kind: "invoke", exposure: "read", noHttp: "Returns void and warms a route cache — it causes background work rather than reporting state, so nothing in a panel needs it." },
 
   { namespace: "metisManager", method: "chat", channel: "metis-manager:chat", kind: "invoke", exposure: "decision", why: "Calls a model." },
   { namespace: "metisManager", method: "chatStream", channel: "metis-manager:chat-stream", kind: "invoke", exposure: "decision", why: "Calls a model." },
-  { namespace: "metisManager", method: "onChatStreamEvent", channel: "metis-manager:chat-stream-event", kind: "subscribe", exposure: "read" },
+  { namespace: "metisManager", method: "onChatStreamEvent", channel: "metis-manager:chat-stream-event", kind: "subscribe", exposure: "read", noStream: "Only metisManager.chatStream emits these, and it is decision — it calls a model." },
   { namespace: "metisManager", method: "runAction", channel: "metis-manager:action", kind: "invoke", exposure: "decision", why: "Executes a model-proposed action." },
 
   { namespace: "metisUpdates", method: "check", channel: "metis-updates:check", kind: "invoke", exposure: "read", noHttp: "Outbound egress to the releases API on request. Harmless, but nothing in a browser panel needs it, and a read route that reaches the internet is not a read." },
@@ -253,6 +267,18 @@ export function bridgeChannelsHttpReadable(): BridgeChannel[] {
  *  because a browser calls methods, and the two are not one-to-one. */
 export function bridgeMemberIsHttpReadable(member: string): boolean {
   return bridgeChannelsHttpReadable().some((entry) => `${entry.namespace}.${entry.method}` === member);
+}
+
+/** The subscribe channels a remote client can actually receive: ambient events,
+ *  not replies addressed to whoever invoked something.
+ *
+ *  One of five. The other four are `event.sender.send(...)` replies whose only
+ *  producers are `decision` — a browser client cannot make the call that would
+ *  cause a single event, so a stream for them would carry nothing forever.
+ *  Building that pipe is the "surface that pretends to work" failure with extra
+ *  steps, which is why the refusal is data here rather than a comment. */
+export function bridgeChannelsLiveForRemote(): BridgeChannel[] {
+  return BRIDGE_CHANNELS.filter((entry) => entry.kind === "subscribe" && !entry.noStream);
 }
 
 /** True when this channel must not cross a network boundary at any point. */
