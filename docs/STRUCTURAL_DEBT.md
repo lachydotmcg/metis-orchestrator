@@ -31,7 +31,8 @@ On disk: `App.tsx` is 874 KB, `main.ts` is 742 KB.
 
 ## 1. 78% of the source is in two files
 
-**Status:** open. Nothing started.
+**Status:** in progress. First carve landed 2026-08-20 — the gateway is now
+`src/electron/gateway.ts`, 547 lines out of `main.ts`. See the end of this item.
 
 **Why it is first.** It is not tidiness. It is the constraint that produced the
 question "would you run Metis on this repository?" and the answer "no".
@@ -91,9 +92,22 @@ with `main.ts` building the tables and wiring it. Nothing else moves.
 **The bonus, and it is the real reason to do this one first.** A gateway that
 takes its dependencies as an argument can be constructed in a test with fakes —
 which means `handleGatewayRequest` becomes testable offline for the first time.
-Most of suite 28's 154 source-regex assertions could then assert actual
-behaviour: a 401 without a bearer, a 403 on a `noHttp` member, a real 301 on
-`/app`. That is item 4, paid for by item 1.
+That is item 4, paid for by item 1.
+
+### Landed 2026-08-20
+
+Done as described. `src/electron/gateway.ts` is 547 lines; `main.ts` went from
+15,478 to 14,967. The injected surface came out at 15 rather than 13 — two more
+turned up once the compiler had an opinion: `providerDefaultModel` (the gateway
+reads one field off main's `providerInfo` table, so the lookup is injected rather
+than the table) and `rendererDist` (`__dirname` in the new file is not
+`__dirname` in main.ts, which a naive lift would have got silently wrong).
+
+Two suites broke, both correctly: they grepped `main.ts` for things that had
+moved. Both now read every file in `src/electron` instead, so the remaining
+carves do not break them again for the same reason each time.
+
+And `30-gateway-behaviour` exists — see item 4.
 
 ---
 
@@ -146,9 +160,15 @@ Either is honest. The current pairing is not.
 
 ## 4. The suites assert source, not behaviour
 
-**Status:** open.
+**Status:** first real behavioural suite landed 2026-08-20, and it came free with
+item 1 rather than needing its own project. `30-gateway-behaviour` drives the
+REAL compiled `handleGatewayRequest` with a fake request, a fake response and a
+fake dependency set — 37 assertions about what the routes DO. It could not have
+existed before the carve, because the gateway lived in `main.ts` and `main.ts`
+imports electron. The rest of this item still stands: the renderer has no
+equivalent.
 
-29 suites, and suite 28 alone carries 154 assertions — most of them regexes
+30 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 

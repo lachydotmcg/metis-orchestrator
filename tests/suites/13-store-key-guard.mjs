@@ -19,7 +19,7 @@
 //
 // Offline: no provider is called and no API key is read.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
@@ -56,7 +56,15 @@ section("Every key main writes is classified, so the next one cannot be invisibl
   // The structural half of the fix. A denylist cannot fail safe: a key added to
   // main.ts with a credential in it is invisible until somebody remembers. This
   // makes it a red build until somebody DECIDES.
-  const main = readFileSync(join(process.cwd(), "src", "electron", "main.ts"), "utf8");
+  // Every main-process source, not just main.ts. The gateway was carved out to
+  // ./gateway.ts on 2026-08-20 and took gatewayEnabled/gatewayToken with it,
+  // which this assertion caught immediately — correctly, because the question is
+  // "what does the main process write", and that stopped being one file. Reading
+  // the directory means the next carve does not break it again.
+  const main = readdirSync(join(process.cwd(), "src", "electron"))
+    .filter((f) => f.endsWith(".ts") || f.endsWith(".cts"))
+    .map((f) => readFileSync(join(process.cwd(), "src", "electron", f), "utf8"))
+    .join("\n");
   const written = new Set([...main.matchAll(/writeStoreValue\("([a-zA-Z0-9_-]+)"/g)].map((match) => match[1]));
   ok(`${written.size} keys are written by main`, written.size > 10);
 

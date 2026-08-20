@@ -41,7 +41,16 @@ const {
 } = await fromBuild("electron/gateway-app-shell.js");
 
 const read = (...parts) => readFileSync(join(process.cwd(), ...parts), "utf8");
-const main = read("src", "electron", "main.ts");
+// Every main-process source joined, not just main.ts. The gateway was carved
+// out to ./gateway.ts on 2026-08-20 (docs/STRUCTURAL_DEBT.md item 1) and this
+// suite's assertions went with it — correctly caught, because they are about
+// what the main process DOES, and that stopped being one file. Reading the
+// directory means the remaining carves in that document do not break this
+// suite again, one at a time, for the same reason each time.
+const main = readdirSync(join(process.cwd(), "src", "electron"))
+  .filter((file) => file.endsWith(".ts") || file.endsWith(".cts"))
+  .map((file) => read("src", "electron", file))
+  .join("\n");
 const app = read("src", "renderer", "ui", "App.tsx");
 
 section("The mount does not displace anything already shipped");
@@ -368,7 +377,7 @@ section("The wiring matches the policy, in BOTH directions");
   ok("the handler exists", Boolean(handler));
   ok(
     "the manifest check runs before the table lookup",
-    handler[0].indexOf("bridgeMemberIsHttpReadable") < handler[0].indexOf("GATEWAY_BRIDGE_READS[member]")
+    handler[0].indexOf("bridgeMemberIsHttpReadable") < handler[0].indexOf("reads[member]")
   );
   ok("undefined is collapsed to null for JSON", /value === undefined \? null : value/.test(handler[0]));
   ok("the body reader is the shared one, with its cap", /readGatewayBody\(req, GATEWAY_MAX_BODY_BYTES\)/.test(handler[0]));

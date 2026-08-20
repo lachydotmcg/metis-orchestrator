@@ -45,6 +45,26 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **The gateway is its own module.** `src/electron/gateway.ts`, 547 lines carved
+  out of `main.ts`, which went from 15,478 lines to 14,967. First cut of
+  [`docs/STRUCTURAL_DEBT.md`](docs/STRUCTURAL_DEBT.md) item 1: 78% of `src` sat
+  in two files, which is why no model can work on this repo (it cannot return a
+  742 KB file complete) and why those files could only be grepped rather than
+  read. It **takes** its dependencies rather than importing them — importing
+  would make `main -> gateway -> main` — and passing the two dispatch tables as
+  values collapses that surface from 42 entries to 15. The same shape `cli.ts`
+  already uses for the same reason, including its structural-twin trick for a
+  type `main.ts` never exports.
+- **Which made the routes testable, and that was the point.**
+  `30-gateway-behaviour` drives the real compiled `handleGatewayRequest` with a
+  fake request, response and dependency set: 37 assertions about what the routes
+  DO rather than what their source looks like. A 401 with no bearer, a 401 on
+  `?token=` at a JSON route, a 301 on `/app`, a 403 on each of the four `noHttp`
+  members, an audit line on a reduce and none on a read. None of it was reachable
+  before the carve, because the gateway lived in a file that imports electron.
+  That is item 4 falling out of item 1.
+
+
 - **A thrown render can no longer blank the app.** There was no error boundary
   anywhere in this renderer, so every render-time throw unmounted the whole tree
   and left `#root` empty — no sidebar, no message, nothing, which is
