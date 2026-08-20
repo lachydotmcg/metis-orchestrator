@@ -111,21 +111,48 @@ in theory.
 
 ---
 
-## The tutorial
+## Onboarding
 
-### Is the tutorial working?
+*(Confirmed 2026-08-20: "the tutorial" means this. There is no separate guided
+tour — no `tutorial`, `guidedTour` or `coachmark` exists anywhere.)*
 
-**Code says: there is no tutorial.** No `tutorial`, `guidedTour`, `coachmark` or
-equivalent exists anywhere in `App.tsx` or `main.ts`.
+### Is onboarding working?
 
-The two things that might be meant instead:
+**Code says it is real and carefully built.** `FirstRunOnboarding`
+(`App.tsx:2413`) is five steps: name, local-vs-cloud preference, hardware picks,
+local-model install, and a BYO-keys explainer. Steps 3 and 4 **deep-link into the
+real BenchmarkWorkspace** rather than reimplementing it — the overlay minimises to
+a floating pill and the wizard step survives underneath, because the component
+never unmounts while onboarding is incomplete. Enter-to-advance is a window-level
+listener with deliberate handling for focus reverting to `<body>` when a Continue
+button unmounts.
 
-- `FirstRunOnboarding` (`App.tsx:2328`), gated on `window.metisProfile` and on
-  `onboardedAt` being unset — so it shows once, on a fresh profile.
-- The benchmark wizard, which is the first-run gate.
+**The thing that matters most for testing it:** you get one shot per profile.
 
-**Needs you to say which one you meant** before it is worth investigating
-further.
+`onboardedAt` is stamped on **finish and on skip alike** (`App.tsx:2438`), and
+`showOnboarding` (`App.tsx:2011`) requires it to be unset. Nothing anywhere ever
+clears it — no reset control, no dev affordance, no Settings entry. Grep confirms
+`onboardedAt` appears in exactly four places and three of them are the check, the
+comment, and the stamp.
+
+So the only way to see onboarding a second time is to remove or edit
+`profile.json` under `metis-store/` in the app's userData directory
+(`main.ts:654`). Worth knowing before rather than after.
+
+**Cannot tell from the code:**
+
+- Whether the deep-link into Benchmark and back actually feels continuous, or
+  whether minimising the overlay loses you.
+- Whether skipping is too easy — every step has an escape, and skipping stamps
+  the same flag finishing does, so a fast skip permanently costs the profile its
+  name and preference.
+- Whether the hardware step is worth anything given the GPU list is six hardcoded
+  entries and nothing probes the machine (see the benchmark section above).
+
+**Worth considering regardless of testing:** a way to replay onboarding. Not for
+users necessarily, but a profile that can never see its own first-run flow again
+is a surface that can only be tested by hand-editing JSON, which means in
+practice it gets tested once and never again.
 
 ---
 
