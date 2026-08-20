@@ -61,7 +61,7 @@ v1 navigation is exactly four items: New session, Orchestration, Benchmark, Sett
 | --- | --- |
 | **Chat and the Auto Router** `VERIFIED` | Type a prompt, Metis picks a model you actually have installed. Proven in a packaged build 2026-07-21 (see [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md)). |
 | **The orchestration build pipeline** `VERIFIED` | Plan, then front end, then make it functional, writing real files. |
-| **The snapshot safety net** `VERIFIED` | Every generated write is backed up first, or it does not happen. |
+| **The snapshot safety net** `VERIFIED` | Every generated write is backed up first, or it does not happen. And a write that would replace a big existing file with a fraction of itself — what a truncated file looks like — is refused outright rather than backed up and applied. |
 | **Metis Loops** `VERIFIED` | Hand it a goal and it works across several turns, deciding each turn whether to continue. `--budget 200k` caps its spend; a continue can spawn up to 3 parallel helpers whose completion wakes it. A chain can name its outputs (`draft as $draft`) and carry one conditional edge (`--gate "synthesise fails -> draft"`) that sends it back a step. |
 | **The CLI harness** `VERIFIED` | Drive the real pipeline headlessly and assert on the result. |
 | **Permissions, five modes** `SHIPPED` | You pick how much Metis may do on its own, per run. |
@@ -177,7 +177,7 @@ There is no separate lint script. The gates are `npm run typecheck`, `npm run bu
 One person building in the open. The core is real: it routes, it writes files into folders you
 choose, it backs up what it touches, and it can be handed a goal it works on by itself.
 
-Two things a sceptical reader should know. There is an offline test suite (`npm test`, 28 suites,
+Two things a sceptical reader should know. There is an offline test suite (`npm test`, 29 suites,
 no network or API keys needed), run by CI on every push, so `npm run typecheck`, `npm run build`
 and `npm test` are the gates. And the latest tag is `v1.2.0`, from 2026-08-14. **`main` is ahead of
 it** — the browser client described above landed after that tag, so it is not in the installer you

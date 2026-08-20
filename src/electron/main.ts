@@ -99,6 +99,7 @@ import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
 import { bridgeMemberIsHttpReadable } from "../shared/bridge-manifest.js";
+import { generatedWriteWouldTruncate } from "../shared/write-guard.js";
 import {
   GATEWAY_APP_PREFIX,
   gatewayAppAssetPath,
@@ -4343,6 +4344,50 @@ async function writeGeneratedFileSet(
   files: GeneratedFile[]
 ): Promise<{ artifacts: ProjectArtifact[]; snapshot?: { id: string; dir: string } }> {
   await mkdir(root, { recursive: true });
+
+  // TRUNCATION GUARD. The build pipeline asks models for COMPLETE files, not
+  // diffs ("Return COMPLETE files, not snippets", the front-end stage prompt),
+  // and the write below is an unconditional whole-file overwrite. That pairing
+  // is fine on the greenfield folders Metis was built for and dangerous on a
+  // real codebase: this repo's own `main.ts` is 742 KB and `App.tsx` is 874 KB,
+  // and a model asked to return either one complete will emit a plausible,
+  // well-formed, MUCH shorter file. The snapshot makes that recoverable, but
+  // recoverable is not the same as safe — `lastProjectSnapshot` holds a single
+  // slot, so by the time a multi-turn loop settles, earlier backups are no
+  // longer nameable from the revert control.
+  //
+  // So a write that would replace a substantial existing file with a fraction
+  // of itself is refused outright, before the snapshot, before anything is
+  // touched. Same shape as the snapshot-failure refusal below: nothing is
+  // written, and the message says which file and by how much.
+  //
+  // Deliberately narrow. New files pass at any size, and small files pass at
+  // any ratio, because the failure being prevented is specifically "a large
+  // file came back truncated". A genuine large deletion is refused too — that
+  // is the intended trade: doing it by hand costs a minute, and not doing it by
+  // hand cost the file.
+  const shrunk: string[] = [];
+  for (const file of files) {
+    const candidate = safeRelativeFilePath(file.path);
+    if (!candidate) continue;
+    const target = fullArtifactPath(root, candidate);
+    if (!target) continue;
+    const existing = await stat(target).catch(() => null);
+    if (!existing?.isFile()) continue;
+    const incoming = Buffer.byteLength(file.content, "utf8");
+    if (generatedWriteWouldTruncate(existing.size, incoming)) {
+      shrunk.push(`${candidate} (${Math.round(existing.size / 1024)} KB on disk, ${Math.round(incoming / 1024)} KB returned)`);
+    }
+  }
+  if (shrunk.length > 0) {
+    await appendAudit("warning", "project.write.truncation", "Refused a write that would have truncated an existing file.", {
+      projectPath: root,
+      files: shrunk
+    });
+    throw new Error(
+      `Metis refused to write because the model returned far less than what is already on disk, which is what a truncated file looks like: ${shrunk.join("; ")}. Nothing was written. Ask for a smaller, more specific change, or edit the file by hand.`
+    );
+  }
 
   // CORE.5: every generated write in the app funnels through here, so this is
   // the one place a safety net belongs. Back up the CURRENT contents of every

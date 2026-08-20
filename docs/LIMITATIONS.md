@@ -368,7 +368,7 @@ commit, rather than deleted, so this file also reads as a record of what got clo
 
 ## Verification
 
-- **CI now runs the offline suites on every push** (`.github/workflows`), 28 suites via
+- **CI now runs the offline suites on every push** (`.github/workflows`), 29 suites via
   `npm test`, covering the loop decision layer, the `/loop` grammar (including `--budget`), the
   permission clamp, path containment, edit-intent routing, the store-mutation race, the file-edit
   line-diff counts, the per-node depth rung rule, the chain artifact channel, the renderer's reach

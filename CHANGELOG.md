@@ -163,6 +163,26 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **A generated write that looks like a truncated file is refused.** This came
+  from one question — *would you run Metis on the Metis repository?* — and the
+  answer was no, for a reason two facts make plain once they are put side by
+  side. The build pipeline asks models for COMPLETE files (`Return COMPLETE
+  files, not snippets` is in the front-end stage prompt verbatim), and
+  `writeGeneratedFileSet` overwrites whole files unconditionally. That pairing
+  is correct for the greenfield folders the pipeline was built for, where every
+  file is one the model just authored. Point it at a real codebase and it is a
+  shredder: this repo's own `main.ts` is 742 KB and `App.tsx` is 874 KB, and a
+  model asked to return either one complete returns something plausible,
+  well-formed, and a tenth of the length. The snapshot makes that recoverable,
+  which is not the same as safe — `lastProjectSnapshot` holds a single slot, so
+  a five-turn loop leaves four of its backups unnameable from the revert
+  control. Now: a write that would replace an existing file over 2 KB with less
+  than half its bytes throws before the snapshot and before anything is touched,
+  naming the file and both sizes. New files pass at any size, small files pass
+  at any ratio, and a normal edit — deleting a function, cutting a section —
+  keeps far more than half and is unaffected. `29-write-guard` pins the
+  thresholds **and** the two facts that make the guard necessary, so if the
+  pipeline ever emits diffs instead, the reason this exists is still readable.
 - **The Loops panel updates live in the browser.** `metisLoops.onChanged` is a
   real subscription now: the shim polls `metisLoops.list` every 10 seconds and
   fires the callback when the list actually changed, with the first poll
