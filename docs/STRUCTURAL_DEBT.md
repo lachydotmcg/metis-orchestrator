@@ -40,9 +40,10 @@ sessions (~2,600 lines), providers (~840) and the tray/window shell (~810).
 
 ## 1. 78% of the source is in two files
 
-**Status:** in progress. Two carves landed 2026-08-20. `main.ts` is down from
-15,478 lines to **13,629** — `src/electron/gateway.ts` (659) and
-`src/electron/loop-runtime.ts` (1,526). See the end of this item.
+**Status:** in progress. Three carves landed 2026-08-20. `main.ts` is down from
+15,478 lines to **13,397** — `src/electron/gateway.ts` (659),
+`src/electron/loop-runtime.ts` (1,526) and `src/electron/routines.ts` (295).
+See the end of this item.
 
 **Why it is first.** It is not tidiness. It is the constraint that produced the
 question "would you run Metis on this repository?" and the answer "no".
@@ -207,7 +208,7 @@ existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-30 suites, and suite 28 alone carries 154 assertions — most of them regexes
+31 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 

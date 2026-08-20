@@ -45,6 +45,16 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **Routines are their own module, and their scheduler is finally tested.**
+  `src/electron/routines.ts`, 295 lines for **four** injected dependencies —
+  the cleanest seam in `main.ts`, which is now 13,397 lines against 15,478 at
+  the start of the day. `31-routine-schedule` adds 24 assertions on
+  `computeNextRunAt`, which nothing had ever covered: daily rolling past
+  midnight and past a month and a year boundary, weekly wrapping to the right
+  weekday including the same-day case, and the one that actually bites — a
+  laptop that slept for a day comes back with a `lastRunAt` far in the past, and
+  counting from it would schedule a time already gone, so the routine fires
+  immediately and repeatedly instead of settling onto its interval.
 - **The loop runtime is its own module.** `src/electron/loop-runtime.ts`, 1,526
   lines, for thirteen injected dependencies — the same ratio the gateway came out
   at, over twice the size. `main.ts` is now 13,629 lines, down from 15,478 where

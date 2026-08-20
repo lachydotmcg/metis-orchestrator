@@ -179,7 +179,7 @@ There is no separate lint script. The gates are `npm run typecheck`, `npm run bu
 One person building in the open. The core is real: it routes, it writes files into folders you
 choose, it backs up what it touches, and it can be handed a goal it works on by itself.
 
-Two things a sceptical reader should know. There is an offline test suite (`npm test`, 30 suites,
+Two things a sceptical reader should know. There is an offline test suite (`npm test`, 31 suites,
 no network or API keys needed), run by CI on every push, so `npm run typecheck`, `npm run build`
 and `npm test` are the gates. And the latest tag is `v1.2.0`, from 2026-08-14. **`main` is ahead of
 it** — the browser client described above landed after that tag, so it is not in the installer you
