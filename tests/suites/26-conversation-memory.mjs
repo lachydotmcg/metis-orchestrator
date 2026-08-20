@@ -23,7 +23,7 @@
 //
 // Offline: no provider is called, nothing is embedded, no API key is read.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
@@ -120,7 +120,14 @@ section("Both prompt paths get the block, in the same place");
   // error — it silently stops every exact-match serve, and the feature just
   // quietly stops working. Same failure if the two prepend in different
   // orders, because the same bytes in a different order are a different hash.
-  const main = readFileSync(join(process.cwd(), "src", "electron", "main.ts"), "utf8");
+  // Every main-process source, not just main.ts. Knowledge Banks were carved out
+// to ./knowledge.ts on 2026-08-20 (docs/STRUCTURAL_DEBT.md item 1) and took
+// these assertions with them — caught correctly, because the question is what
+// the main process DOES and that stopped being one file.
+  const main = readdirSync(join(process.cwd(), "src", "electron"))
+    .filter((file) => file.endsWith(".ts") || file.endsWith(".cts"))
+    .map((file) => readFileSync(join(process.cwd(), "src", "electron", file), "utf8"))
+    .join("\n");
   const calls = [...main.matchAll(/conversationMemoryForPrompt\(/g)].length;
   // One definition plus both call sites.
   check("exactly two call sites", calls - 1, 2);

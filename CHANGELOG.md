@@ -45,6 +45,22 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **Knowledge Banks are their own module, and the retrieval arithmetic is
+  tested.** `src/electron/knowledge.ts`, 480 lines for **three** injected
+  dependencies — chosen over the Oracle block by measurement (Oracle is 647
+  lines and needs 23). `main.ts` is 11,819, down from 15,478 at the start of the
+  day. **The section banner was not the boundary:** the last function under
+  "Knowledge Banks" was `shouldRunBuildPipeline`, which decides whether a prompt
+  starts a build using routing helpers — the compiler found it by asking a
+  module about embeddings for three routing symbols, it went back, and the
+  injected surface dropped from five to three.
+  `35-knowledge-retrieval` adds 32 assertions on what a model is actually shown
+  about your files: cosine similarity's zero cases return 0 rather than NaN
+  (one NaN sorts unpredictably and poisons a whole ranking), an oversized
+  paragraph is split rather than dropped (a minified file is one "paragraph"
+  far past the chunk size, and dropping it makes a real file invisible), and the
+  context block is capped but never emptied, because a grounding block that
+  crowds out the prompt is worse than no grounding.
 - **Providers are their own module — invocation, key pools, cooldowns and
   secrets.** `src/electron/providers.ts`, 1,116 lines for **ten** injected
   dependencies, the best ratio of any carve. `main.ts` is 12,252 lines, down

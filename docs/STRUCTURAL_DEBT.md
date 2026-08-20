@@ -40,11 +40,11 @@ sessions (~2,600 lines), providers (~840) and the tray/window shell (~810).
 
 ## 1. 78% of the source is in two files
 
-**Status:** in progress. Five carves landed 2026-08-20. `main.ts` is down from
-15,478 lines to **12,252** — a fifth of the file gone. The carved modules are
+**Status:** in progress. Six carves landed 2026-08-20. `main.ts` is down from
+15,478 lines to **11,819** — nearly a quarter of the file. The carved modules are
 `gateway.ts` (659), `loop-runtime.ts` (1,526), `routines.ts` (295),
-`store.ts` (150) and `providers.ts` (1,253). All five load outside electron, so
-all five are testable. See the end of this item.
+`store.ts` (150), `providers.ts` (1,253) and `knowledge.ts` (517). All six load
+outside electron, so all six are testable. See the end of this item.
 
 **Why it is first.** It is not tidiness. It is the constraint that produced the
 question "would you run Metis on this repository?" and the answer "no".
@@ -217,7 +217,7 @@ existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-34 suites, and suite 28 alone carries 154 assertions — most of them regexes
+35 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 
@@ -328,3 +328,55 @@ this it could only be observed by running out of quota on a real account:
   is a guaranteed 429 that burns a request to learn nothing. A never-used key
   sorts ahead of every used one, and the caller's array is not reordered in
   place.
+
+
+---
+
+## Sixth carve, 2026-08-20: Knowledge Banks
+
+`src/electron/knowledge.ts`, 480 lines for **three** injected dependencies.
+Chosen over the Oracle block by measurement, not by feel: Oracle is bigger (647
+lines) and needs 23, a ratio four times worse.
+
+### The boundary was a comment, not a proof
+
+The section banner said "Knowledge Banks", and the last function under it —
+`shouldRunBuildPipeline` — is not knowledge. It decides whether a prompt starts
+a BUILD, using `isBuildQuestionGuard`, `isEditIntent` and `BUILD_TASK_TYPES`,
+all routing concerns living in `main.ts`.
+
+**The compiler found it, by asking a module about embeddings for three routing
+symbols.** It went back, and the injected surface dropped from five to three.
+
+Worth generalising: a `// --- Section ---` banner marks where someone stopped
+typing, not where a subsystem ends. Every carve should expect the last function
+under a banner to belong to the next one.
+
+### What the measurement missed this time
+
+Two classes, both now known:
+
+- **Constants and types** — invisible because the measurement counts `name(`.
+  This is the documented blind spot from the providers carve.
+- **Symbols `main.ts` itself imports**, which are invisible for a different
+  reason: the measurement only names things *defined* in `main.ts`, so anything
+  it pulls from `../shared` never appears. Nine turned up here
+  (`retrievalPlanFor`, `shouldRebuildConversationIndex`, the retrieval-policy
+  types). Harmless — they are plain imports with no cycle — but they are not
+  zero work, and the dependency count does not predict them.
+
+### 35-knowledge-retrieval
+
+32 assertions on the arithmetic that decides what a model is shown about your
+own files. Every bug in it is a quiet one: a chunk boundary that splits a
+function, a floor that admits an unrelated file, a cap that drops the most
+relevant chunk. None announce themselves — the answer just comes back grounded
+in the wrong thing.
+
+- **Cosine similarity's zero cases return 0, not NaN.** A single NaN sorts
+  unpredictably and poisons a whole ranking rather than sitting at the bottom.
+- **An oversized paragraph is split, not dropped.** A minified file or a long
+  function with no blank lines is one "paragraph" far past the chunk size;
+  dropping it would make a real file invisible to retrieval.
+- **The context block is capped but never emptied.** A grounding block that
+  crowds out the prompt it is grounding is worse than no grounding.

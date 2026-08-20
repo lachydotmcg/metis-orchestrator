@@ -32,6 +32,15 @@ const read = (rel) => readFileSync(join(root, rel), "utf8");
 const README = read("README.md");
 const docFiles = readdirSync(join(root, "docs")).filter((f) => f.endsWith(".md"));
 
+/** Every main-process source joined. Carves keep moving code between files in
+ *  src/electron (docs/STRUCTURAL_DEBT.md item 1), and every assertion here is
+ *  about what the main process DOES rather than about which file it is in. */
+const electronSources = () =>
+  readdirSync(join(root, "src", "electron"))
+    .filter((file) => file.endsWith(".ts") || file.endsWith(".cts"))
+    .map((file) => readFileSync(join(root, "src", "electron", file), "utf8"))
+    .join("\n");
+
 section("A doc cannot claim both that tests exist and that they do not");
 {
   // The README said "there are no tests" twenty lines above "an offline test
@@ -148,7 +157,7 @@ section("FLAG OFF means a real flag that really defaults to off");
   ok(`doctor declares defaults for ${declared.size} flags`, declared.size > 0);
 
   // Ground truth 2: what the code actually falls back to when the key is unset.
-  const mainSource = read("src/electron/main.ts");
+  const mainSource = electronSources();
   const actual = new Map();
   for (const [, key, def] of mainSource.matchAll(/readStoreValue<boolean>\("(\w+)",\s*(true|false)\)/g)) {
     actual.set(key, def === "true");
@@ -339,7 +348,7 @@ section("Every store key main reads has a control that can change it");
   ok("the think-budget field renders", /setThinkTokenCeiling\(/.test(app));
   // Opening Settings for the first time must not change how the app behaves,
   // so every default has to match what main.ts already assumed.
-  const main = read("src/electron/main.ts");
+  const main = electronSources();
   ok("the bank default still matches main", /readStoreValue<boolean>\("knowledgeBankEnabled", true\)/.test(main) && app.includes('useAppStoreState("knowledgeBankEnabled", true)'));
   ok("the ceiling default still matches main", /readStoreValue<number>\("thinkTokenCeiling", DEFAULT_THINK_TOKEN_CEILING\)/.test(main) && app.includes("DEFAULT_THINK_TOKEN_CEILING)"));
   ok("the posture default still matches main", /readStoreValue<RetrievalOverride>\("retrievalPosture", RETRIEVAL_OVERRIDE_DEFAULT\)/.test(main));
