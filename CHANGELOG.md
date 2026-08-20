@@ -45,6 +45,27 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **Providers are their own module — invocation, key pools, cooldowns and
+  secrets.** `src/electron/providers.ts`, 1,116 lines for **ten** injected
+  dependencies, the best ratio of any carve. `main.ts` is 12,252 lines, down
+  from 15,478 at the start of the day — a fifth of the file. It was carved as
+  **three separate ranges**: the obvious slice (invocation alone) measures at 545
+  lines needing 21, because ten of those were the rest of its own subsystem
+  elsewhere in the file. Whole, it needs ten, and all ten are generic utilities
+  rather than provider concerns. `safeStorage` is injected rather than imported,
+  because a named electron import would have made the module unloadable outside
+  the app and taken its suite with it.
+- **The cooldown and rotation arithmetic is tested.**
+  `34-provider-cooldowns`, 33 assertions on "Never Run Dry" — previously only
+  observable by running out of quota on a real account. Quota detection has two
+  independent signals (status and message) because providers disagree about
+  which they send, and the negative cases matter as much: a 500, a 401 or a
+  timeout must not count, since treating an ordinary failure as a quota error
+  stands a working key down for ten minutes. `Retry-After: 0` falls back rather
+  than scheduling a cooldown in the past. An expired deadline reads as "under a
+  minute" rather than "-3m". And rotation *drops* cooling accounts rather than
+  deprioritising them, because trying one is a guaranteed 429 that burns a
+  request to learn nothing.
 - **The store and the audit log are their own module, and finally tested.**
   `src/electron/store.ts`, 150 lines, measured at **zero** dependencies on the
   rest of `main.ts` — the only true leaf so far, so it is imported rather than

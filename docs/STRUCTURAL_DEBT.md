@@ -40,11 +40,11 @@ sessions (~2,600 lines), providers (~840) and the tray/window shell (~810).
 
 ## 1. 78% of the source is in two files
 
-**Status:** in progress. Four carves landed 2026-08-20. `main.ts` is down from
-15,478 lines to **13,354** — `src/electron/gateway.ts` (659),
-`src/electron/loop-runtime.ts` (1,526), `src/electron/routines.ts` (295) and
-`src/electron/store.ts` (150). All four load outside electron, so all four are
-testable. See the end of this item.
+**Status:** in progress. Five carves landed 2026-08-20. `main.ts` is down from
+15,478 lines to **12,252** — a fifth of the file gone. The carved modules are
+`gateway.ts` (659), `loop-runtime.ts` (1,526), `routines.ts` (295),
+`store.ts` (150) and `providers.ts` (1,253). All five load outside electron, so
+all five are testable. See the end of this item.
 
 **Why it is first.** It is not tidiness. It is the constraint that produced the
 question "would you run Metis on this repository?" and the answer "no".
@@ -217,7 +217,7 @@ existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-33 suites, and suite 28 alone carries 154 assertions — most of them regexes
+34 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 
@@ -270,3 +270,61 @@ Kept here so the list does not re-accumulate silently.
   (`2864d8e`). Treats the symptom of item 1, not item 1.
 - ~~The README claimed both that tests existed and that they did not.~~ Fixed
   2026-08-16; `12-doc-honesty` now fails a doc that denies the suites it ships.
+
+
+---
+
+## Fifth carve, 2026-08-20: providers, whole
+
+`src/electron/providers.ts`, **1,116 lines for ten injected dependencies** — the
+best ratio of any carve so far.
+
+**It was three ranges, not one, and that is the finding.** The subsystem is
+scattered across `main.ts`: cooldowns and key pooling near the top, secrets and
+status in the middle, the actual invocation five hundred lines later. The obvious
+slice — the invocation block, which is what "carve providers" naturally means —
+measures at 545 lines needing 21, because **ten of those 21 were the rest of its
+own subsystem** sitting elsewhere in the same file. Whole, it needs ten, and all
+ten are generic utilities (cancellation plumbing, token estimation, think-tag
+splitting) rather than provider concerns. That is the test for whether a seam is
+in the right place: what is left behind should not be code about the same thing.
+
+Removed back-to-front so earlier line numbers stayed valid.
+
+### What the measurement missed
+
+`measure-multi.mjs` counts **called** identifiers — `name(`. A constant or a
+type referenced without parentheses is invisible to it, so the first compile
+turned up seven things the measurement had not: `providerInfo`,
+`providerKeyPattern`, `providerCooldowns`, `DEFAULT_COOLDOWN_MS`,
+`QUOTA_ERROR_PATTERN`, and the `StoredSecret`/`StoredSecrets` types. All
+provider data, all moved with the code that reads them.
+
+**Expect this on every future carve.** The dependency count a measurement gives
+is a count of *calls*, and the compiler will add the data.
+
+### The electron rule, biting in practice
+
+`encryptSecret`/`decryptSecret` use `safeStorage`, which is a named electron
+export. Importing it would have made `providers.ts` unloadable outside the app
+and taken `34-provider-cooldowns` with it — the exact failure that silently cost
+`loop-runtime.ts` its coverage. Injected instead; `main.ts` keeps the import and
+this side takes the three methods it needs.
+
+### 34-provider-cooldowns
+
+The arithmetic behind "Never Run Dry", checkable for the first time — before
+this it could only be observed by running out of quota on a real account:
+
+- **Quota detection has two independent signals**, status and message, because
+  providers disagree about which they send. Both are asserted, and so is the
+  other side: a 500, a 401 and a timeout must NOT count, since treating an
+  ordinary failure as a quota error stands a working key down for ten minutes.
+- **`Retry-After: 0` must not produce a cooldown in the past.** A bare
+  multiplication would, and the provider would never actually stand down.
+- **An expired deadline reads as "under a minute", not "-3m"** — what a bare
+  subtraction produces, and what a user would see mid-recovery.
+- **Rotation drops cooling accounts rather than deprioritising them.** Trying one
+  is a guaranteed 429 that burns a request to learn nothing. A never-used key
+  sorts ahead of every used one, and the caller's array is not reordered in
+  place.
