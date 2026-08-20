@@ -45,6 +45,19 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **Conversations are their own module, and titles are tested.**
+  `src/electron/conversations.ts`, 531 lines for seven injected dependencies —
+  the best ratio left, chosen after measuring five candidates. `main.ts` is
+  11,415, down 26% from where the day started. The block's last three functions
+  turned out to be loop concerns and went back; `dialog.showSaveDialog`, the
+  only electron call in 531 lines, is injected.
+  `36-conversation-records` adds 36 assertions on the text a person navigates
+  by: a title is never empty (a prompt of pure punctuation strips to nothing,
+  and a blank sidebar row is indistinguishable from its neighbours),
+  model-generated titles are stripped of quotes, smart quotes, trailing
+  punctuation, second lines and `<think>` blocks — and anything still unusable
+  returns null so the prompt-derived fallback survives — and a prompt too thin
+  to title is never sent to a model at all.
 - **Knowledge Banks are their own module, and the retrieval arithmetic is
   tested.** `src/electron/knowledge.ts`, 480 lines for **three** injected
   dependencies — chosen over the Oracle block by measurement (Oracle is 647

@@ -40,11 +40,16 @@ sessions (~2,600 lines), providers (~840) and the tray/window shell (~810).
 
 ## 1. 78% of the source is in two files
 
-**Status:** in progress. Six carves landed 2026-08-20. `main.ts` is down from
-15,478 lines to **11,819** — nearly a quarter of the file. The carved modules are
+**Status:** in progress. Seven carves landed 2026-08-20. `main.ts` is down from
+15,478 lines to **11,415** — 26% of the file. The carved modules are
 `gateway.ts` (659), `loop-runtime.ts` (1,526), `routines.ts` (295),
-`store.ts` (150), `providers.ts` (1,253) and `knowledge.ts` (517). All six load
-outside electron, so all six are testable. See the end of this item.
+`store.ts` (150), `providers.ts` (1,253), `knowledge.ts` (517) and
+`conversations.ts` (506). All seven load outside electron, so all seven are
+testable. See the end of this item.
+
+**The easy seams are gone.** A fresh map after six carves scored every remaining
+candidate, and the honest summary is below under "What is left, and why it is
+harder".
 
 **Why it is first.** It is not tidiness. It is the constraint that produced the
 question "would you run Metis on this repository?" and the answer "no".
@@ -217,7 +222,7 @@ existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-35 suites, and suite 28 alone carries 154 assertions — most of them regexes
+36 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 
@@ -380,3 +385,71 @@ in the wrong thing.
   dropping it would make a real file invisible to retrieval.
 - **The context block is capped but never emptied.** A grounding block that
   crowds out the prompt it is grounding is worse than no grounding.
+
+---
+
+## Seventh carve, 2026-08-20: conversations
+
+`src/electron/conversations.ts`, 531 lines for **seven** injected dependencies.
+The best ratio left in the file, and chosen after measuring five candidates.
+
+Rule 4 fired twice on this one, which is worth recording because it is now the
+norm rather than the exception. The block's last three functions —
+`followupInvokerFor`, `loopJudgeInvoker`, `attachModelFollowups` — are LOOP
+concerns, and the compiler found them by asking a module about conversation
+records for `LoopIterationRecord`. They went back to `main.ts`.
+
+Auto-titling stayed, because titling a conversation *is* a conversation concern
+even though it calls a model. `invokeProvider` is imported from `providers.ts`
+rather than injected: providers does not import conversations, so there is no
+cycle, and an import is cheaper than a parameter when the direction is already
+one-way.
+
+`dialog.showSaveDialog` — the single electron call in 531 lines — is injected,
+for the rule that has now bitten three times.
+
+### 36-conversation-records
+
+36 assertions on the text a person actually navigates by. Every failure here is
+one you live with rather than notice:
+
+- **A title is never empty.** A prompt of pure punctuation strips to nothing,
+  and an empty title is a blank sidebar row indistinguishable from its
+  neighbours. Falls back to "New session".
+- **Model-generated titles arrive dirty.** Straight quotes, smart quotes,
+  trailing full stops, an explanation on line two, a `<think>` block in front.
+  All stripped; anything still unusable returns null so the caller keeps the
+  prompt-derived fallback rather than showing something worse.
+- **A prompt too thin to title is not sent to a model at all.** Asking for a
+  title for "hi" spends a call to produce something worse than the prompt.
+
+---
+
+## What is left, and why it is harder
+
+Measured 2026-08-20 against the 11,415-line `main.ts`, after seven carves:
+
+| candidate | lines | needs | verdict |
+| --- | --- | --- | --- |
+| `runSession` and friends | 1,357 | **94** | not a seam — it is the hub |
+| routing | 529 | 11 | contents are mixed; `extractProjectFiles`, `writeProjectFiles` and `callStageWithFallback` are not routing |
+| manager chat | 496 | 19 | poor ratio |
+| session directive bus | 347 | 23 | poor ratio |
+| oracle | 647 | 23 | poor ratio, measured and rejected twice |
+| quick-ask + tray | 237 | 2 | good ratio, but half of it is `BrowserWindow`/`globalShortcut` — carving means injecting electron itself, one API at a time |
+| gallery visual RAG | 182 | **0** | a genuine leaf, but small |
+
+**The pattern:** the blocks with good ratios are now small, and the big blocks
+are either the hub or electron shell. Carving electron shell would mean an
+injected interface that is just electron with extra steps — worse than leaving
+it, by the rule that a module which injects half of itself is not a module.
+
+So item 1 is not "keep carving until 2,000". The remaining honest moves are:
+
+1. **The gallery leaf** (182 lines, zero dependencies) — small but free.
+2. **Decompose `runSession` in place.** 1,186 lines in one function is the
+   single biggest thing left, and it cannot move until it is broken up where it
+   stands. That is a different and larger job than any carve so far.
+3. **`App.tsx`, untouched at 18,443 lines**, now by far the largest file in the
+   repo. A renderer split has to reason about React state and hook ordering
+   rather than a call graph, so the method here does not transfer unchanged.

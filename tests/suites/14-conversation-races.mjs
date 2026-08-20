@@ -19,7 +19,7 @@
 //
 // Offline: no provider is called and no API key is read.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { section, check, ok, summary } from "../harness.mjs";
 
@@ -145,7 +145,14 @@ section("Nothing writes the conversation store outside the lock");
   // same way by whoever writes the next feature, because the old shape reads
   // perfectly naturally. So the invariant is enforced on the source: exactly
   // one call site, and it is the one inside mutateConversations.
-  const source = readFileSync(join(process.cwd(), "src", "electron", "main.ts"), "utf8");
+  // Every main-process source. Conversations were carved to ./conversations.ts
+  // on 2026-08-20 (docs/STRUCTURAL_DEBT.md item 1) and took the mutateConversations
+  // lock with them — the seventh suite to break this way, and fixed the same way
+  // as the other six: the question is what the main process DOES.
+  const source = readdirSync(join(process.cwd(), "src", "electron"))
+    .filter((file) => file.endsWith(".ts") || file.endsWith(".cts"))
+    .map((file) => readFileSync(join(process.cwd(), "src", "electron", file), "utf8"))
+    .join("\n");
   const callSites = [...source.matchAll(/await writeConversations\(/g)].length;
   check("writeConversations has exactly one call site", callSites, 1);
 
