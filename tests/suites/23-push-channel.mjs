@@ -29,12 +29,20 @@
 //
 // Offline: no provider is called and no API key is read.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { section, check, ok, summary } from "../harness.mjs";
 
 const read = (...parts) => readFileSync(join(process.cwd(), ...parts), "utf8");
-const main = read("src", "electron", "main.ts");
+// Every main-process source, not just main.ts. The loop runtime was carved out
+// to ./loop-runtime.ts on 2026-08-20 (docs/STRUCTURAL_DEBT.md item 1) and took
+// these assertions with it — caught correctly, because the question is what the
+// main process DOES and that stopped being one file. Reading the directory means
+// the remaining carves do not break this suite again for the same reason.
+const main = readdirSync(join(process.cwd(), "src", "electron"))
+  .filter((file) => file.endsWith(".ts") || file.endsWith(".cts"))
+  .map((file) => read("src", "electron", file))
+  .join("\n");
 const preload = read("src", "electron", "preload.cts");
 const app = read("src", "renderer", "ui", "App.tsx");
 

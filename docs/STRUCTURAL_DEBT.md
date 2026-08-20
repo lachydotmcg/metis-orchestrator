@@ -27,12 +27,22 @@ find src -name "*.ts" -o -name "*.tsx" | xargs wc -l | sort -rn | head -5
 
 On disk: `App.tsx` is 874 KB, `main.ts` is 742 KB.
 
+**As of 2026-08-20, after two carves:** `main.ts` is 13,629 lines. `App.tsx` is
+untouched and is now comfortably the largest file in the repo — and the harder
+one, because a renderer split has to reason about React state rather than about
+which functions call which.
+
+A fuller map, measured the same day: `main.ts` held **432 top-level functions**,
+and `runSession` alone is **1,186 lines**. The largest remaining clusters are
+sessions (~2,600 lines), providers (~840) and the tray/window shell (~810).
+
 ---
 
 ## 1. 78% of the source is in two files
 
-**Status:** in progress. First carve landed 2026-08-20 — the gateway is now
-`src/electron/gateway.ts`, 547 lines out of `main.ts`. See the end of this item.
+**Status:** in progress. Two carves landed 2026-08-20. `main.ts` is down from
+15,478 lines to **13,629** — `src/electron/gateway.ts` (659) and
+`src/electron/loop-runtime.ts` (1,526). See the end of this item.
 
 **Why it is first.** It is not tidiness. It is the constraint that produced the
 question "would you run Metis on this repository?" and the answer "no".
@@ -108,6 +118,35 @@ moved. Both now read every file in `src/electron` instead, so the remaining
 carves do not break them again for the same reason each time.
 
 And `30-gateway-behaviour` exists — see item 4.
+
+### Second carve, 2026-08-20: the loop runtime
+
+`src/electron/loop-runtime.ts`, 1,526 lines, for **thirteen** injected
+dependencies — the same ratio the gateway came out at, over twice the size.
+`main.ts` 14,967 → 13,629.
+
+**The premise worth recording: it did NOT go into `./loops.ts`.** That file
+already existed and looked like the obvious destination. It is deliberately
+electron-free — types and pure decision helpers, imported by `cli.ts` and
+`gateway.ts` precisely because importing it costs them nothing. The runtime
+needs `BrowserWindow` to broadcast `metis-loops:changed`, so merging would have
+dragged electron into every consumer of `LoopRecord`. The split is now three
+ways and each part earns its place: `loops.ts` is what a loop IS,
+`loop-runtime.ts` is what running one DOES, `main.ts` holds the thirteen things
+it still needs.
+
+**How to pick the next one.** Candidates were measured rather than guessed, by
+counting lines in a block against the number of main.ts symbols it calls:
+
+| candidate | lines | needs from main.ts |
+| --- | --- | --- |
+| loop runtime | 1,336 | **13** |
+| providers | 537 | 20 |
+| tray / shell | 767 | 103 |
+
+The tray region scored 103 because the range swept up the `ipcMain` registration
+block, which by design calls everything. That is not a seam, and the number said
+so before any code moved.
 
 ---
 

@@ -45,6 +45,15 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **The loop runtime is its own module.** `src/electron/loop-runtime.ts`, 1,526
+  lines, for thirteen injected dependencies — the same ratio the gateway came out
+  at, over twice the size. `main.ts` is now 13,629 lines, down from 15,478 where
+  the day started. It deliberately did **not** go into the `./loops.ts` that
+  already existed: that file is electron-free on purpose, and `cli.ts` and
+  `gateway.ts` both import it precisely because doing so costs them nothing. The
+  runtime needs `BrowserWindow`, so merging would have dragged electron into
+  every consumer of `LoopRecord`. Three ways now, each earning its place —
+  `loops.ts` is what a loop IS, `loop-runtime.ts` is what running one DOES.
 - **The gateway is its own module.** `src/electron/gateway.ts`, 547 lines carved
   out of `main.ts`, which went from 15,478 lines to 14,967. First cut of
   [`docs/STRUCTURAL_DEBT.md`](docs/STRUCTURAL_DEBT.md) item 1: 78% of `src` sat
