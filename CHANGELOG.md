@@ -45,6 +45,21 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **The store and the audit log are their own module, and finally tested.**
+  `src/electron/store.ts`, 150 lines, measured at **zero** dependencies on the
+  rest of `main.ts` — the only true leaf so far, so it is imported rather than
+  injected and adds a parameter to nobody's interface. It takes the userData
+  directory as configuration instead of calling `app.getPath` for it, which is
+  what lets `33-store-behaviour` point it at a temp folder: 42 assertions on the
+  nine functions every persisted thing in Metis goes through, none of which had
+  ever been covered. Two properties it pins rather than leaves to be discovered:
+  `readStoreValue` catches a corrupt file but **not** a valid-but-wrong-shaped
+  one, because the parse is a cast — a file containing `null` comes back as
+  `null` past an array fallback, and four functions in `main.ts` immediately map
+  over that. And `dataPath` has no equivalent of `storePath`'s key pattern:
+  `join` normalises a `..` away, so it lands outside the store directory rather
+  than merely looking wrong. Safe today only because every caller passes a
+  literal.
 - **One import line was making 1,526 lines untestable.** `loop-runtime.ts`
   carried `import { BrowserWindow } from "electron"`, used in exactly one
   function to send a payload-free nudge to the renderers. In plain node a NAMED

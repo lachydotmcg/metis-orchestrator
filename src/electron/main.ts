@@ -95,7 +95,17 @@ import {
   type OpenRouterModel
 } from "../shared/model-catalogue.js";
 import { formatWalkthrough, walkthroughFileName, type WalkthroughFile, type WalkthroughRouting } from "../shared/walkthrough.js";
-import { rendererMayReachStoreKey } from "../shared/store-keys.js";
+import {
+  appendAudit,
+  assertRendererMayReachStoreKey,
+  configureStore,
+  dataPath,
+  exists,
+  listAudit,
+  readStoreValue,
+  storePath,
+  writeStoreValue
+} from "./store.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
 import { configureGateway, getGatewayStatus, setGatewayEnabled, startGateway, stopGateway } from "./gateway.js";
@@ -216,7 +226,6 @@ import { agentToolsPromptBlock, executeAgentTool, parseAgentToolCall } from "./a
 import { describeSnapshot, revertSnapshot, snapshotBeforeWrite, type ProjectSnapshot as MetisProjectSnapshot } from "./projectSnapshot.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const storeKeyPattern = /^[a-zA-Z0-9_-]+$/;
 const providerKeyPattern = /^[a-z0-9_-]+$/;
 const execFileAsync = promisify(execFile);
 const projectPreviewServers = new Map<string, { server: Server; url: string }>();
@@ -654,86 +663,17 @@ const registryFallbackPackages: RegistryPackage[] = [
   }
 ];
 
-/** Refuses a renderer request for a key the renderer has no business reading.
- *
- *  Not currently exploitable: nothing untrusted executes in the renderer,
- *  because the chat renders through react-markdown with no rehype-raw, so
- *  model-authored HTML is stripped rather than run. This is defence in depth
- *  ahead of the artifacts work specifically — rendering model-authored markup
- *  is exactly the change that turns "unreachable" into "reachable", and a
- *  guard added before that lands is worth more than one added after.
- *
- *  Main-process code is unaffected: readSecrets calls readStoreValue directly
- *  and never crosses this boundary. Only the IPC entry points check. */
-function assertRendererMayReachStoreKey(key: string): void {
-  if (!rendererMayReachStoreKey(key)) {
-    throw new Error(`The store key "${key}" is not reachable from the renderer. Use the dedicated secrets IPC, which returns status rather than values.`);
-  }
-}
-
-function storePath(key: string): string {
-  if (!storeKeyPattern.test(key)) {
-    throw new Error(`Invalid store key: ${key}`);
-  }
-  return join(app.getPath("userData"), "metis-store", `${key}.json`);
-}
-
-async function readStoreValue<T>(key: string, fallback: T): Promise<T> {
-  try {
-    const raw = await readFile(storePath(key), "utf8");
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
-
-async function writeStoreValue<T>(key: string, value: T): Promise<void> {
-  const target = storePath(key);
-  await mkdir(dirname(target), { recursive: true });
-  await writeFile(target, JSON.stringify(value, null, 2), "utf8");
-}
-
-function dataPath(...parts: string[]): string {
-  return join(app.getPath("userData"), "metis-store", ...parts);
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function appendAudit(level: AuditEvent["level"], kind: string, summary: string, metadata?: Record<string, unknown>): Promise<AuditEvent> {
-  const event: AuditEvent = {
-    id: randomUUID(),
-    createdAt: new Date().toISOString(),
-    level,
-    kind,
-    summary,
-    metadata
-  };
-  const target = dataPath("audit-log.jsonl");
-  await mkdir(dirname(target), { recursive: true });
-  await appendFile(target, `${JSON.stringify(event)}\n`, "utf8");
-  return event;
-}
-
-async function listAudit(limit = 40): Promise<AuditEvent[]> {
-  try {
-    const raw = await readFile(dataPath("audit-log.jsonl"), "utf8");
-    return raw
-      .split(/\r?\n/)
-      .filter(Boolean)
-      .slice(-limit)
-      .map((line) => JSON.parse(line) as AuditEvent)
-      .reverse();
-  } catch {
-    return [];
-  }
-}
+// ---------------------------------------------------------------------------
+// The store and the audit log moved to ./store.ts (carved 2026-08-20,
+// docs/STRUCTURAL_DEBT.md item 1). Measured at ZERO dependencies on the rest
+// of this file — the only true leaf so far, which is why it is imported
+// rather than injected and adds a parameter to nobody's interface.
+//
+// It takes the userData directory instead of importing `app` for it, because
+// a named electron import cannot be loaded outside the app and would have
+// spread that to every module importing the store. Wired at the top of
+// app.whenReady(), before anything can read a key.
+// ---------------------------------------------------------------------------
 
 function validateProvider(provider: string): asserts provider is ProviderKey {
   if (!providerKeyPattern.test(provider) || !(provider in providerInfo)) {
@@ -12983,6 +12923,11 @@ configureGateway({
 const cliMode = process.argv.includes("--cli");
 
 app.whenReady().then(async () => {
+  // FIRST, before anything can read a key — including the --cli branch below,
+  // which reaches the same store functions in-process. `app.getPath` is only
+  // valid after `whenReady`, which is also why the store takes the directory
+  // rather than calling for it at import time.
+  configureStore(app.getPath("userData"));
   if (cliMode) {
     let code = 1;
     try {

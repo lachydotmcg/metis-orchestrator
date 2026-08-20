@@ -40,10 +40,11 @@ sessions (~2,600 lines), providers (~840) and the tray/window shell (~810).
 
 ## 1. 78% of the source is in two files
 
-**Status:** in progress. Three carves landed 2026-08-20. `main.ts` is down from
-15,478 lines to **13,397** — `src/electron/gateway.ts` (659),
-`src/electron/loop-runtime.ts` (1,526) and `src/electron/routines.ts` (295).
-See the end of this item.
+**Status:** in progress. Four carves landed 2026-08-20. `main.ts` is down from
+15,478 lines to **13,354** — `src/electron/gateway.ts` (659),
+`src/electron/loop-runtime.ts` (1,526), `src/electron/routines.ts` (295) and
+`src/electron/store.ts` (150). All four load outside electron, so all four are
+testable. See the end of this item.
 
 **Why it is first.** It is not tidiness. It is the constraint that produced the
 question "would you run Metis on this repository?" and the answer "no".
@@ -200,18 +201,23 @@ Either is honest. The current pairing is not.
 
 ## 4. The suites assert source, not behaviour
 
-**Status:** three behavioural suites now, all of them paid for by item 1 rather
-than needing their own project — `30-gateway-behaviour` (37 assertions driving
-the real handler), `31-routine-schedule` (24 on `computeNextRunAt`) and
-`32-loop-lifecycle` (21 driving real loop creation, capping, stopping and
-deletion against a fake store). `30-gateway-behaviour` drives the
+**Status:** four behavioural suites now, **124 assertions**, all of them paid for
+by item 1 rather than needing their own project — `30-gateway-behaviour` (37,
+driving the real handler), `31-routine-schedule` (24 on `computeNextRunAt`),
+`32-loop-lifecycle` (21 on real loop creation, capping, stopping and deletion)
+and `33-store-behaviour` (42 against a real temp directory).
+
+The pattern is now reliable enough to state: **a module that can be loaded
+outside electron gets a behavioural suite within the same commit as its carve.**
+The carve is what makes it possible, and doing it in the same commit is what
+stops it being a follow-up nobody gets to. `30-gateway-behaviour` drives the
 REAL compiled `handleGatewayRequest` with a fake request, a fake response and a
 fake dependency set — 37 assertions about what the routes DO. It could not have
 existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-32 suites, and suite 28 alone carries 154 assertions — most of them regexes
+33 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 
