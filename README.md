@@ -170,6 +170,7 @@ There is no separate lint script. The gates are `npm run typecheck`, `npm run bu
 | [`docs/ORACLE.md`](docs/ORACLE.md) | The speculative inference writeup. |
 | [`docs/LOOPS.md`](docs/LOOPS.md) | The Loops design and what shipped versus what did not. |
 | [`docs/SECURITY.md`](docs/SECURITY.md) | Threat model, permission gates, and path containment. |
+| [`docs/STRUCTURAL_DEBT.md`](docs/STRUCTURAL_DEBT.md) | Five things wrong with the shape of the project rather than any feature in it, measured and ranked. Start here to understand why a change is harder than it looks. |
 | [`docs/MCP_SERVER.md`](docs/MCP_SERVER.md) | Pointing an MCP client at your running Metis. |
 
 ## Status
