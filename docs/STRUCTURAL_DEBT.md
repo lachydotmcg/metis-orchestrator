@@ -63,6 +63,38 @@ dependencies are named functions it calls, which is exactly what makes it liftab
 green each time. A big-bang refactor of a file nobody can read is how you lose a
 weekend.
 
+### The carve, measured 2026-08-20
+
+The gateway block is `main.ts:14449-15045`, **597 lines**, plus `serveStaticFile`
+and `mimeTypeFor` (`4882-4930`, ~50 lines). Call it 650.
+
+The hard part is not the lifting, it is the direction of the dependencies. That
+block calls **35 functions defined elsewhere in `main.ts`**, so a naive extraction
+gives `main → gateway → main` and a circular import.
+
+But 29 of those 35 are just the members of `GATEWAY_BRIDGE_READS` and
+`GATEWAY_BRIDGE_REDUCERS`. Pass the two tables in as values and the injected
+surface collapses to **13**:
+
+```
+the two dispatch tables
+appendAudit  writeStoreValue  readStoreValue
+listOllamaModels  listLoops  stopLoop
+decidePolicy  applySessionRouteOverrides  providerFromRoute  resolveOverrideModel
+invokeProvider
+serveStaticFile
+```
+
+So: `createGateway(deps)` returning `{ start, stop, setEnabled, handleRequest }`,
+with `main.ts` building the tables and wiring it. Nothing else moves.
+
+**The bonus, and it is the real reason to do this one first.** A gateway that
+takes its dependencies as an argument can be constructed in a test with fakes —
+which means `handleGatewayRequest` becomes testable offline for the first time.
+Most of suite 28's 154 source-regex assertions could then assert actual
+behaviour: a 401 without a bearer, a 403 on a `noHttp` member, a real 301 on
+`/app`. That is item 4, paid for by item 1.
+
 ---
 
 ## 2. Nine complete surfaces are unreachable
