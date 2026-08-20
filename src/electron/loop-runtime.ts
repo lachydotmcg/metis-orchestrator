@@ -16,7 +16,6 @@
  *  them would make `main -> loop-runtime -> main`. See `configureLoopRuntime`.
  */
 
-import { BrowserWindow } from "electron";
 import { resolve } from "node:path";
 import { stat } from "node:fs/promises";
 import {
@@ -125,6 +124,12 @@ export interface LoopRuntimeDeps {
   loopJudgeInvoker: (providerResult?: any) => any;
   loopSpentTokens: (loopId: string) => Promise<number>;
   dataPath: (...parts: string[]) => string;
+  /** Send a payload-free nudge to every renderer. Injected rather than done here
+   *  with `BrowserWindow`, and the reason is not style: a NAMED import from
+   *  "electron" throws at load time in plain node, so importing it made this
+   *  whole 1,500-line module impossible to load outside the app — and therefore
+   *  impossible to test. One injected function buys back the entire file. */
+  notifyRenderers: (channel: string) => void;
 }
 
 let injected: LoopRuntimeDeps | null = null;
@@ -226,10 +231,7 @@ const loopsTicking = new Set<string>();
  *  stale state with no way to notice. Windows whose preload does not subscribe
  *  (Quick Ask) simply ignore it. */
 export function broadcastLoopsChanged(): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
-    win.webContents.send("metis-loops:changed");
-  }
+  need().notifyRenderers("metis-loops:changed");
 }
 
 export function mutateLoops<T>(mutator: (current: LoopRecord[]) => { next: LoopRecord[]; result: T }): Promise<T> {

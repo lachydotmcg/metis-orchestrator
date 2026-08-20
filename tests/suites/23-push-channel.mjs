@@ -59,8 +59,16 @@ section("The broadcast sits on the one choke point every loop write passes");
   check("one call site, not one per writer", [...main.matchAll(/^\s*broadcastLoopsChanged\(\);/gm)].length, 1);
   // It goes to every window: a second window would otherwise hold stale state
   // with no way to notice.
-  ok("it reaches every window", /BrowserWindow\.getAllWindows\(\)/.test(main.slice(fn, fn + 900)));
-  ok("and skips destroyed ones", /isDestroyed\(\)/.test(main.slice(fn, fn + 900)));
+  //
+  // The window walk moved into main.ts's injected `notifyRenderers` on
+  // 2026-08-20, because a NAMED import from "electron" throws at load time in
+  // plain node and that one line made all 1,526 lines of loop-runtime.ts
+  // impossible to load — and therefore impossible to test. So the assertion
+  // follows the behaviour to where it now lives rather than pinning a file.
+  const walk = main.indexOf("notifyRenderers: (channel: string) => {");
+  ok("the window walk exists", walk !== -1);
+  ok("it reaches every window", /BrowserWindow\.getAllWindows\(\)/.test(main.slice(walk, walk + 500)));
+  ok("and skips destroyed ones", /isDestroyed\(\)/.test(main.slice(walk, walk + 500)));
 }
 
 section("The push carries no payload");
@@ -69,7 +77,12 @@ section("The push carries no payload");
   const body = main.slice(fn, fn + 900);
   // A payload here would serialise every loop's history, with artifacts, on
   // every single write — to communicate one bit.
-  ok("send is called with the channel only", /webContents\.send\("metis-loops:changed"\)/.test(body));
+  //
+  // Two halves now: the broadcaster names the channel, the injected walk sends
+  // it. Both are asserted, because a payload could be added at either end.
+  ok("the broadcaster passes the channel and nothing else", /notifyRenderers\("metis-loops:changed"\)/.test(body));
+  const walk = main.indexOf("notifyRenderers: (channel: string) => {");
+  ok("and the walk sends the channel alone", /webContents\.send\(channel\)/.test(main.slice(walk, walk + 500)));
   ok("and never with a second argument", !/webContents\.send\("metis-loops:changed",/.test(main));
 }
 

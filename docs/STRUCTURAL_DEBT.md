@@ -200,15 +200,18 @@ Either is honest. The current pairing is not.
 
 ## 4. The suites assert source, not behaviour
 
-**Status:** first real behavioural suite landed 2026-08-20, and it came free with
-item 1 rather than needing its own project. `30-gateway-behaviour` drives the
+**Status:** three behavioural suites now, all of them paid for by item 1 rather
+than needing their own project — `30-gateway-behaviour` (37 assertions driving
+the real handler), `31-routine-schedule` (24 on `computeNextRunAt`) and
+`32-loop-lifecycle` (21 driving real loop creation, capping, stopping and
+deletion against a fake store). `30-gateway-behaviour` drives the
 REAL compiled `handleGatewayRequest` with a fake request, a fake response and a
 fake dependency set — 37 assertions about what the routes DO. It could not have
 existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-31 suites, and suite 28 alone carries 154 assertions — most of them regexes
+32 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 

@@ -10916,7 +10916,19 @@ configureLoopRuntime({
   loopCancelScope,
   loopJudgeInvoker,
   loopSpentTokens,
-  dataPath
+  dataPath,
+  // Owned here rather than in loop-runtime.ts because a NAMED import from
+  // "electron" throws at load time in plain node — which made that whole
+  // 1,500-line module impossible to load outside the app, and therefore
+  // impossible to test. Every window, not just mainWindow: a second window
+  // would otherwise sit on stale state with no way to notice. Windows whose
+  // preload does not subscribe (Quick Ask) simply ignore it.
+  notifyRenderers: (channel: string) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue;
+      win.webContents.send(channel);
+    }
+  }
 });
 
 // --- Gallery visual RAG (docs/FABLE_PLANS.md section 4) ---

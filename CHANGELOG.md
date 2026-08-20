@@ -45,6 +45,18 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **One import line was making 1,526 lines untestable.** `loop-runtime.ts`
+  carried `import { BrowserWindow } from "electron"`, used in exactly one
+  function to send a payload-free nudge to the renderers. In plain node a NAMED
+  electron import throws `Named export not found` at **load** time — the module
+  cannot be imported at all, before any of its code runs. So the biggest carved
+  module could never be covered by a suite, and nothing reported that, because an
+  untestable module does not fail: it simply never appears. Injecting
+  `notifyRenderers(channel)` bought the whole file back, and
+  `32-loop-lifecycle` adds 21 assertions driving real loop creation, cap
+  enforcement, idempotent stopping and deletion against a fake store. The rule
+  now applies to every future carve: a carved module must not import electron by
+  name — inject the one function it needs and let `main.ts` keep the import.
 - **Routines are their own module, and their scheduler is finally tested.**
   `src/electron/routines.ts`, 295 lines for **four** injected dependencies —
   the cleanest seam in `main.ts`, which is now 13,397 lines against 15,478 at
