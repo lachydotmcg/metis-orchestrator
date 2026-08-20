@@ -269,6 +269,35 @@ export function bridgeMemberIsHttpReadable(member: string): boolean {
   return bridgeChannelsHttpReadable().some((entry) => `${entry.namespace}.${entry.method}` === member);
 }
 
+/** The members a remote client may call that can only ever make the machine do
+ *  LESS: stop a loop, cancel a run, revoke a permission.
+ *
+ *  This is not a new judgement. `POST /v1/loops/:id/stop` has shipped since the
+ *  phone page, and the argument is written above it in `main.ts`: watching and
+ *  stopping are both safe in the way that matters, one being a read and the
+ *  other only ever reducing what the machine is doing. `reduce` is the class
+ *  that argument describes, and these are its three members.
+ *
+ *  What made it worth wiring: the browser client's Loops panel renders a stop
+ *  button that rejects, while the capability behind it is live one route over.
+ *  Logic shipped with no way to reach it is the specific failure this project
+ *  keeps catching, and here it was sitting behind a button that already exists.
+ *
+ *  Kept separate from the read list on purpose, and dispatched through a
+ *  separate table. A read that could mutate is one merge away when both live in
+ *  the same map, and these are the only members a browser can call that change
+ *  anything at all. */
+export function bridgeChannelsHttpReducible(): BridgeChannel[] {
+  return BRIDGE_CHANNELS.filter((entry) => entry.exposure === "reduce" && !entry.noHttp);
+}
+
+/** True when the MEMBER may be called remotely to reduce what the machine is
+ *  doing. Separate from `bridgeMemberIsHttpReadable` so a caller has to say
+ *  which of the two it means. */
+export function bridgeMemberIsHttpReducible(member: string): boolean {
+  return bridgeChannelsHttpReducible().some((entry) => `${entry.namespace}.${entry.method}` === member);
+}
+
 /** The subscribe channels a remote client can actually receive: ambient events,
  *  not replies addressed to whoever invoked something.
  *

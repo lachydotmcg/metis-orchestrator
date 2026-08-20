@@ -163,6 +163,22 @@ engine referenced below.
 
 ### Added (2026-08-16)
 
+- **The browser client's stop button works.** It rendered one that rejected,
+  while the capability behind it sat live one route over — `POST
+  /v1/loops/:id/stop` has shipped since the phone page. Logic with no way to
+  reach it is the specific failure this project keeps catching, and here it was
+  sitting behind a button that already existed. The three `reduce`-class members
+  are now callable from a browser: `metisLoops.stop`, `metisSession.cancel`,
+  `metisPermissions.revoke`. Not a new judgement — `reduce` is exactly the class
+  the argument above that stop route describes, that watching and stopping are
+  both safe because one is a read and the other can only ever reduce what the
+  machine is doing. They dispatch through their own table, separate from the
+  reads, because a read that could mutate is one careless merge away when both
+  live in one map, and the handler asks "readable?" and "reducible?" as two
+  questions rather than one. Every reduce leaves an audit line; reads do not,
+  since they are the bulk of the traffic and would bury the lines that matter.
+  Verified in a browser: all three land on the server, while `metisLoops.delete`,
+  `metisSession.run` and `metisPermissions.respond` beside them still reject.
 - **A generated write that looks like a truncated file is refused.** This came
   from one question — *would you run Metis on the Metis repository?* — and the
   answer was no, for a reason two facts make plain once they are put side by

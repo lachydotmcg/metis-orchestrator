@@ -260,7 +260,12 @@ commit, rather than deleted, so this file also reads as a record of what got clo
   (`13-store-key-guard`).
 - **The browser client reads, and cannot write or run anything.** `POST /v1/bridge` serves 26 of
   the 104 channels, allowlisted per member, calling the same named functions the IPC handlers call.
-  Conversations, models, loops, usage, providers, permissions and the audit log all load. Nothing
+  Conversations, models, loops, usage, providers, permissions and the audit log all load.
+  **Three members that can only ever make the machine do LESS are callable** — stop a loop, cancel a
+  run, revoke a permission. That is the same argument `POST /v1/loops/:id/stop` has shipped on since
+  the phone page, and until it was wired the browser rendered a stop button that *rejected* while the
+  capability sat live one route over. Each leaves an audit line; reads do not, because they are the
+  bulk of the traffic and would bury the lines that matter. Nothing
   sends a prompt, writes a file, installs anything or starts a run — those members are defined and
   **reject with a message naming themselves**, rather than being absent, because the renderer guards
   on `Boolean(window.metisX)` and an absent member would pass the guard and then die on `undefined

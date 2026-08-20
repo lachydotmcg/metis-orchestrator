@@ -98,7 +98,7 @@ import { formatWalkthrough, walkthroughFileName, type WalkthroughFile, type Walk
 import { rendererMayReachStoreKey } from "../shared/store-keys.js";
 import { QUICKASK_HTML } from "./quickask-page.js";
 import { gatewayLoopsPage } from "./gateway-loops-page.js";
-import { bridgeMemberIsHttpReadable } from "../shared/bridge-manifest.js";
+import { bridgeMemberIsHttpReadable, bridgeMemberIsHttpReducible } from "../shared/bridge-manifest.js";
 import { generatedWriteWouldTruncate } from "../shared/write-guard.js";
 import {
   GATEWAY_APP_PREFIX,
@@ -14761,6 +14761,20 @@ const GATEWAY_BRIDGE_READS: Readonly<Record<string, (args: readonly unknown[]) =
   "metisGallery.cards": () => listStyleCards()
 };
 
+/** The members a remote client may call that can only ever make the machine do
+ *  LESS. Separate table from the reads, deliberately: these are the only calls
+ *  a browser client can make that change anything, and a read that could mutate
+ *  is one careless merge away when both live in the same map.
+ *
+ *  Not a new judgement — `POST /v1/loops/:id/stop` has shipped since the phone
+ *  page and the argument is written above it. These are the other two members
+ *  of the class that argument describes. */
+const GATEWAY_BRIDGE_REDUCERS: Readonly<Record<string, (args: readonly unknown[]) => unknown>> = {
+  "metisLoops.stop": (a) => stopLoop(a[0] as string, (a[1] as string | undefined) ?? "stopped from the browser client"),
+  "metisSession.cancel": (a) => requestSessionCancel(a[0] as string | undefined),
+  "metisPermissions.revoke": (a) => revokePermission(a[0] as string)
+};
+
 /** `POST /v1/bridge` — one route for every read, allowlisted per member.
  *
  *  One route rather than 26 because the allowlist IS the security boundary and
@@ -14785,18 +14799,29 @@ async function handleGatewayBridgeRead(req: IncomingMessage, res: ServerResponse
     return;
   }
   // The manifest decides, not the table. Checked first so a member that is
-  // wired but no longer permitted is refused rather than quietly served.
-  if (!bridgeMemberIsHttpReadable(member)) {
+  // wired but no longer permitted is refused rather than quietly served, and
+  // asked in two separate questions so a read can never fall through into the
+  // reducer table or the other way round.
+  const readable = bridgeMemberIsHttpReadable(member);
+  const reducible = !readable && bridgeMemberIsHttpReducible(member);
+  if (!readable && !reducible) {
     writeGatewayJson(res, 403, gatewayErrorPayload(`"${member}" is not readable over HTTP.`, "permission_error"));
     return;
   }
-  const handler = GATEWAY_BRIDGE_READS[member];
+  const handler = readable ? GATEWAY_BRIDGE_READS[member] : GATEWAY_BRIDGE_REDUCERS[member];
   if (!handler) {
     writeGatewayJson(res, 501, gatewayErrorPayload(`"${member}" is permitted but not wired.`, "not_found"));
     return;
   }
   try {
     const value = await handler(args);
+    // Reads are not audited — they are the overwhelming majority of traffic and
+    // recording them would bury the lines that matter. A reduce CHANGES what
+    // the machine is doing, so it leaves a trace naming the member, the same
+    // way the stop route does.
+    if (reducible) {
+      await appendAudit("info", "gateway.bridge.reduce", `A browser client called ${member}.`, { member });
+    }
     // IPC transports `undefined`; JSON does not. Collapsing to null keeps a
     // "nothing there" answer as a settled promise rather than a key that
     // vanishes from the payload and reads as a hang on the other side.

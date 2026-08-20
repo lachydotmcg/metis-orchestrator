@@ -60,7 +60,7 @@
  */
 
 import { scriptSafeJson } from "./gateway-loops-page.js";
-import { BRIDGE_CHANNELS, bridgeMemberIsHttpReadable } from "../shared/bridge-manifest.js";
+import { BRIDGE_CHANNELS, bridgeMemberIsHttpReadable, bridgeMemberIsHttpReducible } from "../shared/bridge-manifest.js";
 
 /** The mount point. Not `/` — that is already the loops page, and displacing a
  *  shipped surface to make room for an unfinished one is the wrong trade. */
@@ -207,13 +207,17 @@ main{max-width:32rem;padding:2rem}code{background:#1a1d26;padding:.15rem .4rem;b
 /** What the shim does with one member.
  *
  *  `read`   — POST /v1/bridge and resolve the value.
+ *  `reduce` — the same call, for the three members that can only ever make the
+ *             machine do LESS (stop a loop, cancel a run, revoke a grant).
+ *             Identical on the wire; named apart so the table says which
+ *             members can change anything.
  *  `live:X` — a real subscription, polling read member X and firing on change.
  *  `inert`  — a subscription that returns a working unsubscribe and never fires,
  *             because nothing a browser client is allowed to do can produce an
  *             event on it. Distinct from `live` on purpose: "nothing to build"
  *             is a different fact from "not built yet".
  *  `no`     — reject, naming the member. */
-type ShimMemberKind = "read" | "no" | "inert" | `live:${string}`;
+type ShimMemberKind = "read" | "reduce" | "no" | "inert" | `live:${string}`;
 
 export function gatewayBridgeShim(): string {
   const namespaces = new Map<string, Record<string, ShimMemberKind>>();
@@ -228,7 +232,9 @@ export function gatewayBridgeShim(): string {
     // the difference between "not built yet" and "nothing to build".
     const kind: ShimMemberKind = bridgeMemberIsHttpReadable(member)
       ? "read"
-      : entry.kind === "subscribe"
+      : bridgeMemberIsHttpReducible(member)
+        ? "reduce"
+        : entry.kind === "subscribe"
         ? entry.noStream
           ? "inert"
           : `live:${entry.namespace}.list`
@@ -309,7 +315,7 @@ export function gatewayBridgeShim(): string {
     Object.keys(members).forEach(function (method) {
       var kind = members[method];
       var member = name + "." + method;
-      if (kind === "read") { api[method] = function () { return call(member, arguments); }; }
+      if (kind === "read" || kind === "reduce") { api[method] = function () { return call(member, arguments); }; }
       else if (kind.indexOf("live:") === 0) { api[method] = livePoll(kind.slice(5)); }
       else if (kind === "inert") { api[method] = inertSubscription; }
       else { api[method] = unavailable(member); }

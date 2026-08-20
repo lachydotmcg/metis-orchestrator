@@ -27,7 +27,7 @@ import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { join, extname } from "node:path";
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
-const { BRIDGE_CHANNELS, bridgeChannelsHttpReadable, bridgeMemberIsHttpReadable, bridgeChannelsLiveForRemote } =
+const { BRIDGE_CHANNELS, bridgeChannelsHttpReadable, bridgeMemberIsHttpReadable, bridgeChannelsLiveForRemote, bridgeChannelsHttpReducible, bridgeMemberIsHttpReducible } =
   await fromBuild("shared/bridge-manifest.js");
 
 const {
@@ -440,6 +440,67 @@ section("The shim tells 'partly here' apart from 'not here'");
   // the worst available outcome.
   ok("a two-channel member is not downgraded by its subscribe half", table.metisSession?.runStream === "no");
   ok("so calling it rejects rather than silently doing nothing", /needs the desktop app/.test(shim));
+}
+
+section("The three members that can only make the machine do LESS are reachable");
+{
+  // Not a new judgement: POST /v1/loops/:id/stop has shipped since the phone
+  // page, with the argument written above it — watching and stopping are both
+  // safe in the way that matters, one being a read and the other only ever
+  // reducing what the machine is doing. `reduce` is the class that argument
+  // describes. What made wiring it worth doing: the browser client rendered a
+  // stop button that REJECTED, while the capability behind it was live one
+  // route over. Logic shipped with no way to reach it.
+  const reducible = bridgeChannelsHttpReducible();
+  check("three of them", reducible.length, 3);
+  check(
+    "and they are the ones the argument covers",
+    reducible.map((entry) => `${entry.namespace}.${entry.method}`).sort(),
+    ["metisLoops.stop", "metisPermissions.revoke", "metisSession.cancel"]
+  );
+  ok("every one is classified reduce", reducible.every((entry) => entry.exposure === "reduce"));
+
+  // The boundary. Each of these sits beside a reduce member in the same
+  // namespace and must NOT come along with it.
+  for (const member of [
+    "metisLoops.delete",
+    "metisLoops.create",
+    "metisSession.run",
+    "metisSession.runStream",
+    "metisPermissions.respond",
+    "metisPermissions.request"
+  ]) {
+    ok(`"${member}" is not reducible`, !bridgeMemberIsHttpReducible(member));
+  }
+  // And the two questions stay separate: a read must never satisfy the reduce
+  // check or the other way round.
+  ok("no member is both readable and reducible", !bridgeChannelsHttpReadable().some((entry) =>
+    bridgeMemberIsHttpReducible(`${entry.namespace}.${entry.method}`)));
+
+  // Separate dispatch tables in main.ts, for the same reason: a read that could
+  // mutate is one careless merge away when both live in one map.
+  const readsTable = /const GATEWAY_BRIDGE_READS[\s\S]*?\n};/.exec(main)[0];
+  const reduceTable = /const GATEWAY_BRIDGE_REDUCERS[\s\S]*?\n};/.exec(main);
+  ok("the reducer table exists and is its own map", Boolean(reduceTable));
+  const wiredReducers = [...reduceTable[0].matchAll(/"([a-zA-Z]+\.[a-zA-Z]+)":/g)].map((m) => m[1]).sort();
+  check("wired reducers match the manifest", wiredReducers, ["metisLoops.stop", "metisPermissions.revoke", "metisSession.cancel"]);
+  ok("no reducer leaked into the reads table", !wiredReducers.some((m) => readsTable.includes(`"${m}"`)));
+
+  const handler = /async function handleGatewayBridgeRead[\s\S]*?\n}/.exec(main)[0];
+  ok("the handler asks the two questions separately", /bridgeMemberIsHttpReadable\(member\)/.test(handler) && /bridgeMemberIsHttpReducible\(member\)/.test(handler));
+  // A reduce CHANGES what the machine is doing, so it leaves a trace. Reads are
+  // not audited — they are the bulk of traffic and would bury the lines that matter.
+  ok("a reduce is audited", /gateway\.bridge\.reduce/.test(handler));
+  ok("and reads are not", !/appendAudit[\s\S]{0,120}gateway\.bridge\.read\b/.test(handler));
+
+  // The shim calls them exactly like reads: identical on the wire, named apart
+  // so the table says which members can change anything.
+  const shimTable = JSON.parse(/var NS = (\{[\s\S]*?\});/.exec(gatewayBridgeShim())[1]);
+  check("the stop button is live in the browser", shimTable.metisLoops?.stop, "reduce");
+  check("cancel too", shimTable.metisSession?.cancel, "reduce");
+  check("and revoke", shimTable.metisPermissions?.revoke, "reduce");
+  check("while delete stays refused", shimTable.metisLoops?.delete, "no");
+  check("and starting a run stays refused", shimTable.metisSession?.run, "no");
 }
 
 section("Refusing to stream is recorded as data, with a reason");
