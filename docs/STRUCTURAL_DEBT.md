@@ -99,7 +99,8 @@ behaviour: a 401 without a bearer, a 403 on a `noHttp` member, a real 301 on
 
 ## 2. Nine complete surfaces are unreachable
 
-**Status:** open, and it is a decision rather than work.
+**Status:** agreed 2026-08-20. Ships one at a time, each after a real review — not as a
+single sweep. The decision is made; the sequencing is the work.
 
 ```
 V1_HIDDEN_NAV      manager, marketplace, routines, gallery, graph, todo, pulse
@@ -122,7 +123,9 @@ Seven workspaces is a lot of tax for surfaces nobody can open.
 
 ## 3. The two features the README leads with are off by default
 
-**Status:** open.
+**Status:** agreed 2026-08-20. Same rule as item 2: one at a time, each after a
+real review. Depths especially — turning it on by default without knowing the
+rung judgements are sound would ship the wrong default confidently.
 
 11 store flags default `false`, behind 8 documented features. Two of them matter
 more than the rest:
