@@ -1623,7 +1623,6 @@ const SEED_NODES: GraphNode[] = [
   { id: "skill-components", kind: "skill", label: "Component Library", pos: { x: 150, y: -40 } }
 ];
 
-type PresetKey = "recommended" | "local" | "quality" | "speed";
 
 /** One stage of a seeded-registry-shaped preset payload (`metis.preset-*`, docs/DRILL_PLAN.md
  *  Phase 4): {role, provider, model, fallback?}. Distinct from the in-app Publish wizard's
@@ -1639,48 +1638,61 @@ type MarketplacePresetPayload = {
   prerequisiteSkills?: string[];
 };
 
-const PRESETS: { key: PresetKey; label: string; note: string; router: ModelRef; pick: (role: string) => ModelRef }[] = [
-  {
-    key: "recommended",
-    label: "Recommended",
-    note: "Balanced quality / cost",
-    router: { provider: "qwen", model: "Default router" },
-    pick: (role) =>
-      role.includes("front")
-        ? { provider: "claude", model: "Sonnet 4.6" }
-        : role.includes("plan")
-          ? { provider: "gemini", model: "2.5 Pro" }
-          : role.includes("back")
-            ? { provider: "deepseek", model: "V3" }
-            : role.includes("research")
-              ? { provider: "grok", model: "Grok 4" }
-              : { provider: "openai", model: "GPT-5.1" }
-  },
-  {
-    key: "local",
-    label: "Local-first",
-    note: "Cheap, runs on your VRAM",
-    router: { provider: "qwen", model: "Qwen3 4B" },
-    pick: (role) => (role.includes("front") || role.includes("research") ? { provider: "qwen", model: "Qwen2.5 72B" } : { provider: "glm", model: "GLM-4.6" })
-  },
-  {
-    key: "quality",
-    label: "Max quality",
-    note: "Best models everywhere",
-    router: { provider: "claude", model: "Opus 4.8" },
-    pick: () => ({ provider: "claude", model: "Opus 4.8" })
-  },
-  {
-    key: "speed",
-    label: "Speed",
-    note: "Smallest fast models",
-    router: { provider: "qwen", model: "Qwen3 4B" },
-    pick: (role) => (role.includes("plan") ? { provider: "gemini", model: "2.5 Flash" } : { provider: "claude", model: "Haiku 4.5" })
-  }
-];
 
 const STORAGE_KEY = "metis-graph-v3";
 const PRESET_STORAGE_KEY = "metis-orchestration-preset-v1";
+
+/** The named preset collection (`savedPresets` store key).
+ *
+ *  Replaces a single localStorage slot that four different callers wrote to:
+ *  "Save current", "Load saved", installing a preset from the marketplace, and
+ *  the Publish wizard reading a payload. Installing from the marketplace
+ *  therefore overwrote whatever you had saved, silently, and the Library could
+ *  only ever hold one thing.
+ *
+ *  `origin` is what the Library shows as a chip and is not cosmetic: a preset
+ *  you saved is yours to publish, and one you installed belongs to whoever
+ *  published it. */
+type SavedPreset = {
+  id: string;
+  name: string;
+  note?: string;
+  origin: "saved" | "installed";
+  /** The Publish-wizard shape: whole nodes, positions and all. */
+  nodes?: GraphNode[];
+  /** The seeded-registry shape: role -> model, no positions. */
+  stages?: PresetStage[];
+  savedAt: string;
+  /** For an installed preset, the package it came from — so the Library can say
+   *  where it is from and Publish can refuse to re-publish someone else's. */
+  packageId?: string;
+};
+
+const EMPTY_SAVED_PRESETS: SavedPreset[] = [];
+
+/** What a preset actually contains, flattened for display.
+ *
+ *  Both payload shapes reduce to the same thing a person wants to see — which
+ *  role runs on which model — so the Library can show either without caring
+ *  which shape it is. Before this, a preset was applied blind: the only way to
+ *  learn what it did was to apply it and look at the canvas. */
+function describePreset(preset: SavedPreset): Array<{ role: string; model: string }> {
+  if (preset.stages?.length) {
+    return preset.stages.map((stage) => ({
+      role: stage.role,
+      model: stage.model ? `${PROVIDERS[stage.provider]?.label ?? stage.provider} ${stage.model}` : "Not set"
+    }));
+  }
+  if (preset.nodes?.length) {
+    return preset.nodes
+      .filter((node) => node.kind === "router" || node.kind === "agent")
+      .map((node) => ({
+        role: node.kind === "router" ? "Router" : node.intent?.trim() || node.label,
+        model: node.model ? `${node.provider ? (PROVIDERS[node.provider]?.label ?? node.provider) + " " : ""}${node.model}` : "Not set"
+      }));
+  }
+  return [];
+}
 const MIN_ZOOM = 0.45;
 const MAX_ZOOM = 1.9;
 const TARGET_RADIUS = 160; // screen px
@@ -9020,14 +9032,7 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
   const [runTestOpen, setRunTestOpen] = useState(false);
   const [runTestLoading, setRunTestLoading] = useState(false);
   const [runTestResult, setRunTestResult] = useState<RunTestResult | null>(null);
-  const [hasSavedPreset, setHasSavedPreset] = useState(() => {
-    try {
-      return Boolean(localStorage.getItem(PRESET_STORAGE_KEY));
-    } catch {
-      return false;
-    }
-  });
-
+  const [savedPresets, setSavedPresets] = useAppStoreState("savedPresets", EMPTY_SAVED_PRESETS);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const ghostRef = useRef<HTMLDivElement | null>(null);
   const lineRef = useRef<SVGLineElement | null>(null);
@@ -9451,26 +9456,10 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
     setNodes((list) => list.map((node) => (node.kind === "agent" && node.skills?.includes(skillId) ? { ...node, skills: node.skills.filter((s) => s !== skillId) } : node)));
   }
 
-  function applyPreset(key: PresetKey): void {
-    const preset = PRESETS.find((p) => p.key === key);
-    if (!preset) return;
-    pushUndo();
-    setNodes((list) =>
-      list.map((node) => {
-        if (node.kind === "router") return { ...node, provider: preset.router.provider, model: preset.router.model };
-        if (node.kind === "agent") {
-          const ref = preset.pick((node.intent ?? node.label).toLowerCase());
-          return { ...node, provider: ref.provider, model: ref.model };
-        }
-        return node;
-      })
-    );
-  }
 
   function savePreset(): void {
     try {
       localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify({ nodes: nodesRef.current, saved_at: new Date().toISOString() }));
-      setHasSavedPreset(true);
     } catch {
       /* storage may be unavailable */
     }
@@ -9501,26 +9490,85 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
     setSelected(null);
   }
 
-  function loadPreset(): void {
-    try {
-      const raw = localStorage.getItem(PRESET_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as { nodes?: GraphNode[]; stages?: PresetStage[] };
-      if (parsed.nodes?.length) {
-        pushUndo();
-        setNodes(parsed.nodes);
-        setSelected(null);
-        fitTo(parsed.nodes);
-        return;
-      }
-      if (parsed.stages?.length) {
-        pushUndo();
-        applyPresetStages(parsed.stages);
-      }
-    } catch {
-      /* ignore malformed presets */
+  /** Saves the canvas as a NAMED preset in the collection.
+   *
+   *  Still writes the old single slot as well, because the Publish wizard reads
+   *  it and an installed-preset payload lands there. That is the migration
+   *  seam, not a duplicate source of truth — the Library reads the collection. */
+  function saveNamedPreset(name: string): void {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const preset: SavedPreset = {
+      id: `preset-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+      name: trimmed,
+      origin: "saved",
+      nodes: nodesRef.current,
+      savedAt: new Date().toISOString()
+    };
+    setSavedPresets((current) => [preset, ...current.filter((item) => item.name !== trimmed)]);
+    savePreset();
+  }
+
+  /** Applies a preset from the collection. Handles both payload shapes, the
+   *  same way loadPreset does — whole nodes restore positions, stages only
+   *  re-point the models on the canvas you already have. */
+  function applySavedPreset(preset: SavedPreset): void {
+    if (preset.nodes?.length) {
+      pushUndo();
+      setNodes(preset.nodes);
+      setSelected(null);
+      fitTo(preset.nodes);
+      return;
+    }
+    if (preset.stages?.length) {
+      pushUndo();
+      applyPresetStages(preset.stages);
     }
   }
+
+  /** Publishes a preset to the Metis registry.
+   *
+   *  It does NOT route to the Publish wizard, and that is deliberate rather
+   *  than a shortcut: the wizard lives inside MarketplaceWorkspace, and
+   *  "marketplace" is in V1_HIDDEN_NAV — so a button that sent you there would
+   *  be a dead button, which is the exact failure this codebase keeps catching.
+   *
+   *  Instead it does what the wizard does, inline: build the same manifest with
+   *  the same buildPublishManifest, stage the payload where the wizard reads it
+   *  (so it is pre-filled if the tab is ever un-hidden), and open GitHub's
+   *  new-file page with the manifest already in it. Publishing to this registry
+   *  is a pull request either way. */
+  async function publishSavedPreset(preset: SavedPreset): Promise<void> {
+    const payload = preset.nodes?.length
+      ? { nodes: preset.nodes, saved_at: preset.savedAt }
+      : { stages: preset.stages ?? [], saved_at: preset.savedAt };
+    try {
+      localStorage.setItem(PRESET_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      /* staging is a convenience; the manifest below does not depend on it */
+    }
+    const draft: PublishDraft = {
+      ...emptyPublishDraft(""),
+      kind: "preset",
+      name: preset.name,
+      id: suggestPackageId("", preset.name) || slugifyPublishToken(preset.name),
+      description: preset.note ?? `Orchestration preset: ${describePreset(preset).map((row) => row.role).join(", ")}`
+    };
+    const { manifest, payloadText } = buildPublishManifest(draft, payload);
+    const manifestJson = JSON.stringify(manifest, null, 2);
+    try {
+      await navigator.clipboard.writeText(payloadText ?? manifestJson);
+    } catch {
+      /* clipboard is best-effort; the GitHub page below carries the manifest */
+    }
+    const url = githubNewFileUrl(`packages/${draft.id}/metis.json`, manifestJson);
+    if (window.metisShell) void window.metisShell.openExternal(url);
+  }
+
+  function deleteSavedPreset(id: string): void {
+    setSavedPresets((current) => current.filter((item) => item.id !== id));
+  }
+
 
   function runTest(agentId: string): void {
     const agent = nodesRef.current.find((node) => node.id === agentId);
@@ -9724,17 +9772,18 @@ function GraphWorkspace({ activeNav, gallerySkills, galleryVisuals }: { activeNa
       customSkills={customSkills}
       gallerySkills={gallerySkills}
       galleryVisuals={galleryVisuals}
-      hasSavedPreset={hasSavedPreset}
       installedSkills={installedSkills}
       onAddCustomSkill={(skill) => setCustomSkills((current) => [...current, skill])}
-      onLoadPreset={loadPreset}
+      onApplyPreset={applySavedPreset}
+      onDeletePreset={deleteSavedPreset}
       onPick={startGhostDrag}
       onModelClick={(ref) => {
         setSelected(null);
         setModelInspect(ref);
       }}
-      onPreset={applyPreset}
-      onSavePreset={savePreset}
+      onPublishPreset={(preset) => void publishSavedPreset(preset)}
+      onSaveNamedPreset={saveNamedPreset}
+      savedPresets={savedPresets}
     />
   );
 
@@ -10030,32 +10079,37 @@ function Palette({
   customSkills,
   gallerySkills,
   galleryVisuals,
-  hasSavedPreset,
   installedSkills,
   onAddCustomSkill,
-  onLoadPreset,
+  onApplyPreset,
+  onDeletePreset,
   onPick,
   onModelClick,
-  onPreset,
-  onSavePreset
+  onPublishPreset,
+  onSaveNamedPreset,
+  savedPresets
 }: {
   customSkills: CustomSkill[];
   gallerySkills: string[];
   galleryVisuals: Record<string, GalleryVisual>;
-  hasSavedPreset: boolean;
   installedSkills: RegistryPackage[];
   onAddCustomSkill: (skill: CustomSkill) => void;
-  onLoadPreset: () => void;
+  onApplyPreset: (preset: SavedPreset) => void;
+  onDeletePreset: (id: string) => void;
   onPick: (clientX: number, clientY: number, payload: DragPayload) => void;
   /** A clean CLICK on a Library model row (docs/DRILL_PLAN.md B11.3 v2) -
    *  opens that model's gateway panel. Dragging past the threshold still
    *  assigns the model to a node via onPick, exactly as before. */
   onModelClick: (ref: ModelRef) => void;
-  onPreset: (key: PresetKey) => void;
-  onSavePreset: () => void;
+  onPublishPreset: (preset: SavedPreset) => void;
+  onSaveNamedPreset: (name: string) => void;
+  savedPresets: SavedPreset[];
 }): JSX.Element {
   const [tab, setTab] = useState<"skills" | "models" | "presets">("skills");
   const [query, setQuery] = useState("");
+  const [expandedPreset, setExpandedPreset] = useState<string | null>(null);
+  const [namingPreset, setNamingPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
   const [addingSkill, setAddingSkill] = useState(false);
   const [newSkillName, setNewSkillName] = useState("");
   const [newSkillDescription, setNewSkillDescription] = useState("");
@@ -10308,20 +10362,102 @@ function Palette({
         ) : null}
         {tab === "presets" ? (
           <div className="preset-library">
-            {PRESETS.map((preset) => (
-              <button key={preset.key} type="button" className={`preset-library-card ${preset.key === "recommended" ? "recommended" : ""}`} onClick={() => onPreset(preset.key)}>
-                <span>{preset.label}</span>
-                <small>{preset.note}</small>
-              </button>
-            ))}
-            <div className="panel-actions">
-              <button type="button" onClick={onSavePreset}>
-                Save current
-              </button>
-              <button type="button" disabled={!hasSavedPreset} onClick={onLoadPreset}>
-                Load saved
-              </button>
-            </div>
+            {savedPresets.length === 0 ? (
+              <p className="preset-library-empty">
+                No presets yet. Save the current canvas below, or install one from the Marketplace.
+              </p>
+            ) : (
+              savedPresets.map((preset) => {
+                const rows = describePreset(preset);
+                const open = expandedPreset === preset.id;
+                return (
+                  <div key={preset.id} className={`preset-library-card ${open ? "open" : ""}`}>
+                    <button
+                      type="button"
+                      className="preset-library-head"
+                      aria-expanded={open}
+                      onClick={() => setExpandedPreset(open ? null : preset.id)}
+                    >
+                      {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                      <span>{preset.name}</span>
+                      <em className={`preset-origin ${preset.origin}`}>{preset.origin === "installed" ? "Installed" : "Yours"}</em>
+                    </button>
+                    {open ? (
+                      <div className="preset-library-body">
+                        {rows.length === 0 ? (
+                          <small className="preset-library-empty">This preset carries no roles.</small>
+                        ) : (
+                          <ul className="preset-contents">
+                            {rows.map((row, index) => (
+                              <li key={`${preset.id}-${index}`}>
+                                <span>{row.role}</span>
+                                <strong>{row.model}</strong>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        <div className="panel-actions">
+                          <button type="button" onClick={() => onApplyPreset(preset)}>
+                            Apply
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onPublishPreset(preset)}
+                            disabled={preset.origin === "installed"}
+                            title={preset.origin === "installed" ? "This preset was published by someone else." : undefined}
+                          >
+                            Publish
+                          </button>
+                          <button type="button" onClick={() => onDeletePreset(preset.id)}>
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })
+            )}
+            {namingPreset ? (
+              <div className="preset-save-form">
+                <input
+                  autoFocus
+                  value={presetName}
+                  placeholder="Name this setup"
+                  onChange={(event) => setPresetName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && presetName.trim()) {
+                      onSaveNamedPreset(presetName);
+                      setPresetName("");
+                      setNamingPreset(false);
+                    }
+                    if (event.key === "Escape") setNamingPreset(false);
+                  }}
+                />
+                <div className="panel-actions">
+                  <button
+                    type="button"
+                    disabled={!presetName.trim()}
+                    onClick={() => {
+                      onSaveNamedPreset(presetName);
+                      setPresetName("");
+                      setNamingPreset(false);
+                    }}
+                  >
+                    Save
+                  </button>
+                  <button type="button" onClick={() => setNamingPreset(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="panel-actions">
+                <button type="button" onClick={() => setNamingPreset(true)}>
+                  <Plus size={13} /> Save current canvas
+                </button>
+              </div>
+            )}
           </div>
         ) : null}
       </div>
@@ -12553,7 +12689,12 @@ async function fetchGithubRepoStats(ref: GithubRepoRef): Promise<GithubRepoStats
  *  Phase 4, "Preset install applies the orchestration"): whether the preset payload itself
  *  was written to PRESET_STORAGE_KEY, plus which prerequisite skills installed vs weren't found
  *  in the registry — surfaced together in the confirmation toast. */
-type PresetApplyResult = { ok: boolean; message: string; installedSkills: string[]; missingSkills: string[] };
+type PresetApplyResult = { ok: boolean; message: string; installedSkills: string[]; missingSkills: string[]   /** The parsed payload, handed back so the caller can add the preset to the
+   *  Library collection. Before this it went only to PRESET_STORAGE_KEY, so an
+   *  installed preset was invisible until you clicked "Load saved" — and it
+   *  silently replaced whatever you had saved. */
+  payload?: MarketplacePresetPayload;
+};
 
 /** Fetches a preset package's `source_url` payload, normalises it to the shape GraphWorkspace's
  *  loadPreset() understands ({nodes} or {stages}), writes it to PRESET_STORAGE_KEY, and
@@ -12611,7 +12752,7 @@ async function applyMarketplacePreset(item: RegistryPackage, allPackages: Regist
   const parts = ["Preset ready, opening Orchestration. Click Load preset to apply."];
   if (installedSkills.length) parts.push(`Installed skills: ${installedSkills.join(", ")}.`);
   if (missingSkills.length) parts.push(`Not found in registry: ${missingSkills.join(", ")}.`);
-  return { ok: true, message: parts.join(" "), installedSkills, missingSkills };
+  return { ok: true, payload, message: parts.join(" "), installedSkills, missingSkills };
 }
 
 function marketplaceCategoryIcon(category: RegistryPackageKind | "all", size = 18): JSX.Element {
@@ -12639,6 +12780,7 @@ function MarketplaceWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => voi
   // per package without a modal.
   const [applyBusyId, setApplyBusyId] = useState<string | null>(null);
   const [applyResults, setApplyResults] = useState<Record<string, PresetApplyResult>>({});
+  const [savedPresets, setSavedPresets] = useAppStoreState("savedPresets", EMPTY_SAVED_PRESETS);
   // In-app starring (docs/FABLE_PLANS.md section 18, "Marketplace trust + detail"): purely local
   // for now, sorts a package to the front of its group's grid. Community-wide star counts need a
   // backend aggregating everyone's toggles — TODO, see §18 in FABLE_PLANS for the sketch.
@@ -12707,6 +12849,25 @@ function MarketplaceWorkspace({ onNavigate }: { onNavigate: (nav: NavKey) => voi
     setApplyResults((current) => ({ ...current, [item.id]: result }));
     setApplyBusyId(null);
     if (result.ok) {
+      // Into the Library, tagged with where it came from. An installed preset
+      // is now a thing you can see, inspect and re-apply later — not a payload
+      // that overwrote your one saved slot on its way to the canvas.
+      const installedPayload = result.payload;
+      if (installedPayload) {
+        setSavedPresets((current) => [
+          {
+            id: `preset-installed-${item.id}`,
+            name: item.name,
+            note: item.description,
+            origin: "installed" as const,
+            nodes: installedPayload.nodes,
+            stages: installedPayload.stages,
+            savedAt: new Date().toISOString(),
+            packageId: item.id
+          },
+          ...current.filter((entry) => entry.packageId !== item.id)
+        ]);
+      }
       if (window.metisRegistry) void window.metisRegistry.listInstalled().then((next) => setInstalledPackages((current) => orKeep(next, current))).catch(() => undefined);
       onNavigate("orchestration");
     }

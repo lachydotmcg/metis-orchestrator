@@ -14993,3 +14993,103 @@ a:focus-visible,
 .bench-disclosure:hover {
   color: var(--text);
 }
+
+/* ---- Library: the preset collection ----
+   Replaces four hardcoded built-ins that applied blind. A preset now shows what
+   it contains before you apply it, and says whether it is yours or installed. */
+
+.preset-library-empty {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.preset-library-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preset-library-head > span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.preset-origin {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.preset-origin.saved {
+  background: rgba(120, 190, 140, 0.16);
+  color: #8fd6a6;
+}
+
+.preset-origin.installed {
+  background: rgba(120, 150, 220, 0.16);
+  color: #9fb8ee;
+}
+
+.preset-library-body {
+  padding: 0 12px 10px;
+}
+
+.preset-contents {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+}
+
+.preset-contents li {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 5px 8px;
+  background: var(--node);
+  border-radius: 8px;
+  font-size: 11.5px;
+}
+
+.preset-contents li > span {
+  flex: none;
+  color: var(--muted);
+}
+
+.preset-contents li > strong {
+  min-width: 0;
+  color: var(--text);
+  font-weight: 600;
+  text-align: right;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
+
+.preset-save-form {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.preset-save-form input {
+  width: 100%;
+}
