@@ -11344,6 +11344,14 @@ function BenchmarkWorkspace({
   const setWizard = onWizardChange;
   const [gpuId, setGpuId] = useState("rtx3060");
   const [roleFilter, setRoleFilter] = useState("all");
+  // The full model browser is collapsed by default (Lachy, 2026-08-20: "I want
+  // it to be simple. keep my setup listed as detected hardware, the recommended
+  // setup is fine too but also the necessary installations should be there
+  // too"). Those three are what the page opens on; browsing all 30-odd local
+  // models is a thing you go looking for, not a thing you scroll past on the
+  // way to installing what was recommended. Collapsed rather than cut, because
+  // it is the only place a model outside the recommendation can be seen at all.
+  const [browsingAllModels, setBrowsingAllModels] = useState(false);
   const [localFirst, setLocalFirst] = useAppStoreState("benchmarkLocalFirst", DEFAULT_BENCHMARK_LOCAL_FIRST);
   const runChecks = ["Preflight hardware check", "Prompt suite loaded", "Simulated decode/VRAM capture", "Recommendation generated"];
 
@@ -11641,9 +11649,19 @@ function BenchmarkWorkspace({
 
       <section className="bench-panel">
         <header className="bench-panel-head">
-          <span><HardDrive size={15} /> Local models for {gpu.label}</span>
+          <button
+            type="button"
+            className="bench-disclosure"
+            aria-expanded={browsingAllModels}
+            onClick={() => setBrowsingAllModels((open) => !open)}
+          >
+            {browsingAllModels ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <HardDrive size={15} /> Browse all local models for {gpu.label}
+          </button>
           <em className="bench-count">{visibleScored.filter((model) => model.fit !== "over").length} run here</em>
         </header>
+        {browsingAllModels ? (
+        <>
         <div className="chip-row bench-role-filter" role="group" aria-label="Filter local models by role">
           {BENCHMARK_ROLE_FILTERS.map((filter) => (
             <button
@@ -11686,6 +11704,8 @@ function BenchmarkWorkspace({
             </div>
           ))}
         </div>
+        </>
+        ) : null}
       </section>
 
       <section className="bench-panel bench-install">
@@ -17690,9 +17710,6 @@ function NodeInspector({
                 <input type="checkbox" checked={Boolean(node.depthsEnabled)} onChange={(event) => setDepthsEnabled(event.target.checked)} />
                 Enable depth routing
               </label>
-              <small className="depths-hint">
-                The router judges how heavy each turn is and sends it to the matching level: L1 is your strongest model for the deepest work, higher numbers get cheaper.
-              </small>
               {node.depthsEnabled ? (
                 depthPicking ? (
                   <div className="depth-mini-picker">
@@ -17761,10 +17778,6 @@ function NodeInspector({
                 )
               ) : null}
             </div>
-
-            {node.provider ? (
-              <p className="field-hint">Gateways are set per model now: click a model in the Library tab to choose where its calls route.</p>
-            ) : null}
 
             {needsApiKey ? (
               <div className="node-api-warning">

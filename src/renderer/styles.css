@@ -10116,9 +10116,14 @@ a:focus-visible,
 
 .rec-slot {
   display: grid;
-  flex: 1;
+  /* Was `flex: 1` with `min-width: 0`, which let five slots and four arrows
+     compress into one row until the role labels were cut off — "Embeddings (for
+     Knowledge Banks)" is long, uppercase and letter-spaced, so it was always the
+     first to go. A basis wide enough for the longest label makes the row wrap
+     instead of shrinking past what it can show. */
+  flex: 1 1 190px;
   gap: 6px;
-  min-width: 0;
+  min-width: 170px;
   padding: 10px;
   background: var(--node);
   border: 1px solid var(--line);
@@ -10131,6 +10136,10 @@ a:focus-visible,
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  /* The model name below already wrapped; the role label did not, so it was the
+     half that got clipped. */
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .rec-slot-main {
@@ -14964,4 +14973,23 @@ a:focus-visible,
 
 .browser-preview-strip strong {
   color: #ffc76b;
+}
+
+/* The Benchmark's "browse all local models" disclosure. The page opens on
+   detected hardware, the recommendation, and the installs — browsing the full
+   local-model list is something you go looking for rather than scroll past. */
+.bench-disclosure {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.bench-disclosure:hover {
+  color: var(--text);
 }
