@@ -222,7 +222,7 @@ existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-37 suites, and suite 28 alone carries 154 assertions — most of them regexes
+38 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 
@@ -640,3 +640,69 @@ was counted as part of it — `PipelineSteps` measured 402 lines and is actually
 The corrected script ends a declaration at the next top-level declaration of any
 kind. Same lesson as rule 3, in a new place: a measurement is a program with its
 own bugs, and the first number it gives is a hypothesis.
+
+---
+
+## App.tsx second slice, 2026-08-20: the canvas arithmetic
+
+`src/renderer/ui/graph-maths.ts`, 305 lines — colour assignment, force-directed
+layout, and the geometry a route line is drawn from. `App.tsx` 18,356 → 18,122.
+
+Two ranges **8,000 lines apart** that are the same subject: the physics deciding
+where a node settles, and the geometry deciding where the line between two nodes
+goes. Both measured at **zero** dependencies on the rest of the file.
+
+### The build change this needed, and why it is not a hack
+
+`fromBuild` reads `dist-electron`. The renderer is a Vite bundle — one
+minified file, not importable per module — so a renderer module has nowhere to
+be imported *from* in a test.
+
+`tsconfig.electron.json` now includes `src/renderer/ui/graph-maths.ts`
+explicitly. With `rootDir: "src"` that emits
+`dist-electron/renderer/ui/graph-maths.js`, exactly where `fromBuild` looks.
+
+**The rule this establishes for the remaining helper slices:** a renderer module
+with no React in it gets added to the electron tsconfig's `include` so it can be
+tested. That is only legitimate *because* the module has no React — the moment
+one imports a hook, it stops compiling under those settings and the mistake is
+loud rather than silent. The compiler enforces the category.
+
+### 38-graph-maths
+
+32 assertions on arithmetic whose failures are all visual and none of which
+throw: a canvas that never settles, one that jitters forever, a click that
+selects the wrong edge, a project whose colour changes on reopen.
+
+- **The simulation settles.** 600 steps on a 12-node chain, and the reported
+  kinetic energy has to land under `GRAPH_KINETIC_SLEEP_THRESHOLD`. A layout
+  that never sleeps burns a frame budget forever.
+- **No coordinate is ever NaN.** Unrecoverable when it happens: the node is
+  nowhere, stays nowhere, and nothing throws.
+- **Coincident nodes do not explode** — two on the exact same spot is a
+  divide-by-zero in every repulsion formula, and it happens whenever two are
+  seeded from the same saved position.
+- **The dragged node is not fought by the simulation.** Layout pulling a node
+  out from under the cursor is the bug you blame on your own mouse.
+- **`distancePointToSegment` measures past the end to the endpoint**, not to the
+  infinite line — otherwise clicking far past an edge selects it.
+
+### A real gap, asserted rather than quietly fixed
+
+`average(points)` divides by `points.length` with no empty guard, so
+`average([])` returns `{ x: NaN, y: NaN }`. No caller passes an empty list
+today, which is why it has never bitten. The suite asserts **the behaviour as it
+is** rather than fixing it inside a move commit — a refactor that silently
+changes behaviour is the thing this whole exercise is trying not to do. If a
+caller ever does pass empty, that assertion is what says why the canvas went
+blank.
+
+### Four signatures guessed wrong
+
+The first version of the suite was written against assumed signatures and got
+four of them wrong: `lerp` takes two *points* rather than two numbers,
+`average` returns a point rather than a number, `seedPhysicsNodes` takes and
+returns `Map`s rather than arrays, and `stepPhysics` wants a drag target and a
+timestep. Rule 3 in a new place — an assumption about an API is a hypothesis
+until the compiler answers, and writing the test *before* reading the signature
+is how the wrong hypothesis gets committed.

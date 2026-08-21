@@ -45,6 +45,24 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **The canvas arithmetic is its own module, and tested.**
+  `src/renderer/ui/graph-maths.ts`, 305 lines out of `App.tsx` — colour
+  assignment, force-directed layout, route geometry. Two ranges 8,000 lines apart
+  that are the same subject, both with zero dependencies on the rest of the file.
+  `38-graph-maths` adds 32 assertions on arithmetic whose failures are visual
+  and never throw: the simulation settles below its sleep threshold rather than
+  burning a frame budget forever, no coordinate is ever NaN, two nodes on the
+  exact same spot do not explode, the node being dragged is not fought by the
+  layout, and `distancePointToSegment` measures past the end to the endpoint
+  rather than to the infinite line — otherwise clicking far past an edge selects
+  it.
+- **Pure renderer modules are now compiled for testing.**
+  `tsconfig.electron.json` includes `graph-maths.ts` explicitly, which emits it
+  to `dist-electron/renderer/ui/` where the suites can import it. The renderer is
+  a Vite bundle, so a module inside it has nowhere to be imported from. This is
+  only legitimate because the module has no React: the moment one imports a hook
+  it stops compiling under those settings, so the compiler enforces the category
+  rather than a convention doing it.
 - **The Ollama client is its own module.** `src/electron/ollama.ts`, 173 lines,
   zero dependencies — and it was found by a **mislabelled section banner**, not by
   any map. The header above it reads "Gallery visual RAG"; under it are three

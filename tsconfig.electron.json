@@ -7,7 +7,15 @@
     "skipLibCheck": true,
     "outDir": "dist-electron",
     "rootDir": "src",
-    "types": ["node", "electron"]
+    "types": [
+      "node",
+      "electron"
+    ]
   },
-  "include": ["src/electron/**/*.ts", "src/electron/**/*.cts", "src/shared/**/*.ts"]
+  "include": [
+    "src/electron/**/*.ts",
+    "src/electron/**/*.cts",
+    "src/shared/**/*.ts",
+    "src/renderer/ui/graph-maths.ts"
+  ]
 }
