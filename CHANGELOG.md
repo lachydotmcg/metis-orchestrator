@@ -45,6 +45,28 @@ engine referenced below.
 
 ### Changed (2026-08-16)
 
+- **The Ollama client is its own module.** `src/electron/ollama.ts`, 173 lines,
+  zero dependencies — and it was found by a **mislabelled section banner**, not by
+  any map. The header above it reads "Gallery visual RAG"; under it are three
+  gallery types and then 170 lines of Ollama HTTP client. Every subsystem map in
+  this repo reported that region as "gallery", because a map counts lines and
+  banners rather than meanings.
+- **And a mistake worth keeping: importing past an injection deleted a test
+  seam.** `listOllamaModels` was injected into two modules purely because it
+  lived in `main.ts`; once it became importable, both injections were dropped.
+  Wrong. `32-loop-lifecycle` started making a real HTTP call to
+  `127.0.0.1:11434` during `createLoop`, and `30-gateway-behaviour` started
+  passing **for the wrong reason** — this machine runs Ollama with six models, so
+  the real daemon satisfied an assertion meant for a fake, and CI would have
+  failed. Both restored. The rule now written down: a leaf being importable does
+  not mean every injection of it collapses, because an injection that substitutes
+  a **process boundary** — network, disk, clock — is the test seam, and removing
+  it fails silently in the direction that matters.
+  `37-ollama-client` adds 20 assertions against a fake server: every failure
+  reads as unreachable rather than throwing, a 200 with no models list is
+  reachable-with-nothing rather than unreachable, and the vision priority list is
+  asserted as an ORDER because a re-sort would silently change which model is
+  handed an image.
 - **Conversations are their own module, and titles are tested.**
   `src/electron/conversations.ts`, 531 lines for seven injected dependencies —
   the best ratio left, chosen after measuring five candidates. `main.ts` is

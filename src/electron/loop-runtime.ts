@@ -112,6 +112,9 @@ export interface LoopRuntimeDeps {
   appendAudit: (level: AuditEvent["level"], kind: string, summary: string, metadata?: Record<string, unknown>) => Promise<AuditEvent>;
   readStoreValue: <T>(key: string, fallback: T) => Promise<T>;
   writeStoreValue: <T>(key: string, value: T) => Promise<void>;
+  /** Injected even though ./ollama.ts is importable — it crosses a network
+   *  boundary, and 32-loop-lifecycle needs to answer for it rather than call a
+   *  real server during createLoop. */
   listOllamaModels: () => Promise<{ reachable: boolean; installed: string[] }>;
   listSecrets: () => Promise<SecretStatus[]>;
   isRoutinesPaused: () => Promise<boolean>;

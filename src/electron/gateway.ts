@@ -72,8 +72,12 @@ export interface GatewayDeps {
   reducers: Readonly<Record<string, (args: readonly unknown[]) => unknown>>;
   appendAudit: (level: AuditEvent["level"], kind: string, summary: string, metadata?: Record<string, unknown>) => Promise<AuditEvent>;
   readStoreValue: <T>(key: string, fallback: T) => Promise<T>;
-  writeStoreValue: <T>(key: string, value: T) => Promise<void>;
+  /** Injected even though ./ollama.ts is importable: this crosses a network
+   *  boundary, and the injection is what lets a suite answer for it without a
+   *  running Ollama. Importing past it made 30-gateway-behaviour pass against
+   *  the developer's real server. */
   listOllamaModels: () => Promise<OllamaListResult>;
+  writeStoreValue: <T>(key: string, value: T) => Promise<void>;
   listLoops: () => Promise<LoopRecord[]>;
   stopLoop: (id: string, reason?: string) => Promise<LoopRecord | undefined>;
   decidePolicy: (input: PolicyDecisionInput, options?: { signal?: AbortSignal; silent?: boolean }) => Promise<PolicyDecisionResult>;

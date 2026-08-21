@@ -40,12 +40,12 @@ sessions (~2,600 lines), providers (~840) and the tray/window shell (~810).
 
 ## 1. 78% of the source is in two files
 
-**Status:** in progress. Seven carves landed 2026-08-20. `main.ts` is down from
-15,478 lines to **11,415** — 26% of the file. The carved modules are
+**Status:** in progress. Eight carves landed 2026-08-20. `main.ts` is down from
+15,478 lines to **11,255** — 27% of the file. The carved modules are
 `gateway.ts` (659), `loop-runtime.ts` (1,526), `routines.ts` (295),
-`store.ts` (150), `providers.ts` (1,253), `knowledge.ts` (517) and
-`conversations.ts` (506). All seven load outside electron, so all seven are
-testable. See the end of this item.
+`store.ts` (150), `providers.ts` (1,253), `knowledge.ts` (517),
+`conversations.ts` (506) and `ollama.ts` (198). All eight load outside electron,
+so all eight are testable. See the end of this item.
 
 **The easy seams are gone.** A fresh map after six carves scored every remaining
 candidate, and the honest summary is below under "What is left, and why it is
@@ -222,7 +222,7 @@ existed before the carve, because the gateway lived in `main.ts` and `main.ts`
 imports electron. The rest of this item still stands: the renderer has no
 equivalent.
 
-36 suites, and suite 28 alone carries 154 assertions — most of them regexes
+37 suites, and suite 28 alone carries 154 assertions — most of them regexes
 against `App.tsx` source text. That catches *drift* (a constant renamed, a guard
 removed) and does not catch *breakage*.
 
@@ -453,3 +453,75 @@ So item 1 is not "keep carving until 2,000". The remaining honest moves are:
 3. **`App.tsx`, untouched at 18,443 lines**, now by far the largest file in the
    repo. A renderer split has to reason about React state and hook ordering
    rather than a call graph, so the method here does not transfer unchanged.
+
+---
+
+## Eighth carve, 2026-08-20: the Ollama client
+
+`src/electron/ollama.ts`, 173 lines, **zero** dependencies on `main.ts`.
+
+**It was found by a mislabelled banner, not by the map.** The section header
+above these functions reads `// --- Gallery visual RAG ---`. Three gallery TYPES
+are declared under it, and then 170 lines of Ollama HTTP client:
+`listOllamaModels`, `pullOllamaModel`, `detectOllamaVisionModel`. Every
+subsystem map in this document reported that region as "gallery, 182 lines, zero
+dependencies", because the map counts lines and banners, not meanings.
+
+Rule 4 said the last function under a banner tends to belong to the next
+section. This is the same failure at the scale of an entire block, and it is
+worth assuming the stronger version: **a banner is evidence about intent at the
+time of writing, and nothing more.**
+
+### The mistake this carve made, and why it is worth recording
+
+`listOllamaModels` was being injected into `gateway.ts` AND `loop-runtime.ts` —
+two dependency interfaces carrying the same function purely because it lived in
+`main.ts` and nothing could import `main.ts`. Once it became an importable leaf,
+the obvious move was to delete both injections and import it directly.
+
+That was wrong, and the suites said so inside a minute:
+
+- `32-loop-lifecycle` began making a **real HTTP call** to `127.0.0.1:11434`
+  during `createLoop`, and crashed the process on exit.
+- `30-gateway-behaviour` began **passing for the wrong reason**. This machine
+  happens to be running Ollama with six models, so the assertion about installed
+  tags was satisfied by the real daemon instead of by its fake. On CI, with no
+  Ollama, it would have failed.
+
+Both injections were restored.
+
+**The rule, which the earlier carves did not need to state:** a leaf being
+importable does not mean every injection of it should collapse. An injection that
+exists so a test can substitute a **process boundary** — network, disk, clock —
+is load-bearing. Importing past it does not remove a parameter, it removes a
+seam, and the failure is silent in the direction that matters: a suite that still
+passes.
+
+The store is the counter-example that makes the distinction real. It is also a
+leaf and it is also imported everywhere, but it takes its *directory* as
+configuration, so a test can still point it somewhere harmless. The boundary is
+substitutable without the injection. Ollama's is not.
+
+### 37-ollama-client
+
+20 assertions against a **fake HTTP server on a random port**, never the real
+daemon — which matters here specifically, since Ollama is running on this
+machine and an accidental real call is a test that passes locally and fails on
+CI. That exact mistake was made and reverted while writing this file.
+
+- **Every failure reads as unreachable rather than throwing.** A 500,
+  unparseable JSON, a refused connection. Every caller is asking "is there a
+  local model", and an exception is not an answer to that question.
+- **A 200 with no `models` key is reachable-with-nothing**, not unreachable. The
+  daemon answered; it just has nothing installed. Collapsing those two states
+  would hide a working Ollama behind "not found".
+- **Entries without a name are dropped and the rest kept**, rather than the whole
+  list being discarded.
+- **The vision priority list is an ORDER**, asserted as one, because a `Set` or a
+  re-sort would silently change which model gets handed an image.
+
+One mechanical note kept in the suite: it sets `process.exitCode` rather than
+calling `process.exit()`, unlike the other 36. It is the only suite that opens
+sockets, and forcing exit while a handle is closing trips a libuv assertion on
+Windows — printing after a clean 20/20 and turning a passing suite into a
+failing process.
