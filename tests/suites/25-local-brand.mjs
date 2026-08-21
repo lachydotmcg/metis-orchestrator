@@ -18,12 +18,15 @@
 //
 // Offline: no provider is called and no API key is read.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { fromBuild, section, check, ok, summary } from "../harness.mjs";
 
 const { localBrandForTag } = await fromBuild("shared/model-catalogue.js");
-const app = readFileSync(join(process.cwd(), "src", "renderer", "ui", "App.tsx"), "utf8");
+const app = readdirSync(join(process.cwd(), "src", "renderer", "ui"))
+  .filter((file) => file.endsWith(".tsx") || file.endsWith(".ts"))
+  .map((file) => readFileSync(join(process.cwd(), "src", "renderer", "ui", file), "utf8"))
+  .join("\n");
 
 section("A local tag is branded by its VENDOR, not by the runtime serving it");
 {
@@ -74,7 +77,7 @@ section("EVERY local library entry resolves to a real tag");
   const localEntries = [...librarySource.matchAll(/\{\s*provider:\s*"ollama",\s*model:\s*"([^"]+)"\s*\}/g)].map((match) => match[1]);
   ok(`${localEntries.length} models were filed under the local brand`, localEntries.length >= 11);
 
-  const localModelsSource = app.slice(app.indexOf("const LOCAL_MODELS: LocalModel[] = ["));
+  const localModelsSource = app.slice(app.indexOf("LOCAL_MODELS: LocalModel[] = ["));
   const withTags = new Set(
     [...localModelsSource.matchAll(/\{\s*name:\s*"([^"]+)"[^}]*ollamaTag:\s*"([^"]+)"/g)].map((match) => match[1])
   );

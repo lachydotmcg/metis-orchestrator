@@ -525,3 +525,118 @@ calling `process.exit()`, unlike the other 36. It is the only suite that opens
 sockets, and forcing exit while a handle is closing trips a libuv assertion on
 Windows — printing after a clean 20/20 and turning a passing suite into a
 failing process.
+
+---
+
+## `runSession` cannot be decomposed in place either — measured 2026-08-20
+
+The plan after the carves ran out of road was: break `runSession` up where it
+stands, extracting one phase at a time into named helpers inside `main.ts`. A
+named helper is progress even if nothing moves to a new file.
+
+**Measured, that is also the wrong shape**, and the numbers say why clearly
+enough that nobody should attempt it again without new information.
+
+`runSession` is 1,185 lines with **119 top-level statements and 81 locals
+declared at that level**. Fifteen of those locals span the entire function:
+
+| local | declared | last used | span | refs |
+| --- | --- | --- | --- | --- |
+| `prompt` | 7559 | 8716 | 1,157 | 59 |
+| `conversationId` | 7609 | 8716 | 1,107 | 18 |
+| `permissionMode` | 7606 | 8673 | 1,067 | 12 |
+| `effectiveDecision` | 7642 | 8698 | 1,056 | 15 |
+| `decision` | 7628 | 8661 | 1,033 | 16 |
+
+Only **26 of 81** locals live and die within 80 lines. This is not a sequence of
+phases with boundaries between them; it is one scope where a dozen values are
+established early and referenced throughout.
+
+The most promising candidate was the one large gap: a **371-line block** at
+7711-8081, a single `if (...)` around the whole build-pipeline branch — as
+cohesive as anything in the function gets. Measured for what it needs from the
+enclosing scope:
+
+- **reads 26 outer locals** — all of which become parameters
+- **assigns to 3** (`projectResult`, `metisFile`, `pipelineName`) — which have
+  to come back out
+
+A 26-parameter function returning three values is not more readable than the
+block it replaces, and every future change has to thread through it. Bundling
+the 26 into a context object is the obvious escape and it is not one: it renames
+the closure, adds indirection, and makes the data flow *less* visible than the
+locals it replaces.
+
+**Conclusion: leave `runSession` alone.** It is 10% of `main.ts` and it is the
+one place where the file's shape is genuinely load-bearing. Breaking it up needs
+a real redesign of how a session's state is carried — a product decision about
+the pipeline, not a refactor — and that is a different piece of work with a
+different justification.
+
+---
+
+## `App.tsx`, measured 2026-08-20
+
+18,444 lines, **431 top-level declarations, 85 components**. Now much the largest
+file in the repo, and the method that produced eight clean carves does not
+transfer: a renderer splits by *who owns which state*, not by who calls whom.
+
+**The good news, and it is better than expected:**
+
+| category | count | lines | share |
+| --- | --- | --- | --- |
+| top-level constants and types | 226 | 1,908 | 10% |
+| hook-free, bridge-free helper functions | 112 | 1,781 | 10% |
+| hook-free, bridge-free components | 42 | 1,432 | 8% |
+| **movable without touching React state** | | **5,121** | **28%** |
+
+Those 380 declarations touch no `useState`, no `useEffect`, no
+`window.metisX`. Moving them is a file move plus an import list — the same
+mechanical work as the electron carves, with none of the dependency-injection
+problem, because there is nothing to inject.
+
+**The bad news, and it is the real shape of the problem:** the rest is
+concentrated in a handful of components that each own an enormous amount of
+state.
+
+| component | lines | hooks | bridge namespaces |
+| --- | --- | --- | --- |
+| `SettingsWorkspace` | 1,855 | **75** | 15 |
+| `NewSessionWorkspace` | 1,619 | **73** | 9 |
+| `SessionComposer` | 1,261 | 39 | 7 |
+| `GraphWorkspace` | 910 | 51 | 5 |
+| `MemoryGraphWorkspace` | 834 | 56 | 5 |
+
+Seventy-five hooks in one component is not a file that wants splitting into two
+files; it is a component that wants a state model. Each of these is its own
+project, and each carries the same risk `runSession` does — hook order is
+load-bearing in React, so moving a `useEffect` across a boundary can change
+behaviour without changing a line of logic.
+
+**So the order for `App.tsx` is:**
+
+1. **The 28% that has no state** — constants and types first (they are pure
+   data), then the pure helpers, then the hook-free components. Three commits,
+   each a file move, each verifiable by the build.
+   **Started 2026-08-20:** `benchmark-data.tsx` (148 lines) is the first slice.
+   Two corrections came out of it. The types it needed were in `App.tsx`, not
+   in `shared/runtime-contracts` — a guess the compiler caught — so they moved
+   with the data. And `BENCHMARK_TARGETS` carries lucide icons, so the file is
+   `.tsx` rather than `.ts`: **"pure data" is a coarser category than it looks,**
+   and a JSX element inside a constant makes it presentation. Expect the same on
+   the remaining constants.
+2. **Stop there and re-measure.** After 5,000 lines leave, the remaining
+   13,000 is almost entirely stateful components, and whether those are worth
+   splitting is a different question from whether they *can* be.
+
+### A measurement mistake worth recording
+
+The first version of this measurement said "41 hook-free components, 2,696
+lines, 15% of the file". It was wrong. It ended each component at the next
+**capitalised** function, so every lowercase helper that followed a component
+was counted as part of it — `PipelineSteps` measured 402 lines and is actually
+12.
+
+The corrected script ends a declaration at the next top-level declaration of any
+kind. Same lesson as rule 3, in a new place: a measurement is a program with its
+own bugs, and the first number it gives is a hypothesis.
